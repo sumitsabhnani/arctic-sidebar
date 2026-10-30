@@ -5,7 +5,7 @@ import {
   RotateCw,
   X,
   ExternalLink,
-  Copy,
+  Link2,
   Check,
   Trash2,
   Sparkles,
@@ -143,8 +143,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           ]
         : []),
       {
-        label: 'Copy URL',
-        icon: <Copy className="w-3.5 h-3.5" />,
+        label: 'Copy Link',
+        icon: <Link2 className="w-3.5 h-3.5" />,
         action: () => {
           if (bookmark.url) navigator.clipboard.writeText(bookmark.url);
         },
@@ -420,7 +420,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
                 : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/20'
             }`}
           >
-            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Copy className="w-3 h-3" />}
+            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Link2 className="w-3.5 h-3.5" />}
           </button>
         )}
 

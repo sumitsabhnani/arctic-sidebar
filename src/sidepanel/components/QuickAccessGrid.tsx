@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw, ExternalLink, FolderPlus, Copy, Trash2, X, RefreshCw, Edit2 } from 'lucide-react';
+import { Globe, RotateCcw, ExternalLink, FolderPlus, Link2, Trash2, X, RefreshCw, Edit2 } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
@@ -162,8 +162,8 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           ]
         : []),
       {
-        label: 'Copy URL',
-        icon: <Copy className="w-3.5 h-3.5" />,
+        label: 'Copy Link',
+        icon: <Link2 className="w-3.5 h-3.5" />,
         action: () => {
           if (bookmark.url) navigator.clipboard.writeText(bookmark.url);
         },

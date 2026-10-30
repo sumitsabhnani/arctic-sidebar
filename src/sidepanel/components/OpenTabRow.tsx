@@ -6,7 +6,7 @@ import {
   VolumeX,
   Sparkles,
   FolderPlus,
-  Copy,
+  Link2,
   Check,
   RotateCw,
   CopyPlus,
@@ -99,8 +99,8 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           ]
         : []),
       {
-        label: 'Copy URL',
-        icon: <Copy className="w-3.5 h-3.5" />,
+        label: 'Copy Link',
+        icon: <Link2 className="w-3.5 h-3.5" />,
         action: () => {
           if (tab.url) navigator.clipboard.writeText(tab.url);
         },
@@ -360,7 +360,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
                 : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/20'
             }`}
           >
-            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Copy className="w-3 h-3" />}
+            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Link2 className="w-3.5 h-3.5" />}
           </button>
         )}
 
