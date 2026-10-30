@@ -314,13 +314,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         isDragging ? 'opacity-40 scale-98' : ''
       } ${
         dropPosition === 'top'
-          ? 'border-t-2 border-cyan-400 bg-cyan-500/10'
+          ? 'theme-drag-over-top'
           : dropPosition === 'bottom'
-          ? 'border-b-2 border-cyan-400 bg-cyan-500/10'
+          ? 'theme-drag-over-bottom'
           : ''
       } ${
         isActive
-          ? 'bg-black/10 dark:bg-white/15 text-zinc-900 dark:text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.1)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
+          ? 'theme-active-card text-zinc-900 dark:text-white font-medium'
           : isRunning
           ? 'text-zinc-800 dark:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10'
           : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5'
@@ -445,7 +445,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             <div
               className={`w-1.5 h-1.5 rounded-full transition-opacity duration-150 ${
                 isActive
-                  ? 'bg-blue-500 shadow-[0_0_6px_rgba(59,130,246,0.8)]'
+                  ? 'theme-active-indicator'
                   : 'bg-zinc-400 dark:bg-zinc-400/70 group-hover:opacity-0'
               }`}
             />

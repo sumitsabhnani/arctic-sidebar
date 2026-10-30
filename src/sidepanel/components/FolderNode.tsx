@@ -308,11 +308,11 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           style={{ paddingLeft: `${8 + depth * 14}px` }}
           className={`group flex items-center justify-between h-[30px] pr-2 rounded-lg cursor-pointer transition-colors duration-150 outline-none ${
             dropState === 'top'
-              ? 'border-t-2 border-cyan-400 bg-cyan-500/10'
+              ? 'theme-drag-over-top'
               : dropState === 'bottom'
-              ? 'border-b-2 border-cyan-400 bg-cyan-500/10'
+              ? 'theme-drag-over-bottom'
               : dropState === 'inside'
-              ? 'ring-1 ring-cyan-400 bg-cyan-500/15'
+              ? 'theme-drag-over-inside'
               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5'
           }`}
         >

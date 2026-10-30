@@ -13,13 +13,17 @@ export interface SessionState {
   bookmarkIdByTabId: Record<number, string>;
 }
 
+export type ColorThemeId = 'glacier-blue' | 'midnight-amethyst' | 'forest-sage' | 'warm-terracotta';
+export type ThemeMode = 'dark' | 'light';
+
 export interface LocalSettings {
   quickAccessFolderId?: string;
   workspaceFolderId?: string;
   collapsedFolderIds?: Record<string, boolean>; // Stored in chrome.storage.local for permanence
   autoArchiveInterval?: 'never' | '12h' | '24h' | '7d';
   tabOpenedAt?: Record<number, number>;
-  theme?: 'dark' | 'light';
+  theme?: ThemeMode;
+  colorTheme?: ColorThemeId;
   isSidebarCollapsed?: boolean;
   collapsedSections?: {
     quickAccess?: boolean;

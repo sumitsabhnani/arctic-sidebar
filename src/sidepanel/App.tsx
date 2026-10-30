@@ -8,7 +8,7 @@ import { FolderNode } from './components/FolderNode';
 import { BookmarkRow } from './components/BookmarkRow';
 import { OpenTabsSection } from './components/OpenTabsSection';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
-import type { TabBinding, LocalSettings } from '../types';
+import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
 import { Bookmark, Loader2, FolderPlus, BookmarkPlus, Folder, Check, X, ChevronDown } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -60,7 +60,8 @@ export const App: React.FC = () => {
   } = useTabBindings();
 
   // Theme State
-  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+  const [theme, setTheme] = useState<ThemeMode>('dark');
+  const [colorTheme, setColorTheme] = useState<ColorThemeId>('glacier-blue');
 
   // Section Collapsed States
   const [collapsedSections, setCollapsedSections] = useState<{
@@ -74,9 +75,15 @@ export const App: React.FC = () => {
   });
 
   useEffect(() => {
-    chrome.storage.local.get(['theme', 'collapsedSections'], (res) => {
+    chrome.storage.local.get(['theme', 'colorTheme', 'collapsedSections'], (res) => {
       if (res.theme === 'light' || res.theme === 'dark') {
-        setTheme(res.theme);
+        setTheme(res.theme as ThemeMode);
+      }
+      if (
+        typeof res.colorTheme === 'string' &&
+        ['glacier-blue', 'midnight-amethyst', 'forest-sage', 'warm-terracotta'].includes(res.colorTheme)
+      ) {
+        setColorTheme(res.colorTheme as ColorThemeId);
       }
       if (res.collapsedSections) {
         setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
@@ -87,17 +94,25 @@ export const App: React.FC = () => {
   useEffect(() => {
     if (theme === 'dark') {
       document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
     } else {
       document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
     }
-  }, [theme]);
+    document.documentElement.setAttribute('data-color-theme', colorTheme);
+  }, [theme, colorTheme]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
-      const next = prev === 'dark' ? 'light' : 'dark';
+      const next: ThemeMode = prev === 'dark' ? 'light' : 'dark';
       chrome.storage.local.set({ theme: next } as LocalSettings);
       return next;
     });
+  }, []);
+
+  const handleSelectColorTheme = useCallback((newTheme: ColorThemeId) => {
+    setColorTheme(newTheme);
+    chrome.storage.local.set({ colorTheme: newTheme } as LocalSettings);
   }, []);
 
   const toggleSectionCollapse = useCallback((section: 'quickAccess' | 'workspace' | 'todayTabs') => {
@@ -388,8 +403,11 @@ export const App: React.FC = () => {
   const runningTabCount = Object.keys(bindingsByBookmarkId).length;
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#f8f9fa] dark:bg-[#121214] text-zinc-800 dark:text-zinc-100 select-none overflow-hidden font-sans transition-colors duration-150">
-      {/* Header with Settings, Actions, Search, New Tab & Collapse */}
+    <div
+      style={{ background: 'var(--theme-bg-gradient)' }}
+      className="flex flex-col h-screen w-full text-zinc-800 dark:text-zinc-100 select-none overflow-hidden font-sans transition-colors duration-200"
+    >
+      {/* Header with Settings, Actions, Search, New Tab & Theme */}
       <Header
         allFolders={allFolders}
         activeFolderIds={activeFolderIds}
@@ -397,6 +415,7 @@ export const App: React.FC = () => {
         isActiveTabLoading={isActiveTabLoading}
         isSearchOpen={isSearchOpen}
         theme={theme}
+        colorTheme={colorTheme}
         onSelectQuickAccessFolder={setQuickAccessFolderId}
         onSelectWorkspaceFolder={setWorkspaceFolderId}
         onResetFolders={resetToDefaultFolders}
@@ -408,6 +427,7 @@ export const App: React.FC = () => {
         onReloadActiveTab={reloadActiveTab}
         onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
         onToggleTheme={toggleTheme}
+        onSelectColorTheme={handleSelectColorTheme}
         onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
 
@@ -467,7 +487,7 @@ export const App: React.FC = () => {
             }
           }}
           className={`flex flex-col space-y-1 rounded-xl transition-colors ${
-            isWorkspaceDragOver ? 'bg-cyan-500/5 ring-1 ring-cyan-500/30' : ''
+            isWorkspaceDragOver ? 'theme-drag-over-inside' : ''
           }`}
         >
           <div className="flex items-center justify-between px-1 pt-1 pb-0.5">

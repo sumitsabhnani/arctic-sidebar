@@ -21,8 +21,14 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   }, []);
 
   return (
-    <div className="relative flex items-center w-full px-2.5 py-1.5 bg-[#f0f2f5] dark:bg-[#18181c] border-b border-black/[0.08] dark:border-white/[0.08] animate-in fade-in slide-in-from-top-1 duration-150">
-      <Search className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 mr-2 flex-shrink-0" />
+    <div
+      style={{
+        backgroundColor: 'var(--theme-header-bg)',
+        borderColor: 'var(--theme-border-subtle)'
+      }}
+      className="relative flex items-center w-full px-2.5 py-1.5 border-b backdrop-blur-md animate-in fade-in slide-in-from-top-1 duration-150"
+    >
+      <Search className="w-3.5 h-3.5 theme-accent-text mr-2 flex-shrink-0" />
       <input
         ref={inputRef}
         type="text"
@@ -38,7 +44,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
       />
 
       {searchQuery && typeof matchCount === 'number' && (
-        <span className="text-[10px] text-zinc-500 font-mono mr-2">
+        <span className="text-[10px] theme-accent-text font-mono mr-2">
           {matchCount} {matchCount === 1 ? 'match' : 'matches'}
         </span>
       )}

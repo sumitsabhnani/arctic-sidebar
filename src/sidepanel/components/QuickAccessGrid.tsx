@@ -272,12 +272,12 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       className={`group relative flex flex-col items-center justify-center h-12 rounded-xl transition-all duration-150 select-none outline-none ${
         isDragging ? 'opacity-30 scale-95' : ''
       } ${
-        dropPosition === 'left' ? 'border-l-2 border-cyan-400 bg-cyan-500/10' : ''
+        dropPosition === 'left' ? 'border-l-2 theme-accent-border theme-accent-tint' : ''
       } ${
-        dropPosition === 'right' ? 'border-r-2 border-cyan-400 bg-cyan-500/10' : ''
+        dropPosition === 'right' ? 'border-r-2 theme-accent-border theme-accent-tint' : ''
       } ${
         isActive
-          ? 'bg-blue-500/15 border border-blue-400/40 shadow-[0_0_12px_rgba(59,130,246,0.3)] text-blue-600 dark:text-white'
+          ? 'theme-active-card text-zinc-900 dark:text-white font-medium'
           : isRunningInBackground
           ? 'bg-black/[0.04] dark:bg-white/[0.07] border border-black/10 dark:border-white/10 hover:bg-black/[0.08] dark:hover:bg-white/12 text-zinc-700 dark:text-zinc-200'
           : 'bg-black/[0.02] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] hover:border-black/10 dark:hover:border-white/10 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -312,7 +312,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
 
       {/* Active Tab Glow Bar (bottom center) */}
       {isActive && (
-        <span className="absolute bottom-1 w-3 h-0.5 rounded-full bg-blue-500 dark:bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.8)] pointer-events-none" />
+        <span className="absolute bottom-1 w-3 h-0.5 rounded-full theme-active-indicator pointer-events-none" />
       )}
     </button>
   );

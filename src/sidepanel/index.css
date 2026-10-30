@@ -2,20 +2,191 @@
 @tailwind components;
 @tailwind utilities;
 
+/* -------------------------------------------------------------
+   ARC-INSPIRED COLOR THEMES & CSS VARIABLES
+   ------------------------------------------------------------- */
+
 :root {
   color-scheme: dark;
 }
 
+html.light {
+  color-scheme: light;
+}
+
+/* 1. Glacier Blue (Arctic) - Dark (Default) */
+html.dark[data-color-theme="glacier-blue"],
+html.dark:not([data-color-theme]) {
+  --theme-bg-gradient: linear-gradient(180deg, #0e1726 0%, #0a111e 40%, #060a12 100%);
+  --theme-header-bg: rgba(14, 23, 38, 0.85);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(255, 255, 255, 0.08);
+  --theme-accent: #06b6d4;
+  --theme-accent-hover: #22d3ee;
+  --theme-accent-bg: rgba(6, 182, 212, 0.12);
+  --theme-accent-border: rgba(6, 182, 212, 0.35);
+  --theme-accent-glow: 0 0 12px rgba(6, 182, 212, 0.25);
+  --theme-indicator: #38bdf8;
+  --theme-active-card-bg: rgba(6, 182, 212, 0.14);
+  --theme-active-card-border: rgba(56, 189, 248, 0.40);
+  --theme-active-card-glow: 0 0 12px rgba(6, 182, 212, 0.25);
+  --theme-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+}
+
+/* 1. Glacier Blue (Arctic) - Light */
+html:not(.dark)[data-color-theme="glacier-blue"],
+html:not(.dark):not([data-color-theme]) {
+  --theme-bg-gradient: linear-gradient(180deg, #f0f7ff 0%, #e4effb 40%, #d8e7f5 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.88);
+  --theme-surface-bg: rgba(0, 0, 0, 0.03);
+  --theme-surface-hover: rgba(0, 0, 0, 0.06);
+  --theme-border-subtle: rgba(2, 132, 199, 0.12);
+  --theme-accent: #0284c7;
+  --theme-accent-hover: #0369a1;
+  --theme-accent-bg: rgba(2, 132, 199, 0.10);
+  --theme-accent-border: rgba(2, 132, 199, 0.30);
+  --theme-accent-glow: 0 0 10px rgba(2, 132, 199, 0.20);
+  --theme-indicator: #0284c7;
+  --theme-active-card-bg: rgba(2, 132, 199, 0.12);
+  --theme-active-card-border: rgba(2, 132, 199, 0.35);
+  --theme-active-card-glow: 0 0 10px rgba(2, 132, 199, 0.20);
+  --theme-scrollbar-thumb: rgba(2, 132, 199, 0.18);
+}
+
+/* 2. Midnight Amethyst - Dark */
+html.dark[data-color-theme="midnight-amethyst"] {
+  --theme-bg-gradient: linear-gradient(180deg, #160c24 0%, #0f081c 40%, #090512 100%);
+  --theme-header-bg: rgba(22, 12, 36, 0.85);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(255, 255, 255, 0.08);
+  --theme-accent: #c084fc;
+  --theme-accent-hover: #d8b4fe;
+  --theme-accent-bg: rgba(192, 132, 252, 0.14);
+  --theme-accent-border: rgba(192, 132, 252, 0.35);
+  --theme-accent-glow: 0 0 12px rgba(192, 132, 252, 0.25);
+  --theme-indicator: #e879f9;
+  --theme-active-card-bg: rgba(168, 85, 247, 0.16);
+  --theme-active-card-border: rgba(192, 132, 252, 0.45);
+  --theme-active-card-glow: 0 0 14px rgba(192, 132, 252, 0.30);
+  --theme-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+}
+
+/* 2. Midnight Amethyst - Light */
+html:not(.dark)[data-color-theme="midnight-amethyst"] {
+  --theme-bg-gradient: linear-gradient(180deg, #fbf7ff 0%, #f4eafd 40%, #ebdff8 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.88);
+  --theme-surface-bg: rgba(0, 0, 0, 0.03);
+  --theme-surface-hover: rgba(0, 0, 0, 0.06);
+  --theme-border-subtle: rgba(147, 51, 234, 0.12);
+  --theme-accent: #8b5cf6;
+  --theme-accent-hover: #7c3aed;
+  --theme-accent-bg: rgba(139, 92, 246, 0.10);
+  --theme-accent-border: rgba(139, 92, 246, 0.30);
+  --theme-accent-glow: 0 0 10px rgba(139, 92, 246, 0.20);
+  --theme-indicator: #c026d3;
+  --theme-active-card-bg: rgba(139, 92, 246, 0.12);
+  --theme-active-card-border: rgba(139, 92, 246, 0.35);
+  --theme-active-card-glow: 0 0 10px rgba(139, 92, 246, 0.20);
+  --theme-scrollbar-thumb: rgba(139, 92, 246, 0.18);
+}
+
+/* 3. Forest Sage - Dark */
+html.dark[data-color-theme="forest-sage"] {
+  --theme-bg-gradient: linear-gradient(180deg, #0d1a14 0%, #09130e 40%, #050a08 100%);
+  --theme-header-bg: rgba(13, 26, 20, 0.85);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(255, 255, 255, 0.08);
+  --theme-accent: #34d399;
+  --theme-accent-hover: #6ee7b7;
+  --theme-accent-bg: rgba(52, 211, 153, 0.12);
+  --theme-accent-border: rgba(52, 211, 153, 0.35);
+  --theme-accent-glow: 0 0 12px rgba(52, 211, 153, 0.25);
+  --theme-indicator: #f59e0b;
+  --theme-active-card-bg: rgba(16, 185, 129, 0.15);
+  --theme-active-card-border: rgba(52, 211, 153, 0.40);
+  --theme-active-card-glow: 0 0 14px rgba(52, 211, 153, 0.28);
+  --theme-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+}
+
+/* 3. Forest Sage - Light */
+html:not(.dark)[data-color-theme="forest-sage"] {
+  --theme-bg-gradient: linear-gradient(180deg, #f2f8f4 0%, #e6f2ea 40%, #daece0 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.88);
+  --theme-surface-bg: rgba(0, 0, 0, 0.03);
+  --theme-surface-hover: rgba(0, 0, 0, 0.06);
+  --theme-border-subtle: rgba(5, 150, 105, 0.12);
+  --theme-accent: #059669;
+  --theme-accent-hover: #047857;
+  --theme-accent-bg: rgba(5, 150, 105, 0.10);
+  --theme-accent-border: rgba(5, 150, 105, 0.30);
+  --theme-accent-glow: 0 0 10px rgba(5, 150, 105, 0.20);
+  --theme-indicator: #d97706;
+  --theme-active-card-bg: rgba(5, 150, 105, 0.12);
+  --theme-active-card-border: rgba(5, 150, 105, 0.35);
+  --theme-active-card-glow: 0 0 10px rgba(5, 150, 105, 0.20);
+  --theme-scrollbar-thumb: rgba(5, 150, 105, 0.18);
+}
+
+/* 4. Warm Terracotta - Dark */
+html.dark[data-color-theme="warm-terracotta"] {
+  --theme-bg-gradient: linear-gradient(180deg, #20110a 0%, #170b06 40%, #0d0502 100%);
+  --theme-header-bg: rgba(32, 17, 10, 0.85);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(255, 255, 255, 0.08);
+  --theme-accent: #fb923c;
+  --theme-accent-hover: #fdba74;
+  --theme-accent-bg: rgba(251, 146, 60, 0.14);
+  --theme-accent-border: rgba(251, 146, 60, 0.35);
+  --theme-accent-glow: 0 0 12px rgba(251, 146, 60, 0.25);
+  --theme-indicator: #fed7aa;
+  --theme-active-card-bg: rgba(234, 88, 12, 0.16);
+  --theme-active-card-border: rgba(251, 146, 60, 0.45);
+  --theme-active-card-glow: 0 0 14px rgba(251, 146, 60, 0.28);
+  --theme-scrollbar-thumb: rgba(255, 255, 255, 0.12);
+}
+
+/* 4. Warm Terracotta - Light */
+html:not(.dark)[data-color-theme="warm-terracotta"] {
+  --theme-bg-gradient: linear-gradient(180deg, #fff7ed 0%, #ffedd5 40%, #fee4cc 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.88);
+  --theme-surface-bg: rgba(0, 0, 0, 0.03);
+  --theme-surface-hover: rgba(0, 0, 0, 0.06);
+  --theme-border-subtle: rgba(234, 88, 12, 0.12);
+  --theme-accent: #ea580c;
+  --theme-accent-hover: #c2410c;
+  --theme-accent-bg: rgba(234, 88, 12, 0.10);
+  --theme-accent-border: rgba(234, 88, 12, 0.30);
+  --theme-accent-glow: 0 0 10px rgba(234, 88, 12, 0.20);
+  --theme-indicator: #c2410c;
+  --theme-active-card-bg: rgba(234, 88, 12, 0.12);
+  --theme-active-card-border: rgba(234, 88, 12, 0.35);
+  --theme-active-card-glow: 0 0 10px rgba(234, 88, 12, 0.20);
+  --theme-scrollbar-thumb: rgba(234, 88, 12, 0.18);
+}
+
+/* -------------------------------------------------------------
+   GLOBAL BODY & TYPOGRAPHY
+   ------------------------------------------------------------- */
+
 body {
   margin: 0;
   padding: 0;
-  background-color: #121214;
+  background: var(--theme-bg-gradient);
   color: #f4f4f5;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   overflow: hidden;
   user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background 0.3s ease, color 0.2s ease;
+}
+
+html:not(.dark) body {
+  color: #18181b;
 }
 
 /* Custom Sleek Scrollbar */
@@ -29,12 +200,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--theme-scrollbar-thumb, rgba(255, 255, 255, 0.12));
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--theme-accent, rgba(255, 255, 255, 0.25));
 }
 
 @keyframes spin-reverse {
@@ -48,4 +219,50 @@ body {
 
 .animate-spin-reverse {
   animation: spin-reverse 1s linear infinite;
+}
+
+/* -------------------------------------------------------------
+   THEME COMPONENT UTILITY CLASSES
+   ------------------------------------------------------------- */
+
+.theme-accent-text {
+  color: var(--theme-accent);
+}
+
+.theme-accent-bg {
+  background-color: var(--theme-accent);
+}
+
+.theme-accent-border {
+  border-color: var(--theme-accent-border);
+}
+
+.theme-accent-tint {
+  background-color: var(--theme-accent-bg);
+}
+
+.theme-active-card {
+  background-color: var(--theme-active-card-bg) !important;
+  border: 1px solid var(--theme-active-card-border) !important;
+  box-shadow: var(--theme-active-card-glow) !important;
+}
+
+.theme-active-indicator {
+  background-color: var(--theme-indicator) !important;
+  box-shadow: 0 0 8px var(--theme-indicator) !important;
+}
+
+.theme-drag-over-top {
+  border-top: 2px solid var(--theme-accent) !important;
+  background-color: var(--theme-accent-bg) !important;
+}
+
+.theme-drag-over-bottom {
+  border-bottom: 2px solid var(--theme-accent) !important;
+  background-color: var(--theme-accent-bg) !important;
+}
+
+.theme-drag-over-inside {
+  outline: 1px solid var(--theme-accent) !important;
+  background-color: var(--theme-accent-bg) !important;
 }

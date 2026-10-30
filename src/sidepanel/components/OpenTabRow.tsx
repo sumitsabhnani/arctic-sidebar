@@ -274,13 +274,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         isDragging ? 'opacity-40 scale-98' : ''
       } ${
         dropPosition === 'top'
-          ? 'border-t-2 border-cyan-400 bg-cyan-500/10'
+          ? 'theme-drag-over-top'
           : dropPosition === 'bottom'
-          ? 'border-b-2 border-cyan-400 bg-cyan-500/10'
+          ? 'theme-drag-over-bottom'
           : ''
       } ${
         isActive
-          ? 'bg-black/10 dark:bg-white/15 text-zinc-900 dark:text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.1)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
+          ? 'theme-active-card text-zinc-900 dark:text-white font-medium'
           : isDiscarded
           ? 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/5'
           : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5'
@@ -379,13 +379,18 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           </button>
         )}
 
+        {/* Active tab indicator dot */}
+        {isActive && (
+          <div className="w-1.5 h-1.5 rounded-full theme-active-indicator group-hover:hidden transition-opacity flex-shrink-0" />
+        )}
+
         {/* Close Button on hover */}
         {typeof tabId === 'number' && (
           <button
             type="button"
             title="Close tab (Cmd+W)"
             onClick={(e) => onClose(tabId, e)}
-            className="flex items-center justify-center w-4 h-4 rounded text-zinc-400 dark:text-zinc-500 hover:text-rose-500 hover:bg-black/5 dark:hover:bg-white/20 transition-all duration-100"
+            className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 dark:text-zinc-500 hover:text-rose-500 hover:bg-black/5 dark:hover:bg-white/20 transition-all duration-100"
           >
             <X className="w-3 h-3 stroke-[2.5]" />
           </button>
