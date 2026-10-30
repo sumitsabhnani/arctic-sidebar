@@ -12,7 +12,7 @@
     "history"
   ],
   "chrome_url_overrides": {
-    "newtab": "redirect.html"
+    "newtab": "newtab.html"
   },
   "background": {
     "service_worker": "background.js",

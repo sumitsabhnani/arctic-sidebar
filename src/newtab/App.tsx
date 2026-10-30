@@ -103,7 +103,7 @@ export const App: React.FC = () => {
     document.documentElement.setAttribute('data-color-theme', colorTheme);
   }, [theme, colorTheme]);
 
-  // Keep input focused automatically on mount, tab switch, window focus, and sidebar messages
+  // Keep input focused automatically on mount, tab switch, and window focus
   useEffect(() => {
     const focusInput = () => {
       window.focus();
@@ -113,7 +113,7 @@ export const App: React.FC = () => {
       }
     };
 
-    // Immediate and staged focus attempts to handle renderer transitions
+    // Staged focus attempts
     focusInput();
     const t1 = setTimeout(focusInput, 50);
     const t2 = setTimeout(focusInput, 150);
@@ -145,21 +145,6 @@ export const App: React.FC = () => {
       chrome.tabs.onActivated.addListener(handleTabActivated);
     }
 
-    // Direct message from Arctic Sidebar
-    const handleMessage = (msg: unknown) => {
-      if (
-        typeof msg === 'object' &&
-        msg !== null &&
-        (msg as { type?: string }).type === 'ARCTIC_FOCUS_SEARCH'
-      ) {
-        focusInput();
-        setTimeout(focusInput, 50);
-      }
-    };
-    if (chrome?.runtime?.onMessage) {
-      chrome.runtime.onMessage.addListener(handleMessage);
-    }
-
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
@@ -169,10 +154,25 @@ export const App: React.FC = () => {
       if (chrome?.tabs?.onActivated) {
         chrome.tabs.onActivated.removeListener(handleTabActivated);
       }
-      if (chrome?.runtime?.onMessage) {
-        chrome.runtime.onMessage.removeListener(handleMessage);
+    };
+  }, []);
+
+  // Capture any keyboard typing on the page and direct into search input
+  useEffect(() => {
+    const handleWindowKeyDown = (e: KeyboardEvent) => {
+      if (
+        inputRef.current &&
+        document.activeElement !== inputRef.current &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key.length === 1
+      ) {
+        inputRef.current.focus();
       }
     };
+    window.addEventListener('keydown', handleWindowKeyDown);
+    return () => window.removeEventListener('keydown', handleWindowKeyDown);
   }, []);
 
   // Load suggestions from history, bookmarks, and search query

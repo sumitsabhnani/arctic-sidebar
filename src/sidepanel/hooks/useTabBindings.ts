@@ -419,10 +419,8 @@ export function useTabBindings() {
       setActiveTabId(newTab.id);
     }
     await refreshWindowTabs();
-    try {
-      window.blur();
-    } catch {
-      // ignore
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
     }
     return newTab;
   }, [refreshWindowTabs]);
@@ -433,15 +431,8 @@ export function useTabBindings() {
   const focusTab = useCallback(async (tabId: number) => {
     await chrome.tabs.update(tabId, { active: true });
     setActiveTabId(tabId);
-    try {
-      chrome.tabs.sendMessage(tabId, { type: 'ARCTIC_FOCUS_SEARCH' });
-    } catch {
-      // ignore
-    }
-    try {
-      window.blur();
-    } catch {
-      // ignore
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
     }
   }, []);
 
