@@ -253,7 +253,18 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             onKeyDown={(e) => {
               if (e.key === 'Escape') handleCancelRename();
             }}
+            onBlur={(e) => {
+              if (
+                e.currentTarget.form &&
+                e.relatedTarget &&
+                e.currentTarget.form.contains(e.relatedTarget as Node)
+              ) {
+                return;
+              }
+              handleConfirmRename();
+            }}
             autoFocus
+            onFocus={(e) => e.target.select()}
             className="flex-1 bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-1.5 py-0.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
           />
           <button
@@ -282,6 +293,11 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={() => onToggleCollapse(node.id)}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setRenameTitle(node.title || '');
+            setIsRenaming(true);
+          }}
           onContextMenu={handleContextMenu}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
@@ -300,7 +316,14 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5'
           }`}
         >
-          <div className="flex items-center min-w-0 flex-1 space-x-1.5 mr-2">
+          <div
+            className="flex items-center min-w-0 flex-1 space-x-1.5 mr-2"
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setRenameTitle(node.title || '');
+              setIsRenaming(true);
+            }}
+          >
             <ChevronRight
               className={`w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-transform duration-200 ${
                 isCollapsed ? 'rotate-0' : 'rotate-90'
@@ -313,7 +336,15 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               <FolderOpen className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400/90 transition-colors flex-shrink-0" />
             )}
 
-            <span className="truncate text-xs font-medium text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-zinc-100">
+            <span
+              title="Double-click to rename folder"
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setRenameTitle(node.title || '');
+                setIsRenaming(true);
+              }}
+              className="truncate text-xs font-medium text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-zinc-100 cursor-text select-text"
+            >
               {node.title || 'Untitled Folder'}
             </span>
           </div>

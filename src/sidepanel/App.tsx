@@ -9,7 +9,7 @@ import { BookmarkRow } from './components/BookmarkRow';
 import { OpenTabsSection } from './components/OpenTabsSection';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings } from '../types';
-import { Bookmark, Sparkles, Loader2, FolderPlus, BookmarkPlus, Folder, Check, X, ChevronDown } from 'lucide-react';
+import { Bookmark, Loader2, FolderPlus, BookmarkPlus, Folder, Check, X, ChevronDown } from 'lucide-react';
 
 export const App: React.FC = () => {
   const {
@@ -100,11 +100,6 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // Collapse sidebar window (closes the side panel)
-  const collapseSidebarWindow = useCallback(() => {
-    window.close();
-  }, []);
-
   const toggleSectionCollapse = useCallback((section: 'quickAccess' | 'workspace' | 'todayTabs') => {
     setCollapsedSections((prev) => {
       const updated = {
@@ -131,6 +126,10 @@ export const App: React.FC = () => {
   const [isCreatingRootFolder, setIsCreatingRootFolder] = useState(false);
   const [rootFolderTitle, setRootFolderTitle] = useState('');
 
+  // Inline Workspace Root Folder Renaming
+  const [isRenamingWorkspace, setIsRenamingWorkspace] = useState(false);
+  const [workspaceRenameTitle, setWorkspaceRenameTitle] = useState('');
+
   // Drag over workspace container
   const [isWorkspaceDragOver, setIsWorkspaceDragOver] = useState(false);
 
@@ -138,7 +137,6 @@ export const App: React.FC = () => {
   // - Ctrl+T / Cmd+T: New Tab
   // - Ctrl+R / Cmd+R: Reload active web page
   // - Ctrl+K / Cmd+K: Toggle Search
-  // - Ctrl+B / Cmd+B or Ctrl+S / Cmd+S: Collapse/Close Sidebar Window
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 't') {
@@ -150,15 +148,12 @@ export const App: React.FC = () => {
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsSearchOpen((prev) => !prev);
-      } else if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 's')) {
-        e.preventDefault();
-        collapseSidebarWindow();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [createNewTab, reloadActiveTab, collapseSidebarWindow]);
+  }, [createNewTab, reloadActiveTab]);
 
   const handleOpenContextMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
@@ -413,7 +408,6 @@ export const App: React.FC = () => {
         onReloadActiveTab={reloadActiveTab}
         onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
         onToggleTheme={toggleTheme}
-        onToggleSidebarCollapse={collapseSidebarWindow}
         onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
 
@@ -433,27 +427,8 @@ export const App: React.FC = () => {
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 space-y-4">
         {/* Section 1: Quick Access Favorites */}
-        <div className="flex flex-col space-y-1.5">
-          <div className="flex items-center justify-between px-1">
-            <button
-              type="button"
-              onClick={() => toggleSectionCollapse('quickAccess')}
-              className="flex items-center space-x-1 text-left group cursor-pointer"
-            >
-              <ChevronDown
-                className={`w-3 h-3 text-zinc-400 dark:text-zinc-500 transition-transform duration-150 ${
-                  collapsedSections.quickAccess ? '-rotate-90' : 'rotate-0'
-                }`}
-              />
-              <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 flex items-center gap-1 group-hover:text-zinc-900 dark:group-hover:text-zinc-200">
-                <Sparkles className="w-2.5 h-2.5 text-cyan-500 dark:text-cyan-400" />
-                Quick Access
-              </span>
-            </button>
-            {/* Note: User requested not showing count of Quick Access links */}
-          </div>
-
-          {!collapsedSections.quickAccess && (
+        {(!queryLower || filteredQuickAccess.length > 0) && (
+          <div className="flex flex-col">
             <QuickAccessGrid
               bookmarks={filteredQuickAccess}
               bindingsByBookmarkId={bindingsByBookmarkId}
@@ -468,8 +443,8 @@ export const App: React.FC = () => {
               onRemoveBookmark={removeBookmarkOrFolder}
               onReorderQuickAccess={handleReorderQuickAccess}
             />
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Section 2: Workspace Vertical Tabs Tree (Permanent Bookmarks & Folders) */}
         <div
@@ -496,21 +471,62 @@ export const App: React.FC = () => {
           }`}
         >
           <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
-            <button
-              type="button"
-              onClick={() => toggleSectionCollapse('workspace')}
-              className="flex items-center space-x-1 text-left group cursor-pointer"
-            >
-              <ChevronDown
-                className={`w-3 h-3 text-zinc-400 dark:text-zinc-500 transition-transform duration-150 ${
-                  collapsedSections.workspace ? '-rotate-90' : 'rotate-0'
-                }`}
-              />
-              <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1 group-hover:text-zinc-900 dark:group-hover:text-zinc-100">
-                <Bookmark className="w-2.5 h-2.5 text-amber-500 dark:text-amber-400/80" />
-                {workspaceNode?.title || 'Workspace'}
-              </span>
-            </button>
+            {isRenamingWorkspace ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (workspaceNode && workspaceRenameTitle.trim()) {
+                    renameBookmarkOrFolder(workspaceNode.id, workspaceRenameTitle.trim());
+                  }
+                  setIsRenamingWorkspace(false);
+                }}
+                className="flex items-center space-x-1"
+              >
+                <input
+                  type="text"
+                  value={workspaceRenameTitle}
+                  onChange={(e) => setWorkspaceRenameTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setIsRenamingWorkspace(false);
+                  }}
+                  onBlur={() => {
+                    if (workspaceNode && workspaceRenameTitle.trim()) {
+                      renameBookmarkOrFolder(workspaceNode.id, workspaceRenameTitle.trim());
+                    }
+                    setIsRenamingWorkspace(false);
+                  }}
+                  autoFocus
+                  onFocus={(e) => e.target.select()}
+                  className="bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-1.5 py-0.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
+                />
+              </form>
+            ) : (
+              <button
+                type="button"
+                onClick={() => toggleSectionCollapse('workspace')}
+                className="flex items-center space-x-1 text-left group cursor-pointer"
+              >
+                <ChevronDown
+                  className={`w-3 h-3 text-zinc-400 dark:text-zinc-500 transition-transform duration-150 ${
+                    collapsedSections.workspace ? '-rotate-90' : 'rotate-0'
+                  }`}
+                />
+                <span
+                  title="Double-click to rename workspace folder"
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (workspaceNode) {
+                      setWorkspaceRenameTitle(workspaceNode.title || 'Workspace');
+                      setIsRenamingWorkspace(true);
+                    }
+                  }}
+                  className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1 group-hover:text-zinc-900 dark:group-hover:text-zinc-100 cursor-text select-text"
+                >
+                  <Bookmark className="w-2.5 h-2.5 text-amber-500 dark:text-amber-400/80" />
+                  {workspaceNode?.title || 'Workspace'}
+                </span>
+              </button>
+            )}
 
             {/* Folder creation and Quick Bookmark action */}
             <div className="flex items-center space-x-1">

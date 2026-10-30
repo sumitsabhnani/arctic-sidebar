@@ -5,15 +5,13 @@ import {
   ChevronsUpDown,
   ExternalLink,
   Plus,
-  Compass,
   Check,
   RotateCcw,
   RotateCw,
   Clock,
   Search,
   Moon,
-  Sun,
-  PanelLeftClose
+  Sun
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
 
@@ -39,7 +37,6 @@ interface HeaderProps {
   onReloadActiveTab: () => void;
   onToggleSearch: () => void;
   onToggleTheme: () => void;
-  onToggleSidebarCollapse?: () => void;
   onDiscardAllBackgroundTabs?: () => void;
 }
 
@@ -61,7 +58,6 @@ export const Header: React.FC<HeaderProps> = ({
   onReloadActiveTab,
   onToggleSearch,
   onToggleTheme,
-  onToggleSidebarCollapse,
   onDiscardAllBackgroundTabs
 }) => {
   const [showSettings, setShowSettings] = useState(false);
@@ -106,47 +102,18 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <div className="relative flex flex-col w-full border-b border-black/[0.08] dark:border-white/[0.08] bg-white/80 dark:bg-[#161618]/80 backdrop-blur-md">
-      {/* Top Header Bar */}
-      <div className="flex items-center justify-between px-3 h-11">
-        {/* Logo & Title */}
-        <div className="flex items-center space-x-2">
-          <div className="w-5 h-5 rounded-md bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-[0_0_8px_rgba(6,182,212,0.4)]">
-            <Compass className="w-3.5 h-3.5 text-white" />
-          </div>
-          <div className="flex items-baseline space-x-1.5">
-            <span className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-white">Arctic</span>
-            <span className="text-[10px] uppercase font-mono tracking-widest text-zinc-500">Sidebar</span>
-          </div>
-        </div>
-
-        {/* Action Buttons */}
+      {/* Action Items Bar */}
+      <div className="flex items-center justify-between px-2.5 h-10">
+        {/* Left Action Items: Navigation & Primary Actions */}
         <div className="flex items-center space-x-1">
-          {/* Theme Toggle (Dark / Light) */}
+          {/* Quick New Tab */}
           <button
             type="button"
-            title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
-            onClick={onToggleTheme}
-            className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            title="Open New Tab (Ctrl+T / Cmd+T)"
+            onClick={onNewTab}
+            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
           >
-            {theme === 'dark' ? (
-              <Sun className="w-3.5 h-3.5 text-amber-300" />
-            ) : (
-              <Moon className="w-3.5 h-3.5 text-indigo-500" />
-            )}
-          </button>
-
-          {/* Toggle Search */}
-          <button
-            type="button"
-            title="Search bookmarks & tabs (Cmd+K / Ctrl+K)"
-            onClick={onToggleSearch}
-            className={`p-1 rounded-md transition-colors ${
-              isSearchOpen
-                ? 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/10 dark:bg-white/10'
-                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
-            }`}
-          >
-            <Search className="w-3.5 h-3.5" />
+            <Plus className="w-4 h-4" />
           </button>
 
           {/* Reload Active Tab */}
@@ -154,10 +121,10 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             title="Reload current page (Ctrl+R / Cmd+R)"
             onClick={onReloadActiveTab}
-            className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors group"
+            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors group"
           >
             <RotateCw
-              className={`w-3.5 h-3.5 transition-transform duration-300 ${
+              className={`w-4 h-4 transition-transform duration-300 ${
                 isActiveTabLoading
                   ? 'animate-spin text-cyan-500 dark:text-cyan-400'
                   : 'group-active:rotate-180'
@@ -165,24 +132,31 @@ export const Header: React.FC<HeaderProps> = ({
             />
           </button>
 
-          {/* Quick New Tab */}
+          {/* Toggle Search */}
           <button
             type="button"
-            title="Open New Tab (Ctrl+T / Cmd+T)"
-            onClick={onNewTab}
-            className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            title="Search bookmarks & tabs (Cmd+K / Ctrl+K)"
+            onClick={onToggleSearch}
+            className={`p-1.5 rounded-md transition-colors ${
+              isSearchOpen
+                ? 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/10 dark:bg-white/10'
+                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
+            }`}
           >
-            <Plus className="w-3.5 h-3.5" />
+            <Search className="w-4 h-4" />
           </button>
+        </div>
 
+        {/* Right Action Items: Utilities & Settings */}
+        <div className="flex items-center space-x-1">
           {/* Toggle Expand / Collapse All */}
           <button
             type="button"
             title={areAllCollapsed ? 'Expand all folders' : 'Collapse all folders'}
             onClick={handleToggleExpandAll}
-            className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
           >
-            <ChevronsUpDown className="w-3.5 h-3.5" />
+            <ChevronsUpDown className="w-4 h-4" />
           </button>
 
           {/* Open Chrome Bookmark Manager */}
@@ -190,9 +164,23 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             title="Open Chrome Bookmark Manager"
             onClick={handleOpenBookmarkManager}
-            className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
           >
-            <ExternalLink className="w-3.5 h-3.5" />
+            <ExternalLink className="w-4 h-4" />
+          </button>
+
+          {/* Theme Toggle (Dark / Light) */}
+          <button
+            type="button"
+            title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+            onClick={onToggleTheme}
+            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+          >
+            {theme === 'dark' ? (
+              <Sun className="w-4 h-4 text-amber-300" />
+            ) : (
+              <Moon className="w-4 h-4 text-indigo-500" />
+            )}
           </button>
 
           {/* Settings Dropdown Toggle */}
@@ -200,26 +188,14 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             title="Sidebar Settings"
             onClick={() => setShowSettings(!showSettings)}
-            className={`p-1 rounded-md transition-colors ${
+            className={`p-1.5 rounded-md transition-colors ${
               showSettings
                 ? 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/10 dark:bg-white/10'
                 : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
             }`}
           >
-            <Settings className="w-3.5 h-3.5" />
+            <Settings className="w-4 h-4" />
           </button>
-
-          {/* Collapse Sidebar to Compact Mode */}
-          {onToggleSidebarCollapse && (
-            <button
-              type="button"
-              title="Collapse sidebar to compact mode (Cmd+S / Ctrl+S)"
-              onClick={onToggleSidebarCollapse}
-              className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-            >
-              <PanelLeftClose className="w-3.5 h-3.5" />
-            </button>
-          )}
         </div>
       </div>
 
