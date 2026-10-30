@@ -12,7 +12,8 @@ import {
   Clock,
   Search,
   Moon,
-  Sun
+  Sun,
+  PanelLeftClose
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
 
@@ -38,6 +39,7 @@ interface HeaderProps {
   onReloadActiveTab: () => void;
   onToggleSearch: () => void;
   onToggleTheme: () => void;
+  onToggleSidebarCollapse?: () => void;
   onDiscardAllBackgroundTabs?: () => void;
 }
 
@@ -59,6 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
   onReloadActiveTab,
   onToggleSearch,
   onToggleTheme,
+  onToggleSidebarCollapse,
   onDiscardAllBackgroundTabs
 }) => {
   const [showSettings, setShowSettings] = useState(false);
@@ -205,6 +208,18 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Settings className="w-3.5 h-3.5" />
           </button>
+
+          {/* Collapse Sidebar to Compact Mode */}
+          {onToggleSidebarCollapse && (
+            <button
+              type="button"
+              title="Collapse sidebar to compact mode (Cmd+S / Ctrl+S)"
+              onClick={onToggleSidebarCollapse}
+              className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            >
+              <PanelLeftClose className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 

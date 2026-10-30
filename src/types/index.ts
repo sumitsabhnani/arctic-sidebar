@@ -20,6 +20,12 @@ export interface LocalSettings {
   autoArchiveInterval?: 'never' | '12h' | '24h' | '7d';
   tabOpenedAt?: Record<number, number>;
   theme?: 'dark' | 'light';
+  isSidebarCollapsed?: boolean;
+  collapsedSections?: {
+    quickAccess?: boolean;
+    workspace?: boolean;
+    todayTabs?: boolean;
+  };
 }
 
 export interface BookmarkFolderOption {
