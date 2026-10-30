@@ -348,6 +348,27 @@ export function useTabBindings() {
       }
     };
 
+    // Listen to bookmark changes (e.g. URL replaced or modified)
+    const handleBookmarkChanged = (id: string, changeInfo: { title?: string; url?: string }) => {
+      if (changeInfo.url) {
+        setBindingsByBookmarkId((prevBindings) => {
+          const existing = prevBindings[id];
+          if (!existing) return prevBindings;
+
+          const isNavAway = isUrlNavigatedAway(existing.currentUrl, changeInfo.url!);
+          const updatedBinding: TabBinding = {
+            ...existing,
+            originalUrl: changeInfo.url!,
+            isNavigatedAway: isNavAway
+          };
+
+          const next = { ...prevBindings, [id]: updatedBinding };
+          chrome.storage.session.set({ bindingsByBookmarkId: next });
+          return next;
+        });
+      }
+    };
+
     chrome.tabs.onActivated.addListener(handleActivated);
     chrome.tabs.onCreated.addListener(handleCreated);
     chrome.tabs.onRemoved.addListener(handleRemoved);
@@ -357,6 +378,9 @@ export function useTabBindings() {
     chrome.tabs.onDetached.addListener(handleDetached);
     chrome.windows.onFocusChanged.addListener(handleWindowFocus);
     chrome.storage.onChanged.addListener(handleStorageChange);
+    if (chrome?.bookmarks?.onChanged) {
+      chrome.bookmarks.onChanged.addListener(handleBookmarkChanged);
+    }
 
     const cleanupInterval = setInterval(() => {
       loadSessionState();
@@ -373,6 +397,9 @@ export function useTabBindings() {
       chrome.tabs.onDetached.removeListener(handleDetached);
       chrome.windows.onFocusChanged.removeListener(handleWindowFocus);
       chrome.storage.onChanged.removeListener(handleStorageChange);
+      if (chrome?.bookmarks?.onChanged) {
+        chrome.bookmarks.onChanged.removeListener(handleBookmarkChanged);
+      }
     };
   }, [loadSessionState, refreshWindowTabs]);
 
@@ -830,6 +857,30 @@ export function useTabBindings() {
     );
   }, []);
 
+  /**
+   * Update the original URL for a bookmark's binding and clear isNavigatedAway
+   */
+  const updateBookmarkBindingUrl = useCallback(
+    async (bookmarkId: string, newUrl: string) => {
+      setBindingsByBookmarkId((prev) => {
+        const existing = prev[bookmarkId];
+        if (!existing) return prev;
+
+        const updated: TabBinding = {
+          ...existing,
+          originalUrl: newUrl,
+          currentUrl: newUrl,
+          isNavigatedAway: false
+        };
+
+        const next = { ...prev, [bookmarkId]: updated };
+        chrome.storage.session.set({ bindingsByBookmarkId: next });
+        return next;
+      });
+    },
+    []
+  );
+
   return {
     bindingsByBookmarkId,
     bookmarkIdByTabId,
@@ -856,6 +907,7 @@ export function useTabBindings() {
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval,
+    updateBookmarkBindingUrl,
     refreshBindings: loadSessionState,
     refreshWindowTabs
   };

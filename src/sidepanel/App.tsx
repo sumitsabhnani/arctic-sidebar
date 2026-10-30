@@ -56,7 +56,8 @@ export const App: React.FC = () => {
     renameOpenTab,
     toggleMuteTab,
     autoArchiveInterval,
-    setAutoArchiveInterval
+    setAutoArchiveInterval,
+    updateBookmarkBindingUrl
   } = useTabBindings();
 
   // Theme State
@@ -263,20 +264,25 @@ export const App: React.FC = () => {
   );
 
   /**
-   * Replace an existing bookmark's URL with the currently focused page URL
+   * Replace an existing bookmark's URL with the currently focused page URL.
+   * Keeps the user's custom title unchanged, updates the tab binding's originalUrl,
+   * and clears isNavigatedAway so the row returns to standard styling.
    */
   const handleReplaceBookmarkUrl = useCallback(
     async (bookmarkId: string) => {
       try {
         const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (currentTab && currentTab.url) {
-          await updateBookmarkUrl(bookmarkId, currentTab.url, currentTab.title);
+          // 1. Update bookmark URL without changing custom title
+          await updateBookmarkUrl(bookmarkId, currentTab.url);
+          // 2. Immediately update the tab binding's originalUrl and clear isNavigatedAway
+          await updateBookmarkBindingUrl(bookmarkId, currentTab.url);
         }
       } catch (err) {
         console.warn('[Arctic] Could not replace bookmark url:', err);
       }
     },
-    [updateBookmarkUrl]
+    [updateBookmarkUrl, updateBookmarkBindingUrl]
   );
 
   /**

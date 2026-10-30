@@ -106,7 +106,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       ...(onReplaceUrl && bookmark.url
         ? [
             {
-              label: 'Replace with Current Page URL',
+              label: 'Replace with Current URL',
               icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />,
               action: () => onReplaceUrl(bookmark.id)
             }

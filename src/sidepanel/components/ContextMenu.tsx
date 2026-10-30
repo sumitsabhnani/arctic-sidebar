@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
 
 export interface ContextMenuItem {
   label: string;
@@ -18,6 +18,40 @@ interface ContextMenuProps {
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Initial smart positioning using conservative estimates
+  const [coords, setCoords] = useState<{ x: number; y: number }>(() => {
+    const estimatedWidth = 220;
+    const estimatedHeight = items.length * 32 + 20;
+    const winW = typeof window !== 'undefined' ? window.innerWidth : 320;
+    const winH = typeof window !== 'undefined' ? window.innerHeight : 600;
+    return {
+      x: Math.max(8, Math.min(x, winW - estimatedWidth - 8)),
+      y: Math.max(8, Math.min(y, winH - estimatedHeight - 8))
+    };
+  });
+
+  // Accurately measure the actual rendered DOM box and clamp within viewport bounds
+  useLayoutEffect(() => {
+    if (!menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect();
+    const winW = window.innerWidth;
+    const winH = window.innerHeight;
+
+    let adjustedX = x;
+    let adjustedY = y;
+
+    // Shift left if menu would overflow right sidepanel edge
+    if (adjustedX + rect.width > winW - 8) {
+      adjustedX = Math.max(8, winW - rect.width - 8);
+    }
+    // Shift up if menu would overflow bottom sidepanel edge
+    if (adjustedY + rect.height > winH - 8) {
+      adjustedY = Math.max(8, winH - rect.height - 8);
+    }
+
+    setCoords({ x: adjustedX, y: adjustedY });
+  }, [x, y, items]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -76,27 +110,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     };
   }, [onClose]);
 
-  // Adjust coordinates if menu would render offscreen
-  const menuWidth = 190;
-  const menuHeight = items.length * 28 + 20;
-
-  let posX = x;
-  let posY = y;
-
-  if (typeof window !== 'undefined') {
-    if (posX + menuWidth > window.innerWidth) {
-      posX = Math.max(8, window.innerWidth - menuWidth - 8);
-    }
-    if (posY + menuHeight > window.innerHeight) {
-      posY = Math.max(8, window.innerHeight - menuHeight - 8);
-    }
-  }
-
   return (
     <div
       ref={menuRef}
-      style={{ top: `${posY}px`, left: `${posX}px` }}
-      className="fixed z-50 min-w-[180px] p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in zoom-in-95 duration-100"
+      style={{ top: `${coords.y}px`, left: `${coords.x}px` }}
+      className="fixed z-50 min-w-[180px] max-w-[calc(100vw-16px)] p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in zoom-in-95 duration-100"
     >
       {items.map((item, idx) => (
         <React.Fragment key={idx}>
