@@ -43,6 +43,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         sidepanel: resolve(rootDir, 'sidepanel.html'),
+        newtab: resolve(rootDir, 'newtab.html'),
         background: resolve(rootDir, 'src/background/index.ts')
       },
       output: {
