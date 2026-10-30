@@ -277,6 +277,16 @@ export function useBookmarks() {
     loadBookmarks();
   };
 
+  // Rename bookmark or folder
+  const renameBookmarkOrFolder = async (id: string, title: string) => {
+    try {
+      await chrome.bookmarks.update(id, { title });
+    } catch (err) {
+      console.warn('[Arctic] Could not rename bookmark/folder:', err);
+    }
+    loadBookmarks();
+  };
+
   // Remove bookmark or folder
   const removeBookmarkOrFolder = async (id: string) => {
     try {
@@ -323,6 +333,7 @@ export function useBookmarks() {
     resetToDefaultFolders,
     createBookmark,
     createFolder,
+    renameBookmarkOrFolder,
     removeBookmarkOrFolder,
     refreshBookmarks: loadBookmarks,
     loading
