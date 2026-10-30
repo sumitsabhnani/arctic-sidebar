@@ -490,8 +490,50 @@ export function useTabBindings() {
     }
   }, [activeTabId]);
 
+  /**
+   * Hibernate / Discard a background tab to save memory
+   */
+  const discardTab = useCallback(
+    async (tabId: number) => {
+      try {
+        await chrome.tabs.discard(tabId);
+        await refreshWindowTabs();
+      } catch (err) {
+        console.warn('[Arctic] Could not discard tab:', err);
+      }
+    },
+    [refreshWindowTabs]
+  );
+
+  /**
+   * Hibernate all background tabs in current window
+   */
+  const discardAllBackgroundTabs = useCallback(async () => {
+    let count = 0;
+    for (const tab of windowTabs) {
+      if (typeof tab.id === 'number' && !tab.active && !tab.discarded) {
+        try {
+          await chrome.tabs.discard(tab.id);
+          count++;
+        } catch {
+          // ignore tabs that cannot be discarded
+        }
+      }
+    }
+    await refreshWindowTabs();
+    return count;
+  }, [windowTabs, refreshWindowTabs]);
+
   const activeTab = windowTabs.find((t) => t.id === activeTabId);
   const isActiveTabLoading = activeTab?.status === 'loading';
+
+  // Map of discarded tabs by tabId
+  const discardedTabsByTabId = windowTabs.reduce<Record<number, boolean>>((acc, tab) => {
+    if (typeof tab.id === 'number' && tab.discarded) {
+      acc[tab.id] = true;
+    }
+    return acc;
+  }, {});
 
   /**
    * Toggle audio mute on a tab
@@ -696,6 +738,9 @@ export function useTabBindings() {
     reloadTab,
     reloadActiveTab,
     isActiveTabLoading,
+    discardTab,
+    discardAllBackgroundTabs,
+    discardedTabsByTabId,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval,

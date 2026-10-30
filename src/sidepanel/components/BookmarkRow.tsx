@@ -1,5 +1,15 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw, RotateCw, X, ExternalLink, Copy, Trash2, Sparkles } from 'lucide-react';
+import {
+  Globe,
+  RotateCcw,
+  RotateCw,
+  X,
+  ExternalLink,
+  Copy,
+  Trash2,
+  Sparkles,
+  Moon
+} from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
@@ -9,13 +19,16 @@ interface BookmarkRowProps {
   depth?: number;
   binding?: TabBinding;
   isActive: boolean;
+  isDiscarded?: boolean;
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
+  onDiscardTab?: (tabId: number) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
 }
 
 export const BookmarkRow: React.FC<BookmarkRowProps> = ({
@@ -23,25 +36,36 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   depth = 0,
   binding,
   isActive,
+  isDiscarded = false,
   onRowClick,
   onFaviconClick,
   onCloseTab,
   onReloadTab,
+  onDiscardTab,
   onOpenContextMenu,
   onDeleteBookmark,
-  onMoveToQuickAccess
+  onMoveToQuickAccess,
+  onMoveBookmarkToIndex
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isDropTarget, setIsDropTarget] = useState(false);
 
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
   const titleText = bookmark.title || bookmark.url || 'Untitled Bookmark';
 
   // Tooltip showing bookmark title and drifted state
-  const tooltip = isNavAway && binding
-    ? `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to bookmark)`
-    : `${titleText}\n${bookmark.url || ''}`;
+  let tooltip = titleText;
+  if (isNavAway && binding) {
+    tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to bookmark)`;
+  } else if (bookmark.url) {
+    tooltip = `${titleText}\n${bookmark.url}`;
+  }
+  if (isDiscarded) {
+    tooltip += '\n(Sleeping to save memory - click to wake)';
+  }
 
   const faviconSrc = bookmark.url ? getFaviconUrl(bookmark.url, 32) : '';
 
@@ -63,6 +87,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               label: 'Pin to Quick Access',
               icon: <Sparkles className="w-3.5 h-3.5 text-cyan-400" />,
               action: () => onMoveToQuickAccess(bookmark)
+            }
+          ]
+        : []),
+      ...(!isActive && isRunning && binding && !isDiscarded && onDiscardTab
+        ? [
+            {
+              label: 'Hibernate Tab (Save RAM)',
+              icon: <Moon className="w-3.5 h-3.5 text-indigo-400" />,
+              action: () => onDiscardTab(binding.tabId)
             }
           ]
         : []),
@@ -100,11 +133,60 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     onOpenContextMenu(e, items);
   };
 
+  const handleDragStart = (e: React.DragEvent) => {
+    setIsDragging(true);
+    e.dataTransfer.setData(
+      'application/json',
+      JSON.stringify({
+        type: 'bookmark',
+        id: bookmark.id,
+        title: bookmark.title,
+        url: bookmark.url,
+        parentId: bookmark.parentId,
+        index: bookmark.index
+      })
+    );
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setIsDropTarget(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDropTarget(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDropTarget(false);
+    try {
+      const data = JSON.parse(e.dataTransfer.getData('application/json'));
+      if (data.type === 'bookmark' && data.id !== bookmark.id && bookmark.parentId) {
+        onMoveBookmarkToIndex?.(data.id, bookmark.parentId, bookmark.index);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <div
       role="button"
       tabIndex={0}
       title={tooltip}
+      draggable={true}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       onClick={() => onRowClick(bookmark)}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
@@ -115,6 +197,10 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       }}
       style={{ paddingLeft: `${12 + depth * 14}px` }}
       className={`group relative flex items-center justify-between h-[34px] pr-2.5 my-[1px] rounded-lg cursor-pointer select-none transition-all duration-150 outline-none ${
+        isDragging ? 'opacity-40 scale-98' : ''
+      } ${
+        isDropTarget ? 'border-t-2 border-cyan-400 bg-cyan-500/10' : ''
+      } ${
         isActive
           ? 'bg-white/15 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
           : isRunning
@@ -148,7 +234,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               onError={() => setFaviconError(true)}
               className={`w-4 h-4 object-contain rounded-sm transition-opacity duration-150 ${
                 isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
-              }`}
+              } ${isDiscarded ? 'opacity-60 grayscale' : ''}`}
             />
           ) : (
             <Globe
@@ -156,6 +242,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
                 isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
               }`}
             />
+          )}
+
+          {/* Sleep icon overlay on favicon if hibernated */}
+          {isDiscarded && (
+            <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
           )}
 
           {/* Reset Icon Overlay on Favicon Hover when Navigated Away */}
@@ -188,7 +279,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         </span>
       </div>
 
-      {/* Right: Status Indicator / Close Tab Action */}
+      {/* Right: Status Indicator / Reload / Close Tab Action */}
       <div className="flex items-center flex-shrink-0 ml-1">
         {isRunning && (
           <>

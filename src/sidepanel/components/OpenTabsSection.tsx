@@ -14,6 +14,7 @@ interface OpenTabsSectionProps {
   onPinToWorkspace: (tab: chrome.tabs.Tab) => void;
   onDuplicateTab: (tabId: number) => void;
   onReloadTab: (tabId: number) => void;
+  onDiscardTab?: (tabId: number) => void;
   onToggleMuteTab: (tab: chrome.tabs.Tab) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
 }
@@ -29,6 +30,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onPinToWorkspace,
   onDuplicateTab,
   onReloadTab,
+  onDiscardTab,
   onToggleMuteTab,
   onOpenContextMenu
 }) => {
@@ -99,6 +101,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                 onPinToWorkspace={onPinToWorkspace}
                 onDuplicate={onDuplicateTab}
                 onReload={onReloadTab}
+                onDiscardTab={onDiscardTab}
                 onToggleMute={onToggleMuteTab}
                 onOpenContextMenu={onOpenContextMenu}
               />

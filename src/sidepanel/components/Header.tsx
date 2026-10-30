@@ -9,7 +9,9 @@ import {
   Check,
   RotateCcw,
   RotateCw,
-  Clock
+  Clock,
+  Search,
+  Moon
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
 
@@ -22,6 +24,7 @@ interface HeaderProps {
   };
   autoArchiveInterval: 'never' | '12h' | '24h' | '7d';
   isActiveTabLoading?: boolean;
+  isSearchOpen?: boolean;
   onSelectQuickAccessFolder: (id: string) => void;
   onSelectWorkspaceFolder: (id: string) => void;
   onResetFolders: () => void;
@@ -31,6 +34,8 @@ interface HeaderProps {
   onSetAutoArchiveInterval: (val: 'never' | '12h' | '24h' | '7d') => void;
   onNewTab: () => void;
   onReloadActiveTab: () => void;
+  onToggleSearch: () => void;
+  onDiscardAllBackgroundTabs?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -38,6 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
   activeFolderIds,
   autoArchiveInterval,
   isActiveTabLoading = false,
+  isSearchOpen = false,
   onSelectQuickAccessFolder,
   onSelectWorkspaceFolder,
   onResetFolders,
@@ -46,7 +52,9 @@ export const Header: React.FC<HeaderProps> = ({
   onCreateBookmark,
   onSetAutoArchiveInterval,
   onNewTab,
-  onReloadActiveTab
+  onReloadActiveTab,
+  onToggleSearch,
+  onDiscardAllBackgroundTabs
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -105,6 +113,20 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center space-x-1">
+          {/* Toggle Search */}
+          <button
+            type="button"
+            title="Search bookmarks & tabs (Cmd+K / Ctrl+K)"
+            onClick={onToggleSearch}
+            className={`p-1 rounded-md transition-colors ${
+              isSearchOpen
+                ? 'text-cyan-400 bg-white/10'
+                : 'text-zinc-400 hover:text-white hover:bg-white/10'
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+          </button>
+
           {/* Reload Active Tab */}
           <button
             type="button"
@@ -241,6 +263,23 @@ export const Header: React.FC<HeaderProps> = ({
               <option value="7d">After 7 Days</option>
             </select>
           </div>
+
+          {/* Tab Memory Saver / Hibernation */}
+          {onDiscardAllBackgroundTabs && (
+            <div className="flex items-center justify-between pt-1 border-t border-white/[0.06]">
+              <span className="text-[11px] font-medium text-zinc-400 flex items-center gap-1">
+                <Moon className="w-3 h-3 text-indigo-400" />
+                Tab Memory Saver
+              </span>
+              <button
+                type="button"
+                onClick={onDiscardAllBackgroundTabs}
+                className="flex items-center space-x-1 px-2 py-1 rounded bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 text-[11px] font-medium transition-colors"
+              >
+                <span>Sleep Background Tabs</span>
+              </button>
+            </div>
+          )}
 
           <p className="text-[11px] text-zinc-500 italic">
             Permanent bookmarks remain safe. Unpinned tabs in Today&apos;s Tabs are temporary and will be archived.

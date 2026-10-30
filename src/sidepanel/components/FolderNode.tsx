@@ -4,6 +4,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  BookmarkPlus,
   Edit2,
   Trash2,
   Check,
@@ -19,16 +20,21 @@ interface FolderNodeProps {
   collapsedFolderIds: Record<string, boolean>;
   onToggleCollapse: (folderId: string) => void;
   bindingsByBookmarkId: Record<string, TabBinding>;
+  discardedTabsByTabId?: Record<number, boolean>;
   activeTabId: number | null;
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
+  onDiscardTab?: (tabId: number) => void;
   onCreateFolder: (parentId: string, title: string) => void;
+  onBookmarkCurrentPage?: (parentId: string) => void;
   onRenameFolder?: (id: string, title: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string) => void;
+  onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
 }
 
 export const FolderNode: React.FC<FolderNodeProps> = ({
@@ -37,16 +43,21 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   collapsedFolderIds,
   onToggleCollapse,
   bindingsByBookmarkId,
+  discardedTabsByTabId = {},
   activeTabId,
   onRowClick,
   onFaviconClick,
   onCloseTab,
   onReloadTab,
+  onDiscardTab,
   onCreateFolder,
+  onBookmarkCurrentPage,
   onRenameFolder,
   onOpenContextMenu,
   onDeleteBookmark,
-  onMoveToQuickAccess
+  onMoveToQuickAccess,
+  onDropItemToFolder,
+  onMoveBookmarkToIndex
 }) => {
   const isCollapsed = Boolean(collapsedFolderIds[node.id]);
   const children = node.children || [];
@@ -59,6 +70,9 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   // Inline rename state
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState(node.title || '');
+
+  // Drop target state
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const handleStartCreateSubfolder = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -98,11 +112,49 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
     setRenameTitle(node.title || '');
   };
 
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    try {
+      const dataStr = e.dataTransfer.getData('application/json');
+      if (dataStr && onDropItemToFolder) {
+        const data = JSON.parse(dataStr);
+        onDropItemToFolder(data, node.id);
+      }
+    } catch (err) {
+      console.warn('[Arctic] Could not parse dropped data:', err);
+    }
+  };
+
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!onOpenContextMenu) return;
     e.preventDefault();
 
     const items: ContextMenuItem[] = [
+      ...(onBookmarkCurrentPage
+        ? [
+            {
+              label: 'Bookmark Current Page Here',
+              icon: <BookmarkPlus className="w-3.5 h-3.5 text-cyan-400" />,
+              action: () => onBookmarkCurrentPage(node.id)
+            }
+          ]
+        : []),
       {
         label: 'New Subfolder',
         icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
@@ -114,7 +166,8 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         action: () => {
           setIsRenaming(true);
           setRenameTitle(node.title || '');
-        }
+        },
+        dividerBefore: true
       },
       ...(onDeleteBookmark
         ? [
@@ -133,7 +186,14 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   };
 
   return (
-    <div className="flex flex-col select-none">
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`flex flex-col select-none rounded-lg transition-colors ${
+        isDragOver ? 'bg-cyan-500/10 ring-1 ring-cyan-400' : ''
+      }`}
+    >
       {/* Folder Header Row */}
       {isRenaming ? (
         <form
@@ -204,8 +264,22 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             </span>
           </div>
 
-          {/* Right Action: Item count default, + Subfolder button on group hover */}
+          {/* Right Action: Bookmark Current Page & + Subfolder buttons on group hover */}
           <div className="flex items-center space-x-1 flex-shrink-0">
+            {onBookmarkCurrentPage && (
+              <button
+                type="button"
+                title="Bookmark current page in this folder"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onBookmarkCurrentPage(node.id);
+                }}
+                className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-cyan-300 hover:bg-white/10 transition-colors"
+              >
+                <BookmarkPlus className="w-3 h-3" />
+              </button>
+            )}
+
             <button
               type="button"
               title="Add Subfolder"
@@ -278,7 +352,6 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             </div>
           ) : (
             children.map((child) => {
-              // If child has no URL, it is a subfolder
               if (!child.url) {
                 return (
                   <FolderNode
@@ -288,23 +361,28 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     collapsedFolderIds={collapsedFolderIds}
                     onToggleCollapse={onToggleCollapse}
                     bindingsByBookmarkId={bindingsByBookmarkId}
+                    discardedTabsByTabId={discardedTabsByTabId}
                     activeTabId={activeTabId}
                     onRowClick={onRowClick}
                     onFaviconClick={onFaviconClick}
                     onCloseTab={onCloseTab}
                     onReloadTab={onReloadTab}
+                    onDiscardTab={onDiscardTab}
                     onCreateFolder={onCreateFolder}
+                    onBookmarkCurrentPage={onBookmarkCurrentPage}
                     onRenameFolder={onRenameFolder}
                     onOpenContextMenu={onOpenContextMenu}
                     onDeleteBookmark={onDeleteBookmark}
                     onMoveToQuickAccess={onMoveToQuickAccess}
+                    onDropItemToFolder={onDropItemToFolder}
+                    onMoveBookmarkToIndex={onMoveBookmarkToIndex}
                   />
                 );
               }
 
-              // Bookmark item
               const binding = bindingsByBookmarkId[child.id];
               const isActive = Boolean(binding && binding.tabId === activeTabId);
+              const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
 
               return (
                 <BookmarkRow
@@ -313,13 +391,16 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   depth={depth + 1}
                   binding={binding}
                   isActive={isActive}
+                  isDiscarded={isDiscarded}
                   onRowClick={onRowClick}
                   onFaviconClick={onFaviconClick}
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
+                  onDiscardTab={onDiscardTab}
                   onOpenContextMenu={onOpenContextMenu}
                   onDeleteBookmark={onDeleteBookmark}
                   onMoveToQuickAccess={onMoveToQuickAccess}
+                  onMoveBookmarkToIndex={onMoveBookmarkToIndex}
                 />
               );
             })

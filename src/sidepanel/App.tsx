@@ -1,13 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useBookmarks } from './hooks/useBookmarks';
 import { useTabBindings } from './hooks/useTabBindings';
 import { Header } from './components/Header';
+import { SearchBar } from './components/SearchBar';
 import { QuickAccessGrid } from './components/QuickAccessGrid';
 import { FolderNode } from './components/FolderNode';
 import { BookmarkRow } from './components/BookmarkRow';
 import { OpenTabsSection } from './components/OpenTabsSection';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
-import { Bookmark, Sparkles, Loader2, FolderPlus, Folder, Check, X } from 'lucide-react';
+import type { TabBinding } from '../types';
+import { Bookmark, Sparkles, Loader2, FolderPlus, BookmarkPlus, Folder, Check, X } from 'lucide-react';
 
 export const App: React.FC = () => {
   const {
@@ -30,6 +32,7 @@ export const App: React.FC = () => {
 
   const {
     bindingsByBookmarkId,
+    bookmarkIdByTabId,
     activeTabId,
     unpinnedTabs,
     createNewTab,
@@ -44,10 +47,17 @@ export const App: React.FC = () => {
     reloadTab,
     reloadActiveTab,
     isActiveTabLoading,
+    discardTab,
+    discardAllBackgroundTabs,
+    discardedTabsByTabId,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval
   } = useTabBindings();
+
+  // Search State
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
@@ -60,9 +70,13 @@ export const App: React.FC = () => {
   const [isCreatingRootFolder, setIsCreatingRootFolder] = useState(false);
   const [rootFolderTitle, setRootFolderTitle] = useState('');
 
+  // Drag over workspace container
+  const [isWorkspaceDragOver, setIsWorkspaceDragOver] = useState(false);
+
   // Global keyboard shortcuts:
-  // - Ctrl+T or Cmd+T: New Tab
-  // - Ctrl+R or Cmd+R: Reload current page
+  // - Ctrl+T / Cmd+T: New Tab
+  // - Ctrl+R / Cmd+R: Reload active web page
+  // - Ctrl+K / Cmd+K: Toggle Search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 't') {
@@ -71,6 +85,9 @@ export const App: React.FC = () => {
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
         e.preventDefault();
         reloadActiveTab();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsSearchOpen((prev) => !prev);
       }
     };
 
@@ -124,6 +141,143 @@ export const App: React.FC = () => {
     setRootFolderTitle('');
   };
 
+  /**
+   * Bookmark currently focused page directly into a given folder
+   */
+  const handleBookmarkCurrentPage = useCallback(
+    async (targetFolderId: string) => {
+      try {
+        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (currentTab && currentTab.url) {
+          const title = currentTab.title || currentTab.url || 'New Bookmark';
+          const newBookmark = await chrome.bookmarks.create({
+            parentId: targetFolderId,
+            title,
+            url: currentTab.url
+          });
+
+          // Bind tab immediately if present
+          if (typeof currentTab.id === 'number') {
+            const newBinding: TabBinding = {
+              bookmarkId: newBookmark.id,
+              tabId: currentTab.id,
+              windowId: currentTab.windowId,
+              originalUrl: currentTab.url,
+              currentUrl: currentTab.url,
+              currentTitle: title,
+              isNavigatedAway: false
+            };
+            await chrome.storage.session.set({
+              bindingsByBookmarkId: { ...bindingsByBookmarkId, [newBookmark.id]: newBinding },
+              bookmarkIdByTabId: { ...bookmarkIdByTabId, [currentTab.id]: newBookmark.id }
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('[Arctic] Could not bookmark current page:', err);
+      }
+    },
+    [bindingsByBookmarkId, bookmarkIdByTabId]
+  );
+
+  /**
+   * Handle drop of items (unpinned tab or bookmark) onto a folder or root workspace
+   */
+  const handleDropItemToFolder = useCallback(
+    async (data: { type: string; [key: string]: unknown }, targetFolderId: string) => {
+      if (data.type === 'openTab' && typeof data.tabId === 'number') {
+        const tab = unpinnedTabs.find((t) => t.id === data.tabId) || {
+          id: data.tabId as number,
+          url: (data.url as string) || '',
+          title: (data.title as string) || 'Pinned Tab',
+          windowId: 0
+        };
+        await pinTab(tab as chrome.tabs.Tab, targetFolderId);
+      } else if (data.type === 'bookmark' && typeof data.id === 'string') {
+        await chrome.bookmarks.move(data.id, { parentId: targetFolderId });
+      }
+    },
+    [pinTab, unpinnedTabs]
+  );
+
+  /**
+   * Handle reordering bookmarks within a folder
+   */
+  const handleMoveBookmarkToIndex = useCallback(
+    async (draggedId: string, targetParentId: string, targetIndex?: number) => {
+      try {
+        await chrome.bookmarks.move(draggedId, {
+          parentId: targetParentId,
+          ...(typeof targetIndex === 'number' ? { index: targetIndex } : {})
+        });
+      } catch (err) {
+        console.warn('[Arctic] Could not reorder bookmark:', err);
+      }
+    },
+    []
+  );
+
+  // Filter bookmarks & tabs based on searchQuery
+  const queryLower = searchQuery.trim().toLowerCase();
+
+  const filterBookmarkTree = useCallback(
+    (nodes: chrome.bookmarks.BookmarkTreeNode[]): chrome.bookmarks.BookmarkTreeNode[] => {
+      if (!queryLower) return nodes;
+
+      const result: chrome.bookmarks.BookmarkTreeNode[] = [];
+      for (const node of nodes) {
+        if (node.url) {
+          const matchTitle = node.title?.toLowerCase().includes(queryLower);
+          const matchUrl = node.url?.toLowerCase().includes(queryLower);
+          if (matchTitle || matchUrl) {
+            result.push(node);
+          }
+        } else {
+          // Folder: check children
+          const filteredChildren = filterBookmarkTree(node.children || []);
+          const matchFolderName = node.title?.toLowerCase().includes(queryLower);
+          if (filteredChildren.length > 0 || matchFolderName) {
+            result.push({
+              ...node,
+              children: filteredChildren.length > 0 ? filteredChildren : node.children
+            });
+          }
+        }
+      }
+      return result;
+    },
+    [queryLower]
+  );
+
+  const filteredQuickAccess = useMemo(() => {
+    const original = quickAccessNode?.children || [];
+    if (!queryLower) return original;
+    return original.filter(
+      (b) =>
+        b.title?.toLowerCase().includes(queryLower) ||
+        b.url?.toLowerCase().includes(queryLower)
+    );
+  }, [quickAccessNode?.children, queryLower]);
+
+  const filteredWorkspace = useMemo(() => {
+    const original = workspaceNode?.children || [];
+    return filterBookmarkTree(original);
+  }, [workspaceNode?.children, filterBookmarkTree]);
+
+  const filteredUnpinnedTabs = useMemo(() => {
+    if (!queryLower) return unpinnedTabs;
+    return unpinnedTabs.filter(
+      (t) =>
+        t.title?.toLowerCase().includes(queryLower) ||
+        t.url?.toLowerCase().includes(queryLower)
+    );
+  }, [unpinnedTabs, queryLower]);
+
+  const totalMatches =
+    filteredQuickAccess.length +
+    filteredWorkspace.length +
+    filteredUnpinnedTabs.length;
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-[#121214] text-zinc-400">
@@ -133,17 +287,17 @@ export const App: React.FC = () => {
     );
   }
 
-  const quickAccessBookmarks = quickAccessNode?.children || [];
-  const workspaceChildren = workspaceNode?.children || [];
   const runningTabCount = Object.keys(bindingsByBookmarkId).length;
 
   return (
     <div className="flex flex-col h-screen w-full bg-[#121214] text-zinc-100 select-none overflow-hidden font-sans">
-      {/* Header with Settings, Actions & New Tab */}
+      {/* Header with Settings, Actions, Search & New Tab */}
       <Header
         allFolders={allFolders}
         activeFolderIds={activeFolderIds}
         autoArchiveInterval={autoArchiveInterval}
+        isActiveTabLoading={isActiveTabLoading}
+        isSearchOpen={isSearchOpen}
         onSelectQuickAccessFolder={setQuickAccessFolderId}
         onSelectWorkspaceFolder={setWorkspaceFolderId}
         onResetFolders={resetToDefaultFolders}
@@ -153,8 +307,22 @@ export const App: React.FC = () => {
         onSetAutoArchiveInterval={setAutoArchiveInterval}
         onNewTab={() => createNewTab()}
         onReloadActiveTab={reloadActiveTab}
-        isActiveTabLoading={isActiveTabLoading}
+        onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
+        onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
+
+      {/* Expandable Search / Filter Bar */}
+      {isSearchOpen && (
+        <SearchBar
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onClose={() => {
+            setIsSearchOpen(false);
+            setSearchQuery('');
+          }}
+          matchCount={queryLower ? totalMatches : undefined}
+        />
+      )}
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 space-y-4">
@@ -166,12 +334,12 @@ export const App: React.FC = () => {
               Quick Access
             </span>
             <span className="text-[10px] text-zinc-600 font-mono">
-              {quickAccessBookmarks.length}
+              {filteredQuickAccess.length}
             </span>
           </div>
 
           <QuickAccessGrid
-            bookmarks={quickAccessBookmarks}
+            bookmarks={filteredQuickAccess}
             bindingsByBookmarkId={bindingsByBookmarkId}
             activeTabId={activeTabId}
             onTileClick={handleQuickAccessClick}
@@ -183,15 +351,53 @@ export const App: React.FC = () => {
         </div>
 
         {/* Section 2: Workspace Vertical Tabs Tree (Permanent Bookmarks & Folders) */}
-        <div className="flex flex-col space-y-1">
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            setIsWorkspaceDragOver(true);
+          }}
+          onDragLeave={() => setIsWorkspaceDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsWorkspaceDragOver(false);
+            if (activeFolderIds.workspaceId) {
+              try {
+                const data = JSON.parse(e.dataTransfer.getData('application/json'));
+                handleDropItemToFolder(data, activeFolderIds.workspaceId);
+              } catch {
+                // ignore
+              }
+            }
+          }}
+          className={`flex flex-col space-y-1 rounded-xl transition-colors ${
+            isWorkspaceDragOver ? 'bg-cyan-500/5 ring-1 ring-cyan-500/30' : ''
+          }`}
+        >
           <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
             <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1">
               <Bookmark className="w-2.5 h-2.5 text-amber-400/80" />
               {workspaceNode?.title || 'Workspace'}
             </span>
 
-            {/* Folder creation action */}
-            <div className="flex items-center space-x-1.5">
+            {/* Folder creation and Quick Bookmark action */}
+            <div className="flex items-center space-x-1">
+              {/* Quick Bookmark Current Page in Workspace Root */}
+              {activeFolderIds.workspaceId && (
+                <button
+                  type="button"
+                  title="Bookmark current page in Workspace"
+                  onClick={() =>
+                    activeFolderIds.workspaceId &&
+                    handleBookmarkCurrentPage(activeFolderIds.workspaceId)
+                  }
+                  className="p-1 rounded text-zinc-400 hover:text-cyan-300 hover:bg-white/10 transition-colors"
+                >
+                  <BookmarkPlus className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {/* New Folder Button */}
               <button
                 type="button"
                 title="Create New Folder in Workspace"
@@ -201,8 +407,9 @@ export const App: React.FC = () => {
                 <FolderPlus className="w-3 h-3 text-amber-400" />
                 <span>New Folder</span>
               </button>
+
               <span className="text-[10px] text-zinc-600 font-mono">
-                {workspaceChildren.length} items
+                {filteredWorkspace.length} items
               </span>
             </div>
           </div>
@@ -251,20 +458,24 @@ export const App: React.FC = () => {
               </form>
             )}
 
-            {workspaceChildren.length === 0 && !isCreatingRootFolder ? (
+            {filteredWorkspace.length === 0 && !isCreatingRootFolder ? (
               <div className="px-3 py-4 text-center text-zinc-500 rounded-lg border border-dashed border-white/5 bg-white/[0.01]">
-                <p className="text-xs">This workspace folder is empty.</p>
-                <button
-                  type="button"
-                  onClick={() => setIsCreatingRootFolder(true)}
-                  className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-amber-300 font-medium transition-colors"
-                >
-                  <FolderPlus className="w-3 h-3" />
-                  <span>+ Create a Folder</span>
-                </button>
+                <p className="text-xs">
+                  {queryLower ? 'No matching bookmarks found.' : 'This workspace folder is empty.'}
+                </p>
+                {!queryLower && (
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingRootFolder(true)}
+                    className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-amber-300 font-medium transition-colors"
+                  >
+                    <FolderPlus className="w-3 h-3" />
+                    <span>+ Create a Folder</span>
+                  </button>
+                )}
               </div>
             ) : (
-              workspaceChildren.map((child) => {
+              filteredWorkspace.map((child) => {
                 if (!child.url) {
                   return (
                     <FolderNode
@@ -274,22 +485,28 @@ export const App: React.FC = () => {
                       collapsedFolderIds={collapsedFolderIds}
                       onToggleCollapse={toggleFolderCollapse}
                       bindingsByBookmarkId={bindingsByBookmarkId}
+                      discardedTabsByTabId={discardedTabsByTabId}
                       activeTabId={activeTabId}
                       onRowClick={handleRowClick}
                       onFaviconClick={handleFaviconClick}
                       onCloseTab={handleCloseTab}
                       onReloadTab={reloadTab}
+                      onDiscardTab={discardTab}
                       onCreateFolder={createFolder}
+                      onBookmarkCurrentPage={handleBookmarkCurrentPage}
                       onRenameFolder={renameBookmarkOrFolder}
                       onOpenContextMenu={handleOpenContextMenu}
                       onDeleteBookmark={removeBookmarkOrFolder}
                       onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
+                      onDropItemToFolder={handleDropItemToFolder}
+                      onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
                     />
                   );
                 }
 
                 const binding = bindingsByBookmarkId[child.id];
                 const isActive = Boolean(binding && binding.tabId === activeTabId);
+                const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
 
                 return (
                   <BookmarkRow
@@ -298,13 +515,16 @@ export const App: React.FC = () => {
                     depth={0}
                     binding={binding}
                     isActive={isActive}
+                    isDiscarded={isDiscarded}
                     onRowClick={handleRowClick}
                     onFaviconClick={handleFaviconClick}
                     onCloseTab={handleCloseTab}
                     onReloadTab={reloadTab}
+                    onDiscardTab={discardTab}
                     onOpenContextMenu={handleOpenContextMenu}
                     onDeleteBookmark={removeBookmarkOrFolder}
                     onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
+                    onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
                   />
                 );
               })
@@ -314,7 +534,7 @@ export const App: React.FC = () => {
 
         {/* Section 3: Today's Tabs / Open Tabs (Ephemeral Unpinned Tabs) */}
         <OpenTabsSection
-          unpinnedTabs={unpinnedTabs}
+          unpinnedTabs={filteredUnpinnedTabs}
           activeTabId={activeTabId}
           onFocusTab={focusTab}
           onCloseTab={handleCloseTab}
@@ -324,6 +544,7 @@ export const App: React.FC = () => {
           onPinToWorkspace={handlePinTabToWorkspace}
           onDuplicateTab={duplicateTab}
           onReloadTab={reloadTab}
+          onDiscardTab={discardTab}
           onToggleMuteTab={toggleMuteTab}
           onOpenContextMenu={handleOpenContextMenu}
         />
@@ -353,7 +574,7 @@ export const App: React.FC = () => {
           <span className="text-zinc-600">•</span>
           <span>{unpinnedTabs.length} open</span>
         </div>
-        <span className="text-[10px] text-zinc-600 font-mono">v1.1.0</span>
+        <span className="text-[10px] text-zinc-600 font-mono">v2.0.0</span>
       </div>
     </div>
   );

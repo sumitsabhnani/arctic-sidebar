@@ -1,5 +1,16 @@
 import React, { useState } from 'react';
-import { Globe, X, Volume2, VolumeX, Sparkles, FolderPlus, Copy, RotateCw, CopyPlus } from 'lucide-react';
+import {
+  Globe,
+  X,
+  Volume2,
+  VolumeX,
+  Sparkles,
+  FolderPlus,
+  Copy,
+  RotateCw,
+  CopyPlus,
+  Moon
+} from 'lucide-react';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -12,6 +23,7 @@ interface OpenTabRowProps {
   onPinToWorkspace: (tab: chrome.tabs.Tab) => void;
   onDuplicate: (tabId: number) => void;
   onReload: (tabId: number) => void;
+  onDiscardTab?: (tabId: number) => void;
   onToggleMute: (tab: chrome.tabs.Tab) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
 }
@@ -25,10 +37,12 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onPinToWorkspace,
   onDuplicate,
   onReload,
+  onDiscardTab,
   onToggleMute,
   onOpenContextMenu
 }) => {
   const [faviconError, setFaviconError] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   const tabId = tab.id;
   const isNewTab = !tab.url || tab.url.startsWith('chrome://newtab') || tab.url === 'about:blank';
@@ -37,6 +51,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
 
   const isAudible = Boolean(tab.audible);
   const isMuted = Boolean(tab.mutedInfo?.muted);
+  const isDiscarded = Boolean(tab.discarded);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -55,6 +70,15 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         action: () => onPinToWorkspace(tab),
         disabled: !tab.url || isNewTab
       },
+      ...(!isActive && !isDiscarded && onDiscardTab
+        ? [
+            {
+              label: 'Hibernate Tab (Save RAM)',
+              icon: <Moon className="w-3.5 h-3.5 text-indigo-400" />,
+              action: () => onDiscardTab(tabId)
+            }
+          ]
+        : []),
       {
         label: 'Copy URL',
         icon: <Copy className="w-3.5 h-3.5" />,
@@ -91,11 +115,33 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     onOpenContextMenu(e, items);
   };
 
+  const handleDragStart = (e: React.DragEvent) => {
+    if (typeof tabId !== 'number') return;
+    setIsDragging(true);
+    e.dataTransfer.setData(
+      'application/json',
+      JSON.stringify({
+        type: 'openTab',
+        tabId,
+        url: tab.url,
+        title: tab.title
+      })
+    );
+    e.dataTransfer.effectAllowed = 'copyMove';
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+  };
+
   return (
     <div
       role="button"
       tabIndex={0}
-      title={`${titleText}\n${tab.url || ''}`}
+      draggable={Boolean(tab.url && !isNewTab)}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      title={`${titleText}\n${tab.url || ''}${isDiscarded ? '\n(Sleeping to save memory - click to wake)' : ''}`}
       onClick={() => tabId && onFocus(tabId)}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
@@ -105,36 +151,51 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         }
       }}
       className={`group relative flex items-center justify-between h-[34px] px-2.5 my-[1px] rounded-lg cursor-pointer select-none transition-all duration-150 outline-none ${
+        isDragging ? 'opacity-40 scale-98' : ''
+      } ${
         isActive
           ? 'bg-white/15 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
+          : isDiscarded
+          ? 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
           : 'text-zinc-300 hover:text-white hover:bg-white/5'
       }`}
     >
       {/* Left: Favicon & Title */}
       <div className="flex items-center min-w-0 flex-1 space-x-2 mr-2">
-        <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+        <div className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center">
           {!faviconError && faviconSrc ? (
             <img
               src={faviconSrc}
               alt=""
               onError={() => setFaviconError(true)}
-              className="w-4 h-4 object-contain rounded-sm"
+              className={`w-4 h-4 object-contain rounded-sm transition-opacity ${
+                isDiscarded ? 'opacity-60 grayscale' : 'opacity-100'
+              }`}
             />
           ) : (
             <Globe className="w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-400" />
+          )}
+
+          {/* Sleep icon overlay on favicon if hibernated */}
+          {isDiscarded && (
+            <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
           )}
         </div>
 
         <span
           className={`truncate text-[13px] leading-tight transition-colors duration-150 ${
-            isActive ? 'text-white' : 'text-zinc-300 group-hover:text-white'
+            isActive
+              ? 'text-white'
+              : isDiscarded
+              ? 'text-zinc-400 italic'
+              : 'text-zinc-300 group-hover:text-white'
           }`}
         >
           {titleText}
         </span>
       </div>
 
-      {/* Right: Audio Indicator & Close Button */}
+      {/* Right: Audio Indicator, Reload on active hover, & Close Button */}
       <div className="flex items-center space-x-1.5 flex-shrink-0">
         {/* Audio status */}
         {(isAudible || isMuted) && (
