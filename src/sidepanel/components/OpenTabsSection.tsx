@@ -18,6 +18,7 @@ interface OpenTabsSectionProps {
   onReloadTab: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
   onToggleMuteTab: (tab: chrome.tabs.Tab) => void;
+  onRenameTab?: (tabId: number, title: string) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
 }
@@ -37,6 +38,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onReloadTab,
   onDiscardTab,
   onToggleMuteTab,
+  onRenameTab,
   onOpenContextMenu,
   onMoveOpenTab
 }) => {
@@ -121,6 +123,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   onReload={onReloadTab}
                   onDiscardTab={onDiscardTab}
                   onToggleMute={onToggleMuteTab}
+                  onRenameTab={onRenameTab}
                   onOpenContextMenu={onOpenContextMenu}
                   onMoveOpenTab={onMoveOpenTab}
                 />

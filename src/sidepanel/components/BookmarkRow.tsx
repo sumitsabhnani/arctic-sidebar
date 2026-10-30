@@ -10,7 +10,8 @@ import {
   Trash2,
   Sparkles,
   Moon,
-  RefreshCw
+  RefreshCw,
+  Edit2
 } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
@@ -27,6 +28,7 @@ interface BookmarkRowProps {
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
+  onRenameBookmark?: (id: string, title: string) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
@@ -45,6 +47,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onCloseTab,
   onReloadTab,
   onDiscardTab,
+  onRenameBookmark,
   onReplaceUrl,
   onOpenContextMenu,
   onDeleteBookmark,
@@ -56,6 +59,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
   const [isCopied, setIsCopied] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(bookmark.title || '');
 
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
@@ -100,6 +105,18 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               label: 'Replace with Current Page URL',
               icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />,
               action: () => onReplaceUrl(bookmark.id)
+            }
+          ]
+        : []),
+      ...(onRenameBookmark
+        ? [
+            {
+              label: 'Rename Tab',
+              icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+              action: () => {
+                setEditTitle(bookmark.title || '');
+                setIsEditing(true);
+              }
             }
           ]
         : []),
@@ -214,6 +231,56 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       // ignore
     }
   };
+
+  if (isEditing) {
+    return (
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const trimmed = editTitle.trim();
+          if (trimmed && onRenameBookmark) {
+            await onRenameBookmark(bookmark.id, trimmed);
+          }
+          setIsEditing(false);
+        }}
+        style={{ paddingLeft: `${12 + depth * 14}px` }}
+        className="flex items-center h-[34px] pr-2 my-[1px] space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-lg border border-cyan-500/60"
+      >
+        <input
+          type="text"
+          value={editTitle}
+          onChange={(e) => setEditTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setIsEditing(false);
+              setEditTitle(bookmark.title || '');
+            }
+          }}
+          autoFocus
+          onFocus={(e) => e.target.select()}
+          className="flex-1 bg-transparent px-1.5 py-0.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
+        />
+        <button
+          type="submit"
+          title="Save Title"
+          className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
+        >
+          <Check className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          title="Cancel"
+          onClick={() => {
+            setIsEditing(false);
+            setEditTitle(bookmark.title || '');
+          }}
+          className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </form>
+    );
+  }
 
   return (
     <div

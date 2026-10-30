@@ -7,7 +7,6 @@ import { QuickAccessGrid } from './components/QuickAccessGrid';
 import { FolderNode } from './components/FolderNode';
 import { BookmarkRow } from './components/BookmarkRow';
 import { OpenTabsSection } from './components/OpenTabsSection';
-import { CompactSidebar } from './components/CompactSidebar';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings } from '../types';
 import { Bookmark, Sparkles, Loader2, FolderPlus, BookmarkPlus, Folder, Check, X, ChevronDown } from 'lucide-react';
@@ -53,6 +52,7 @@ export const App: React.FC = () => {
     discardAllBackgroundTabs,
     discardedTabsByTabId,
     moveOpenTab,
+    renameOpenTab,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval
@@ -60,9 +60,6 @@ export const App: React.FC = () => {
 
   // Theme State
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
-
-  // Sidebar Collapsed (Compact Mode) State
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   // Section Collapsed States
   const [collapsedSections, setCollapsedSections] = useState<{
@@ -76,12 +73,9 @@ export const App: React.FC = () => {
   });
 
   useEffect(() => {
-    chrome.storage.local.get(['theme', 'isSidebarCollapsed', 'collapsedSections'], (res) => {
+    chrome.storage.local.get(['theme', 'collapsedSections'], (res) => {
       if (res.theme === 'light' || res.theme === 'dark') {
         setTheme(res.theme);
-      }
-      if (typeof res.isSidebarCollapsed === 'boolean') {
-        setIsSidebarCollapsed(res.isSidebarCollapsed);
       }
       if (res.collapsedSections) {
         setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
@@ -105,12 +99,9 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  const toggleSidebarCollapse = useCallback(() => {
-    setIsSidebarCollapsed((prev) => {
-      const next = !prev;
-      chrome.storage.local.set({ isSidebarCollapsed: next } as LocalSettings);
-      return next;
-    });
+  // Collapse sidebar window (closes the side panel)
+  const collapseSidebarWindow = useCallback(() => {
+    window.close();
   }, []);
 
   const toggleSectionCollapse = useCallback((section: 'quickAccess' | 'workspace' | 'todayTabs') => {
@@ -146,7 +137,7 @@ export const App: React.FC = () => {
   // - Ctrl+T / Cmd+T: New Tab
   // - Ctrl+R / Cmd+R: Reload active web page
   // - Ctrl+K / Cmd+K: Toggle Search
-  // - Ctrl+S / Cmd+S or Ctrl+B / Cmd+B: Toggle Sidebar Collapse (Compact Mode)
+  // - Ctrl+B / Cmd+B or Ctrl+S / Cmd+S: Collapse/Close Sidebar Window
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 't') {
@@ -158,15 +149,15 @@ export const App: React.FC = () => {
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsSearchOpen((prev) => !prev);
-      } else if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'b')) {
+      } else if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'b' || e.key.toLowerCase() === 's')) {
         e.preventDefault();
-        toggleSidebarCollapse();
+        collapseSidebarWindow();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [createNewTab, reloadActiveTab, toggleSidebarCollapse]);
+  }, [createNewTab, reloadActiveTab, collapseSidebarWindow]);
 
   const handleOpenContextMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
@@ -379,52 +370,6 @@ export const App: React.FC = () => {
 
   const runningTabCount = Object.keys(bindingsByBookmarkId).length;
 
-  // Render Compact / Collapsed Mini Sidebar
-  if (isSidebarCollapsed) {
-    return (
-      <div className="flex flex-col h-screen w-full bg-[#f8f9fa] dark:bg-[#121214] select-none overflow-hidden font-sans">
-        <CompactSidebar
-          quickAccessBookmarks={filteredQuickAccess}
-          workspaceBookmarks={filteredWorkspace}
-          unpinnedTabs={filteredUnpinnedTabs}
-          bindingsByBookmarkId={bindingsByBookmarkId}
-          activeTabId={activeTabId}
-          isActiveTabLoading={isActiveTabLoading}
-          theme={theme}
-          onExpand={toggleSidebarCollapse}
-          onToggleTheme={toggleTheme}
-          onNewTab={() => createNewTab()}
-          onReloadActiveTab={reloadActiveTab}
-          onToggleSearch={() => {
-            toggleSidebarCollapse();
-            setIsSearchOpen(true);
-          }}
-          onFocusTab={focusTab}
-          onRowClick={handleRowClick}
-          onQuickAccessClick={handleQuickAccessClick}
-          onCloseTab={handleCloseTab}
-          onPinToQuickAccess={handlePinTabToQuickAccess}
-          onPinToWorkspace={handlePinTabToWorkspace}
-          onDuplicateTab={duplicateTab}
-          onReloadTab={reloadTab}
-          onToggleMuteTab={toggleMuteTab}
-          onOpenContextMenu={handleOpenContextMenu}
-        />
-
-        {/* Floating Context Menu */}
-        {contextMenu && (
-          <ContextMenu
-            x={contextMenu.x}
-            y={contextMenu.y}
-            items={contextMenu.items}
-            onClose={handleCloseContextMenu}
-          />
-        )}
-      </div>
-    );
-  }
-
-  // Render Full Sidebar View
   return (
     <div className="flex flex-col h-screen w-full bg-[#f8f9fa] dark:bg-[#121214] text-zinc-800 dark:text-zinc-100 select-none overflow-hidden font-sans transition-colors duration-150">
       {/* Header with Settings, Actions, Search, New Tab & Collapse */}
@@ -446,7 +391,7 @@ export const App: React.FC = () => {
         onReloadActiveTab={reloadActiveTab}
         onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
         onToggleTheme={toggleTheme}
-        onToggleSidebarCollapse={toggleSidebarCollapse}
+        onToggleSidebarCollapse={collapseSidebarWindow}
         onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
 
@@ -478,7 +423,7 @@ export const App: React.FC = () => {
                   collapsedSections.quickAccess ? '-rotate-90' : 'rotate-0'
                 }`}
               />
-              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1 group-hover:text-zinc-700 dark:group-hover:text-zinc-300">
+              <span className="text-xs font-semibold text-zinc-600 dark:text-zinc-400 flex items-center gap-1 group-hover:text-zinc-900 dark:group-hover:text-zinc-200">
                 <Sparkles className="w-2.5 h-2.5 text-cyan-500 dark:text-cyan-400" />
                 Quick Access
               </span>
@@ -498,6 +443,7 @@ export const App: React.FC = () => {
               onCloseTab={handleCloseTab}
               onMoveToWorkspace={handleMoveBookmarkToWorkspace}
               onReplaceUrl={handleReplaceBookmarkUrl}
+              onRenameBookmark={renameBookmarkOrFolder}
               onRemoveBookmark={removeBookmarkOrFolder}
             />
           )}
@@ -538,7 +484,7 @@ export const App: React.FC = () => {
                   collapsedSections.workspace ? '-rotate-90' : 'rotate-0'
                 }`}
               />
-              <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-500 flex items-center gap-1 group-hover:text-zinc-700 dark:group-hover:text-zinc-300">
+              <span className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1 group-hover:text-zinc-900 dark:group-hover:text-zinc-100">
                 <Bookmark className="w-2.5 h-2.5 text-amber-500 dark:text-amber-400/80" />
                 {workspaceNode?.title || 'Workspace'}
               </span>
@@ -666,6 +612,7 @@ export const App: React.FC = () => {
                         onCreateFolder={createFolder}
                         onBookmarkCurrentPage={handleBookmarkCurrentPage}
                         onRenameFolder={renameBookmarkOrFolder}
+                        onRenameBookmark={renameBookmarkOrFolder}
                         onOpenContextMenu={handleOpenContextMenu}
                         onDeleteBookmark={removeBookmarkOrFolder}
                         onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
@@ -693,6 +640,7 @@ export const App: React.FC = () => {
                       onReloadTab={reloadTab}
                       onDiscardTab={discardTab}
                       onReplaceUrl={handleReplaceBookmarkUrl}
+                      onRenameBookmark={renameBookmarkOrFolder}
                       onOpenContextMenu={handleOpenContextMenu}
                       onDeleteBookmark={removeBookmarkOrFolder}
                       onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
@@ -721,6 +669,7 @@ export const App: React.FC = () => {
           onReloadTab={reloadTab}
           onDiscardTab={discardTab}
           onToggleMuteTab={toggleMuteTab}
+          onRenameTab={renameOpenTab}
           onOpenContextMenu={handleOpenContextMenu}
           onMoveOpenTab={moveOpenTab}
         />

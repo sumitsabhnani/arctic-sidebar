@@ -31,6 +31,7 @@ interface FolderNodeProps {
   onCreateFolder: (parentId: string, title: string) => void;
   onBookmarkCurrentPage?: (parentId: string) => void;
   onRenameFolder?: (id: string, title: string) => void;
+  onRenameBookmark?: (id: string, title: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
@@ -55,6 +56,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onCreateFolder,
   onBookmarkCurrentPage,
   onRenameFolder,
+  onRenameBookmark,
   onOpenContextMenu,
   onDeleteBookmark,
   onMoveToQuickAccess,
@@ -298,7 +300,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               <FolderOpen className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400/90 transition-colors flex-shrink-0" />
             )}
 
-            <span className="truncate text-xs font-semibold tracking-wide uppercase text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-zinc-200">
+            <span className="truncate text-xs font-medium text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-zinc-100">
               {node.title || 'Untitled Folder'}
             </span>
           </div>
@@ -410,6 +412,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onCreateFolder={onCreateFolder}
                     onBookmarkCurrentPage={onBookmarkCurrentPage}
                     onRenameFolder={onRenameFolder}
+                    onRenameBookmark={onRenameBookmark}
                     onOpenContextMenu={onOpenContextMenu}
                     onDeleteBookmark={onDeleteBookmark}
                     onMoveToQuickAccess={onMoveToQuickAccess}
@@ -436,6 +439,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
                   onDiscardTab={onDiscardTab}
+                  onRenameBookmark={onRenameBookmark}
                   onReplaceUrl={onReplaceUrl}
                   onOpenContextMenu={onOpenContextMenu}
                   onDeleteBookmark={onDeleteBookmark}

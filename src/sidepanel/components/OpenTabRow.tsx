@@ -10,7 +10,8 @@ import {
   Check,
   RotateCw,
   CopyPlus,
-  Moon
+  Moon,
+  Edit2
 } from 'lucide-react';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
@@ -26,6 +27,7 @@ interface OpenTabRowProps {
   onReload: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
   onToggleMute: (tab: chrome.tabs.Tab) => void;
+  onRenameTab?: (tabId: number, title: string) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
 }
@@ -41,6 +43,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onReload,
   onDiscardTab,
   onToggleMute,
+  onRenameTab,
   onOpenContextMenu,
   onMoveOpenTab
 }) => {
@@ -48,6 +51,8 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
   const [isCopied, setIsCopied] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState(tab.title || '');
 
   const tabId = tab.id;
   const isNewTab = !tab.url || tab.url.startsWith('chrome://newtab') || tab.url === 'about:blank';
@@ -117,6 +122,18 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         icon: <CopyPlus className="w-3.5 h-3.5" />,
         action: () => onDuplicate(tabId)
       },
+      ...(onRenameTab && typeof tabId === 'number'
+        ? [
+            {
+              label: 'Rename Tab',
+              icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+              action: () => {
+                setEditTitle(tab.title || '');
+                setIsEditing(true);
+              }
+            }
+          ]
+        : []),
       {
         label: 'Close Tab',
         icon: <X className="w-3.5 h-3.5 text-rose-400" />,
@@ -184,6 +201,55 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       // ignore
     }
   };
+
+  if (isEditing) {
+    return (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const trimmed = editTitle.trim();
+          if (trimmed && onRenameTab && typeof tabId === 'number') {
+            onRenameTab(tabId, trimmed);
+          }
+          setIsEditing(false);
+        }}
+        className="flex items-center h-[34px] px-2.5 my-[1px] space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-lg border border-cyan-500/60"
+      >
+        <input
+          type="text"
+          value={editTitle}
+          onChange={(e) => setEditTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setIsEditing(false);
+              setEditTitle(tab.title || '');
+            }
+          }}
+          autoFocus
+          onFocus={(e) => e.target.select()}
+          className="flex-1 bg-transparent px-1.5 py-0.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
+        />
+        <button
+          type="submit"
+          title="Save Title"
+          className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
+        >
+          <Check className="w-3.5 h-3.5" />
+        </button>
+        <button
+          type="button"
+          title="Cancel"
+          onClick={() => {
+            setIsEditing(false);
+            setEditTitle(tab.title || '');
+          }}
+          className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </form>
+    );
+  }
 
   return (
     <div

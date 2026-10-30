@@ -33,14 +33,45 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     };
 
     window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('blur', onClose);
+    window.addEventListener('resize', onClose);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) onClose();
+    });
+
+    const handleTabActivated = () => {
+      onClose();
+    };
+
+    const handleWindowFocus = () => {
+      onClose();
+    };
+
+    if (chrome?.tabs?.onActivated) {
+      chrome.tabs.onActivated.addListener(handleTabActivated);
+    }
+    if (chrome?.windows?.onFocusChanged) {
+      chrome.windows.onFocusChanged.addListener(handleWindowFocus);
+    }
+
     // Use capture or slight timeout so triggering right-click doesn't instantly dismiss
     const timer = setTimeout(() => {
       window.addEventListener('mousedown', handleClickOutside);
+      window.addEventListener('contextmenu', handleClickOutside);
     }, 10);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('blur', onClose);
+      window.removeEventListener('resize', onClose);
       window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('contextmenu', handleClickOutside);
+      if (chrome?.tabs?.onActivated) {
+        chrome.tabs.onActivated.removeListener(handleTabActivated);
+      }
+      if (chrome?.windows?.onFocusChanged) {
+        chrome.windows.onFocusChanged.removeListener(handleWindowFocus);
+      }
       clearTimeout(timer);
     };
   }, [onClose]);

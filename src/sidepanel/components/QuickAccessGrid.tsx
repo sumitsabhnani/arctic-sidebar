@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw, ExternalLink, FolderPlus, Copy, Trash2, X, RefreshCw } from 'lucide-react';
+import { Globe, RotateCcw, ExternalLink, FolderPlus, Copy, Trash2, X, RefreshCw, Edit2 } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
@@ -13,6 +13,7 @@ interface QuickAccessGridProps {
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
+  onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
 }
 
@@ -25,6 +26,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   onCloseTab,
   onMoveToWorkspace,
   onReplaceUrl,
+  onRenameBookmark,
   onRemoveBookmark
 }) => {
   const items = bookmarks.filter((b) => Boolean(b.url));
@@ -53,6 +55,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
           onCloseTab={onCloseTab}
           onMoveToWorkspace={onMoveToWorkspace}
           onReplaceUrl={onReplaceUrl}
+          onRenameBookmark={onRenameBookmark}
           onRemoveBookmark={onRemoveBookmark}
         />
       ))}
@@ -69,6 +72,7 @@ interface QuickAccessTileProps {
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
+  onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
 }
 
@@ -81,6 +85,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   onCloseTab,
   onMoveToWorkspace,
   onReplaceUrl,
+  onRenameBookmark,
   onRemoveBookmark
 }) => {
   const [faviconError, setFaviconError] = useState(false);
@@ -127,6 +132,20 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
               label: 'Replace with Current Page URL',
               icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />,
               action: () => onReplaceUrl(bookmark.id)
+            }
+          ]
+        : []),
+      ...(onRenameBookmark
+        ? [
+            {
+              label: 'Rename Tab',
+              icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+              action: () => {
+                const newTitle = window.prompt('Rename Quick Access tab:', bookmark.title || '');
+                if (newTitle !== null && newTitle.trim()) {
+                  onRenameBookmark(bookmark.id, newTitle.trim());
+                }
+              }
             }
           ]
         : []),

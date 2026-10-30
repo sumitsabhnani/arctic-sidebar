@@ -7,6 +7,9 @@ export function useTabBindings() {
   const [bookmarkIdByTabId, setBookmarkIdByTabId] = useState<Record<number, string>>({});
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [windowTabs, setWindowTabs] = useState<chrome.tabs.Tab[]>([]);
+  const [customTabTitles, setCustomTabTitles] = useState<Record<number, string>>({});
+  const customTabTitlesRef = useRef<Record<number, string>>({});
+  customTabTitlesRef.current = customTabTitles;
   const [autoArchiveInterval, setAutoArchiveIntervalState] = useState<'never' | '12h' | '24h' | '7d'>('24h');
   const currentWindowIdRef = useRef<number | null>(null);
 
@@ -19,7 +22,13 @@ export function useTabBindings() {
       if (currentWin.id) {
         currentWindowIdRef.current = currentWin.id;
         const tabs = await chrome.tabs.query({ windowId: currentWin.id });
-        setWindowTabs(tabs);
+        const tabsWithCustom = tabs.map((t) => {
+          if (typeof t.id === 'number' && customTabTitlesRef.current[t.id]) {
+            return { ...t, title: customTabTitlesRef.current[t.id] };
+          }
+          return t;
+        });
+        setWindowTabs(tabsWithCustom);
 
         const active = tabs.find((t) => t.active);
         if (active?.id) {
@@ -37,9 +46,13 @@ export function useTabBindings() {
   const loadSessionState = useCallback(async () => {
     try {
       const [sessionData, localData] = await Promise.all([
-        chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']),
+        chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId', 'customTabTitles']),
         chrome.storage.local.get(['autoArchiveInterval', 'tabOpenedAt'])
       ]);
+
+      if (sessionData.customTabTitles) {
+        setCustomTabTitles(sessionData.customTabTitles as Record<number, string>);
+      }
 
       const bindings: Record<string, TabBinding> =
         (sessionData.bindingsByBookmarkId as Record<string, TabBinding>) || {};
@@ -207,6 +220,14 @@ export function useTabBindings() {
     const handleRemoved = (tabId: number) => {
       refreshWindowTabs();
 
+      setCustomTabTitles((prev) => {
+        if (!prev[tabId]) return prev;
+        const next = { ...prev };
+        delete next[tabId];
+        chrome.storage.session.set({ customTabTitles: next });
+        return next;
+      });
+
       setBookmarkIdByTabId((prevByTab) => {
         const bookmarkId = prevByTab[tabId];
         if (!bookmarkId) return prevByTab;
@@ -236,7 +257,16 @@ export function useTabBindings() {
     ) => {
       // Update in-place to avoid expensive query on every micro status event
       setWindowTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? { ...t, ...tab, ...changeInfo } : t))
+        prev.map((t) =>
+          t.id === tabId
+            ? {
+                ...t,
+                ...tab,
+                ...changeInfo,
+                title: customTabTitlesRef.current[tabId] || changeInfo.title || tab.title || t.title
+              }
+            : t
+        )
       );
 
       if (!changeInfo.url && changeInfo.status !== 'complete' && !changeInfo.title) {
@@ -744,6 +774,21 @@ export function useTabBindings() {
     [activeTabId, bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession, refreshWindowTabs]
   );
 
+  /**
+   * Rename an open tab (sets custom tab title)
+   */
+  const renameOpenTab = useCallback(async (tabId: number, title: string) => {
+    setCustomTabTitles((prev) => {
+      const next = { ...prev, [tabId]: title };
+      chrome.storage.session.set({ customTabTitles: next });
+      return next;
+    });
+
+    setWindowTabs((prev) =>
+      prev.map((t) => (t.id === tabId ? { ...t, title } : t))
+    );
+  }, []);
+
   return {
     bindingsByBookmarkId,
     bookmarkIdByTabId,
@@ -765,6 +810,7 @@ export function useTabBindings() {
     discardAllBackgroundTabs,
     discardedTabsByTabId,
     moveOpenTab,
+    renameOpenTab,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval,
