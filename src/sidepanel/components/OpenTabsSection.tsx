@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Plus, Broom } from 'lucide-react';
+import { Layers, Plus, Trash2 } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -57,7 +57,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
               onClick={onCloseAll}
               className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-500 hover:text-zinc-200 hover:bg-white/10 transition-colors"
             >
-              <Broom className="w-2.5 h-2.5" />
+              <Trash2 className="w-2.5 h-2.5" />
               <span>Clear</span>
             </button>
           )}

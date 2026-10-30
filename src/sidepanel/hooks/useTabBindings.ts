@@ -176,7 +176,7 @@ export function useTabBindings() {
     loadSessionState();
 
     // Listen to tab activation
-    const handleActivated = (activeInfo: chrome.tabs.OnActivatedInfo) => {
+    const handleActivated: Parameters<typeof chrome.tabs.onActivated.addListener>[0] = (activeInfo) => {
       chrome.windows.getCurrent((currentWin) => {
         if (currentWin.id === activeInfo.windowId) {
           setActiveTabId(activeInfo.tabId);
@@ -229,10 +229,10 @@ export function useTabBindings() {
     };
 
     // Listen to tab updates (URL change, navigation away, favicon, title, muted)
-    const handleUpdated = (
-      tabId: number,
-      changeInfo: chrome.tabs.OnUpdatedInfo,
-      tab: chrome.tabs.Tab
+    const handleUpdated: Parameters<typeof chrome.tabs.onUpdated.addListener>[0] = (
+      tabId,
+      changeInfo,
+      tab
     ) => {
       refreshWindowTabs();
 
