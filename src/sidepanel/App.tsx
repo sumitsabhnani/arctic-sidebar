@@ -40,6 +40,7 @@ export const App: React.FC = () => {
     focusTab,
     handleRowClick,
     handleFaviconClick,
+    handleFaviconDoubleClick,
     handleQuickAccessClick,
     handleCloseTab,
     closeAllUnpinnedTabs,
@@ -262,10 +263,10 @@ export const App: React.FC = () => {
   );
 
   /**
-   * Handle drop of items (unpinned tab or bookmark) onto a folder or root workspace
+   * Handle drop of items (unpinned tab or bookmark) onto a folder, bookmark, or workspace
    */
   const handleDropItemToFolder = useCallback(
-    async (data: { type: string; [key: string]: unknown }, targetFolderId: string) => {
+    async (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => {
       if (data.type === 'openTab' && typeof data.tabId === 'number') {
         const tab = unpinnedTabs.find((t) => t.id === data.tabId) || {
           id: data.tabId as number,
@@ -273,12 +274,33 @@ export const App: React.FC = () => {
           title: (data.title as string) || 'Pinned Tab',
           windowId: 0
         };
-        await pinTab(tab as chrome.tabs.Tab, targetFolderId);
+        await pinTab(tab as chrome.tabs.Tab, targetFolderId, targetIndex);
       } else if (data.type === 'bookmark' && typeof data.id === 'string') {
-        await chrome.bookmarks.move(data.id, { parentId: targetFolderId });
+        await chrome.bookmarks.move(data.id, {
+          parentId: targetFolderId,
+          ...(typeof targetIndex === 'number' ? { index: targetIndex } : {})
+        });
       }
     },
     [pinTab, unpinnedTabs]
+  );
+
+  /**
+   * Reorder Quick Access tiles via drag and drop
+   */
+  const handleReorderQuickAccess = useCallback(
+    async (draggedId: string, targetIndex: number) => {
+      if (!activeFolderIds.quickAccessId) return;
+      try {
+        await chrome.bookmarks.move(draggedId, {
+          parentId: activeFolderIds.quickAccessId,
+          index: targetIndex
+        });
+      } catch (err) {
+        console.warn('[Arctic] Could not reorder quick access bookmark:', err);
+      }
+    },
+    [activeFolderIds.quickAccessId]
   );
 
   /**
@@ -428,9 +450,7 @@ export const App: React.FC = () => {
                 Quick Access
               </span>
             </button>
-            <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">
-              {filteredQuickAccess.length}
-            </span>
+            {/* Note: User requested not showing count of Quick Access links */}
           </div>
 
           {!collapsedSections.quickAccess && (
@@ -439,12 +459,14 @@ export const App: React.FC = () => {
               bindingsByBookmarkId={bindingsByBookmarkId}
               activeTabId={activeTabId}
               onTileClick={handleQuickAccessClick}
+              onTileDoubleClick={handleFaviconDoubleClick}
               onOpenContextMenu={handleOpenContextMenu}
               onCloseTab={handleCloseTab}
               onMoveToWorkspace={handleMoveBookmarkToWorkspace}
               onReplaceUrl={handleReplaceBookmarkUrl}
               onRenameBookmark={renameBookmarkOrFolder}
               onRemoveBookmark={removeBookmarkOrFolder}
+              onReorderQuickAccess={handleReorderQuickAccess}
             />
           )}
         </div>
@@ -605,6 +627,7 @@ export const App: React.FC = () => {
                         activeTabId={activeTabId}
                         onRowClick={handleRowClick}
                         onFaviconClick={handleFaviconClick}
+                        onFaviconDoubleClick={handleFaviconDoubleClick}
                         onCloseTab={handleCloseTab}
                         onReloadTab={reloadTab}
                         onDiscardTab={discardTab}
@@ -636,6 +659,7 @@ export const App: React.FC = () => {
                       isDiscarded={isDiscarded}
                       onRowClick={handleRowClick}
                       onFaviconClick={handleFaviconClick}
+                      onFaviconDoubleClick={handleFaviconDoubleClick}
                       onCloseTab={handleCloseTab}
                       onReloadTab={reloadTab}
                       onDiscardTab={discardTab}
@@ -645,6 +669,7 @@ export const App: React.FC = () => {
                       onDeleteBookmark={removeBookmarkOrFolder}
                       onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
                       onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
+                      onDropItemToFolder={handleDropItemToFolder}
                     />
                   );
                 })

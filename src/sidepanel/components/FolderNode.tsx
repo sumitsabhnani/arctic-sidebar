@@ -24,6 +24,7 @@ interface FolderNodeProps {
   activeTabId: number | null;
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
+  onFaviconDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
@@ -35,7 +36,7 @@ interface FolderNodeProps {
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
-  onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string) => void;
+  onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
 }
 
@@ -49,6 +50,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   activeTabId,
   onRowClick,
   onFaviconClick,
+  onFaviconDoubleClick,
   onCloseTab,
   onReloadTab,
   onDiscardTab,
@@ -165,9 +167,20 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
       if (data.id === node.id) return;
 
+      if (data.type === 'openTab') {
+        if (currentDrop === 'inside' && onDropItemToFolder) {
+          onDropItemToFolder(data, node.id);
+        } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId && onDropItemToFolder) {
+          let targetIndex = typeof node.index === 'number' ? node.index : 0;
+          if (currentDrop === 'bottom') targetIndex += 1;
+          onDropItemToFolder(data, node.parentId, targetIndex);
+        }
+        return;
+      }
+
       if (currentDrop === 'inside' && onDropItemToFolder) {
         onDropItemToFolder(data, node.id);
-      } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId && onMoveBookmarkToIndex) {
+      } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId && onMoveBookmarkToIndex && data.id) {
         let targetIndex = typeof node.index === 'number' ? node.index : 0;
         if (currentDrop === 'bottom') {
           targetIndex += 1;
@@ -405,6 +418,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     activeTabId={activeTabId}
                     onRowClick={onRowClick}
                     onFaviconClick={onFaviconClick}
+                    onFaviconDoubleClick={onFaviconDoubleClick}
                     onCloseTab={onCloseTab}
                     onReloadTab={onReloadTab}
                     onDiscardTab={onDiscardTab}
@@ -436,6 +450,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   isDiscarded={isDiscarded}
                   onRowClick={onRowClick}
                   onFaviconClick={onFaviconClick}
+                  onFaviconDoubleClick={onFaviconDoubleClick}
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
                   onDiscardTab={onDiscardTab}
@@ -445,6 +460,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onDeleteBookmark={onDeleteBookmark}
                   onMoveToQuickAccess={onMoveToQuickAccess}
                   onMoveBookmarkToIndex={onMoveBookmarkToIndex}
+                  onDropItemToFolder={onDropItemToFolder}
                 />
               );
             })

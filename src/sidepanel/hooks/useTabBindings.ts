@@ -455,14 +455,15 @@ export function useTabBindings() {
    * Pin an unpinned tab to a bookmark folder (Quick Access or Workspace)
    */
   const pinTab = useCallback(
-    async (tab: chrome.tabs.Tab, targetFolderId: string) => {
+    async (tab: chrome.tabs.Tab, targetFolderId: string, targetIndex?: number) => {
       if (typeof tab.id !== 'number' || !tab.url) return;
 
       const title = tab.title || tab.url || 'Pinned Tab';
       const newBookmark = await chrome.bookmarks.create({
         parentId: targetFolderId,
         title,
-        url: tab.url
+        url: tab.url,
+        ...(typeof targetIndex === 'number' ? { index: targetIndex } : {})
       });
 
       const newBinding: TabBinding = {
@@ -775,6 +776,46 @@ export function useTabBindings() {
   );
 
   /**
+   * Double click favicon/icon: reload the actual bookmarked page (not current navigated page)
+   */
+  const handleFaviconDoubleClick = useCallback(
+    async (bookmark: chrome.bookmarks.BookmarkTreeNode, e?: React.MouseEvent) => {
+      if (e) e.stopPropagation();
+      if (!bookmark.url) return;
+
+      const existingBinding = bindingsByBookmarkId[bookmark.id];
+      if (existingBinding) {
+        try {
+          const tab = await chrome.tabs.get(existingBinding.tabId);
+          if (tab) {
+            // Force navigate to original bookmark URL
+            await chrome.tabs.update(existingBinding.tabId, { url: bookmark.url, active: true });
+            const updatedBinding: TabBinding = {
+              ...existingBinding,
+              currentUrl: bookmark.url,
+              currentTitle: bookmark.title || bookmark.url,
+              isNavigatedAway: false
+            };
+            const nextBindings = {
+              ...bindingsByBookmarkId,
+              [bookmark.id]: updatedBinding
+            };
+            await persistSession(nextBindings, bookmarkIdByTabId);
+            setActiveTabId(existingBinding.tabId);
+            await refreshWindowTabs();
+            return;
+          }
+        } catch {
+          // Tab dead, fall through
+        }
+      }
+
+      await handleRowClick(bookmark);
+    },
+    [bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession, refreshWindowTabs]
+  );
+
+  /**
    * Rename an open tab (sets custom tab title)
    */
   const renameOpenTab = useCallback(async (tabId: number, title: string) => {
@@ -798,6 +839,7 @@ export function useTabBindings() {
     focusTab,
     handleRowClick,
     handleFaviconClick,
+    handleFaviconDoubleClick,
     handleQuickAccessClick,
     handleCloseTab,
     closeAllUnpinnedTabs,

@@ -25,6 +25,7 @@ interface BookmarkRowProps {
   isDiscarded?: boolean;
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
+  onFaviconDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
@@ -34,6 +35,7 @@ interface BookmarkRowProps {
   onDeleteBookmark?: (id: string) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
+  onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
 }
 
 export const BookmarkRow: React.FC<BookmarkRowProps> = ({
@@ -44,6 +46,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   isDiscarded = false,
   onRowClick,
   onFaviconClick,
+  onFaviconDoubleClick,
   onCloseTab,
   onReloadTab,
   onDiscardTab,
@@ -52,7 +55,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onOpenContextMenu,
   onDeleteBookmark,
   onMoveToQuickAccess,
-  onMoveBookmarkToIndex
+  onMoveBookmarkToIndex,
+  onDropItemToFolder
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
@@ -219,14 +223,18 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       if (data.id === bookmark.id) return;
 
       const targetParentId = bookmark.parentId;
-      if (!targetParentId || !onMoveBookmarkToIndex) return;
+      if (!targetParentId) return;
 
       let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : 0;
       if (pos === 'bottom') {
         targetIndex += 1;
       }
 
-      onMoveBookmarkToIndex(data.id, targetParentId, targetIndex);
+      if (data.type === 'openTab' && onDropItemToFolder) {
+        onDropItemToFolder(data, targetParentId, targetIndex);
+      } else if (onMoveBookmarkToIndex && data.id) {
+        onMoveBookmarkToIndex(data.id, targetParentId, targetIndex);
+      }
     } catch {
       // ignore
     }
@@ -324,8 +332,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         <div
           role="button"
           tabIndex={0}
-          title={isNavAway ? 'Reset tab to bookmarked URL' : titleText}
+          title={isNavAway ? 'Reset tab to bookmarked URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
           onClick={(e) => onFaviconClick(bookmark, e)}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onFaviconDoubleClick?.(bookmark, e);
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
@@ -372,9 +384,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           )}
         </div>
 
-        {/* Title / Description */}
+        {/* Title / Description (Double-click to rename) */}
         <span
-          className={`truncate text-[13px] leading-tight transition-colors duration-150 ${
+          title={tooltip}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setEditTitle(bookmark.title || '');
+            setIsEditing(true);
+          }}
+          className={`truncate text-[13px] leading-tight transition-colors duration-150 cursor-text select-text ${
             isNavAway
               ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'
               : isActive

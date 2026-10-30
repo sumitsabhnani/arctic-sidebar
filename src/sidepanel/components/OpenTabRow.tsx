@@ -309,7 +309,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         </div>
 
         <span
-          className={`truncate text-[13px] leading-tight transition-colors duration-150 ${
+          title={titleText}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setEditTitle(tab.title || '');
+            setIsEditing(true);
+          }}
+          className={`truncate text-[13px] leading-tight transition-colors duration-150 cursor-text select-text ${
             isActive
               ? 'text-zinc-900 dark:text-white'
               : isDiscarded
