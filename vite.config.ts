@@ -44,6 +44,7 @@ export default defineConfig({
       input: {
         sidepanel: resolve(rootDir, 'sidepanel.html'),
         newtab: resolve(rootDir, 'newtab.html'),
+        redirect: resolve(rootDir, 'redirect.html'),
         background: resolve(rootDir, 'src/background/index.ts')
       },
       output: {

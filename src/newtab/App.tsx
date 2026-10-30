@@ -103,26 +103,75 @@ export const App: React.FC = () => {
     document.documentElement.setAttribute('data-color-theme', colorTheme);
   }, [theme, colorTheme]);
 
-  // Keep input focused automatically on mount, tab switch, and window focus
+  // Keep input focused automatically on mount, tab switch, window focus, and sidebar messages
   useEffect(() => {
     const focusInput = () => {
-      inputRef.current?.focus();
+      window.focus();
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.select();
+      }
     };
 
+    // Immediate and staged focus attempts to handle renderer transitions
     focusInput();
+    const t1 = setTimeout(focusInput, 50);
+    const t2 = setTimeout(focusInput, 150);
+    const t3 = setTimeout(focusInput, 300);
+
     window.addEventListener('focus', focusInput);
 
     const handleVisibilityChange = () => {
       if (!document.hidden) {
         focusInput();
+        setTimeout(focusInput, 50);
       }
     };
-
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
+    // Listen to tab activation directly in extension context
+    const handleTabActivated = async (activeInfo: { tabId: number; windowId: number }) => {
+      try {
+        const currentTab = await chrome.tabs.getCurrent();
+        if (currentTab && currentTab.id === activeInfo.tabId) {
+          focusInput();
+          setTimeout(focusInput, 50);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    if (chrome?.tabs?.onActivated) {
+      chrome.tabs.onActivated.addListener(handleTabActivated);
+    }
+
+    // Direct message from Arctic Sidebar
+    const handleMessage = (msg: unknown) => {
+      if (
+        typeof msg === 'object' &&
+        msg !== null &&
+        (msg as { type?: string }).type === 'ARCTIC_FOCUS_SEARCH'
+      ) {
+        focusInput();
+        setTimeout(focusInput, 50);
+      }
+    };
+    if (chrome?.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener(handleMessage);
+    }
+
     return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
       window.removeEventListener('focus', focusInput);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      if (chrome?.tabs?.onActivated) {
+        chrome.tabs.onActivated.removeListener(handleTabActivated);
+      }
+      if (chrome?.runtime?.onMessage) {
+        chrome.runtime.onMessage.removeListener(handleMessage);
+      }
     };
   }, []);
 
