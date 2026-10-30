@@ -118,7 +118,8 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Quick New Tab */}
           <button
             type="button"
-            title="Open New Tab (Ctrl+T / Cmd+T)"
+            data-tooltip="Open New Tab (Cmd+T)"
+            data-tooltip-pos="bottom"
             onClick={onNewTab}
             className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
           >
@@ -128,7 +129,8 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Reload Active Tab */}
           <button
             type="button"
-            title="Reload current page (Ctrl+R / Cmd+R)"
+            data-tooltip="Reload current page (Cmd+R)"
+            data-tooltip-pos="bottom"
             onClick={onReloadActiveTab}
             className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors group"
           >
@@ -144,7 +146,8 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Toggle Search */}
           <button
             type="button"
-            title="Search bookmarks & tabs (Cmd+K / Ctrl+K)"
+            data-tooltip="Search bookmarks & tabs (Cmd+K)"
+            data-tooltip-pos="bottom"
             onClick={onToggleSearch}
             className={`p-1.5 rounded-md transition-colors ${
               isSearchOpen
@@ -161,7 +164,8 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Toggle Expand / Collapse All */}
           <button
             type="button"
-            title={areAllCollapsed ? 'Expand all folders' : 'Collapse all folders'}
+            data-tooltip={areAllCollapsed ? 'Expand all folders' : 'Collapse all folders'}
+            data-tooltip-pos="bottom"
             onClick={handleToggleExpandAll}
             className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
           >
@@ -171,7 +175,8 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Theme Palette Switcher */}
           <button
             type="button"
-            title="Change Color Theme & Palette"
+            data-tooltip="Color Theme"
+            data-tooltip-pos="bottom"
             onClick={() => {
               setShowThemePicker(!showThemePicker);
               if (showSettings) setShowSettings(false);
@@ -188,7 +193,8 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Theme Mode Toggle (Dark / Light) */}
           <button
             type="button"
-            title={theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+            data-tooltip={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            data-tooltip-pos="bottom"
             onClick={onToggleTheme}
             className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
           >
@@ -202,7 +208,8 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Settings Dropdown Toggle */}
           <button
             type="button"
-            title="Sidebar Settings"
+            data-tooltip="Settings & Folders"
+            data-tooltip-pos="bottom"
             onClick={() => {
               setShowSettings(!showSettings);
               if (showThemePicker) setShowThemePicker(false);

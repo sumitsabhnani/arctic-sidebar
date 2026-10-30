@@ -342,3 +342,60 @@ html:not(.dark) body {
   outline: 1px solid var(--theme-accent) !important;
   background-color: var(--theme-accent-bg) !important;
 }
+
+/* -------------------------------------------------------------
+   FAST HOVER TOOLTIPS (300ms delay, sleek Arc-inspired styling)
+   ------------------------------------------------------------- */
+
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 6px);
+  transform: translateY(-50%) translateX(3px);
+  padding: 3px 7px;
+  border-radius: 6px;
+  background-color: rgba(20, 20, 24, 0.96);
+  color: #f4f4f5;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease-out, transform 0.12s ease-out, visibility 0.12s ease-out;
+  transition-delay: 0.3s;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 100;
+}
+
+html:not(.dark) [data-tooltip]::before {
+  background-color: rgba(255, 255, 255, 0.98);
+  color: #18181b;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+[data-tooltip]:hover::before {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* Tooltip positioned below (for top header buttons) */
+[data-tooltip-pos="bottom"]::before {
+  top: calc(100% + 6px);
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%) translateY(-3px);
+}
+
+[data-tooltip-pos="bottom"]:hover::before {
+  transform: translateX(-50%) translateY(0);
+}

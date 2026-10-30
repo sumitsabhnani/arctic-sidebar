@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
-  ChevronRight,
   Folder,
   FolderOpen,
   FolderPlus,
   BookmarkPlus,
+  Archive,
   Edit2,
   Trash2,
   Check,
@@ -13,6 +13,20 @@ import {
 import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
+
+function getDescendantBookmarkIds(folder: chrome.bookmarks.BookmarkTreeNode): string[] {
+  let ids: string[] = [];
+  if (folder.children) {
+    for (const child of folder.children) {
+      if (child.url) {
+        ids.push(child.id);
+      } else if (child.children) {
+        ids = ids.concat(getDescendantBookmarkIds(child));
+      }
+    }
+  }
+  return ids;
+}
 
 interface FolderNodeProps {
   node: chrome.bookmarks.BookmarkTreeNode;
@@ -79,6 +93,28 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
   // Drop target state
   const [dropState, setDropState] = useState<'inside' | 'top' | 'bottom' | null>(null);
+
+  // Find all open/running tab IDs under this folder and its subfolders
+  const runningTabIdsUnderFolder = useMemo(() => {
+    const bookmarkIds = getDescendantBookmarkIds(node);
+    const tabIds: number[] = [];
+    for (const bId of bookmarkIds) {
+      const binding = bindingsByBookmarkId[bId];
+      if (binding && typeof binding.tabId === 'number') {
+        tabIds.push(binding.tabId);
+      }
+    }
+    return tabIds;
+  }, [node, bindingsByBookmarkId]);
+
+  // Archive all tabs under this folder to sleep
+  const handleArchiveAllTabs = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!onDiscardTab) return;
+    for (const tabId of runningTabIdsUnderFolder) {
+      onDiscardTab(tabId);
+    }
+  };
 
   const handleStartCreateSubfolder = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -211,6 +247,15 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
         action: () => handleStartCreateSubfolder()
       },
+      ...(runningTabIdsUnderFolder.length > 0 && onDiscardTab
+        ? [
+            {
+              label: `Archive All Tabs in Folder (${runningTabIdsUnderFolder.length} open)`,
+              icon: <Archive className="w-3.5 h-3.5 text-indigo-400" />,
+              action: () => handleArchiveAllTabs()
+            }
+          ]
+        : []),
       {
         label: 'Rename Folder',
         icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
@@ -242,10 +287,10 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
       {isRenaming ? (
         <form
           onSubmit={handleConfirmRename}
-          style={{ paddingLeft: `${8 + depth * 14}px` }}
-          className="flex items-center h-[30px] pr-2 space-x-1.5"
+          style={{ paddingLeft: `${12 + depth * 14}px` }}
+          className="flex items-center h-[34px] pr-2 space-x-2"
         >
-          <Folder className="w-3.5 h-3.5 text-amber-400/90 flex-shrink-0" />
+          <Folder className="w-[18px] h-[18px] text-amber-400/90 flex-shrink-0" />
           <input
             type="text"
             value={renameTitle}
@@ -265,22 +310,22 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             }}
             autoFocus
             onFocus={(e) => e.target.select()}
-            className="flex-1 bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-1.5 py-0.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
+            className="flex-1 bg-zinc-200 dark:bg-zinc-800 border border-[var(--theme-accent)] rounded px-1.5 py-0.5 text-[13px] text-zinc-900 dark:text-white focus:outline-none"
           />
           <button
             type="submit"
-            title="Confirm"
+            data-tooltip="Confirm"
             className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
           >
-            <Check className="w-3 h-3" />
+            <Check className="w-3.5 h-3.5" />
           </button>
           <button
             type="button"
-            title="Cancel"
+            data-tooltip="Cancel"
             onClick={handleCancelRename}
             className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
           >
-            <X className="w-3 h-3" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </form>
       ) : (
@@ -305,72 +350,87 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               onToggleCollapse(node.id);
             }
           }}
-          style={{ paddingLeft: `${8 + depth * 14}px` }}
-          className={`group flex items-center justify-between h-[30px] pr-2 rounded-lg cursor-pointer transition-colors duration-150 outline-none ${
+          style={{ paddingLeft: `${12 + depth * 14}px` }}
+          className={`group flex items-center justify-between h-[34px] pr-2 rounded-lg cursor-pointer transition-colors duration-150 outline-none ${
             dropState === 'top'
               ? 'theme-drag-over-top'
               : dropState === 'bottom'
               ? 'theme-drag-over-bottom'
               : dropState === 'inside'
               ? 'theme-drag-over-inside'
-              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5'
+              : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5'
           }`}
         >
           <div
-            className="flex items-center min-w-0 flex-1 space-x-1.5 mr-2"
+            className="flex items-center min-w-0 flex-1 space-x-2 mr-2"
             onDoubleClick={(e) => {
               e.stopPropagation();
               setRenameTitle(node.title || '');
               setIsRenaming(true);
             }}
           >
-            <ChevronRight
-              className={`w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-transform duration-200 ${
-                isCollapsed ? 'rotate-0' : 'rotate-90'
-              }`}
-            />
-
-            {isCollapsed ? (
-              <Folder className="w-3.5 h-3.5 text-zinc-400 group-hover:text-amber-500 dark:group-hover:text-amber-400/90 transition-colors flex-shrink-0" />
-            ) : (
-              <FolderOpen className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400/90 transition-colors flex-shrink-0" />
-            )}
+            {/* Folder Icon (no > chevron; aligns with website favicons).
+                On hover:
+                - If collapsed (closed): show FolderOpen on hover
+                - If open: show Folder (closed) on hover
+            */}
+            <div className="relative w-4 h-4 flex items-center justify-center flex-shrink-0">
+              {isCollapsed ? (
+                <>
+                  <Folder className="w-[18px] h-[18px] text-zinc-400 dark:text-zinc-500 group-hover:hidden transition-colors flex-shrink-0" />
+                  <FolderOpen className="w-[18px] h-[18px] text-amber-500 dark:text-amber-400 hidden group-hover:block transition-colors flex-shrink-0" />
+                </>
+              ) : (
+                <>
+                  <FolderOpen className="w-[18px] h-[18px] text-amber-500 dark:text-amber-400 group-hover:hidden transition-colors flex-shrink-0" />
+                  <Folder className="w-[18px] h-[18px] text-zinc-400 dark:text-zinc-500 hidden group-hover:block transition-colors flex-shrink-0" />
+                </>
+              )}
+            </div>
 
             <span
-              title="Double-click to rename folder"
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                setRenameTitle(node.title || '');
-                setIsRenaming(true);
-              }}
-              className="truncate text-xs font-medium text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-zinc-100 cursor-text select-text"
+              className="truncate text-[13.5px] font-medium text-zinc-700 dark:text-zinc-200 group-hover:text-zinc-950 dark:group-hover:text-white cursor-text select-text"
             >
               {node.title || 'Untitled Folder'}
             </span>
           </div>
 
           <div className="flex items-center space-x-1 flex-shrink-0">
+            {/* Archive All Tabs in Folder (Sleep tabs to save RAM) */}
+            {runningTabIdsUnderFolder.length > 0 && onDiscardTab && (
+              <button
+                type="button"
+                data-tooltip={`Archive ${runningTabIdsUnderFolder.length} open tab${runningTabIdsUnderFolder.length > 1 ? 's' : ''} (Sleep)`}
+                onClick={handleArchiveAllTabs}
+                className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              >
+                <Archive className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            {/* Bookmark Current Page */}
             {onBookmarkCurrentPage && (
               <button
                 type="button"
-                title="Bookmark current page in this folder"
+                data-tooltip="Bookmark current page here"
                 onClick={(e) => {
                   e.stopPropagation();
                   onBookmarkCurrentPage(node.id);
                 }}
-                className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-cyan-500 dark:hover:text-cyan-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:theme-accent-text hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
               >
-                <BookmarkPlus className="w-3 h-3" />
+                <BookmarkPlus className="w-3.5 h-3.5" />
               </button>
             )}
 
+            {/* Add Subfolder */}
             <button
               type="button"
-              title="Add Subfolder"
+              data-tooltip="New subfolder"
               onClick={handleStartCreateSubfolder}
-              className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
             >
-              <FolderPlus className="w-3 h-3" />
+              <FolderPlus className="w-3.5 h-3.5" />
             </button>
 
             <span className="text-[11px] text-zinc-400 dark:text-zinc-600 group-hover:text-zinc-600 dark:group-hover:text-zinc-500 font-mono">
@@ -387,10 +447,10 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           {isCreatingSubfolder && (
             <form
               onSubmit={handleConfirmSubfolder}
-              style={{ paddingLeft: `${22 + depth * 14}px` }}
-              className="flex items-center h-[32px] pr-2 my-0.5 space-x-1.5 animate-in fade-in slide-in-from-top-1 duration-100"
+              style={{ paddingLeft: `${24 + depth * 14}px` }}
+              className="flex items-center h-[34px] pr-2 my-0.5 space-x-2 animate-in fade-in slide-in-from-top-1 duration-100"
             >
-              <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
+              <Folder className="w-[18px] h-[18px] text-amber-500 dark:text-amber-400 flex-shrink-0" />
               <input
                 type="text"
                 value={newSubfolderTitle}
@@ -400,52 +460,45 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   if (e.key === 'Escape') handleCancelSubfolder();
                 }}
                 autoFocus
-                className="flex-1 bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-2 py-0.5 text-xs text-zinc-900 dark:text-white placeholder-zinc-500 focus:outline-none"
+                className="flex-1 bg-zinc-200 dark:bg-zinc-800 border border-[var(--theme-accent)] rounded px-2 py-0.5 text-xs text-zinc-900 dark:text-white placeholder-zinc-500 focus:outline-none"
               />
               <button
                 type="submit"
-                title="Create"
+                data-tooltip="Create"
                 className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
               >
-                <Check className="w-3 h-3" />
+                <Check className="w-3.5 h-3.5" />
               </button>
               <button
                 type="button"
-                title="Cancel"
+                data-tooltip="Cancel"
                 onClick={handleCancelSubfolder}
                 className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
               >
-                <X className="w-3 h-3" />
+                <X className="w-3.5 h-3.5" />
               </button>
             </form>
           )}
 
-          {itemCount === 0 && !isCreatingSubfolder ? (
+          {/* Render Child Items */}
+          {children.length === 0 && !isCreatingSubfolder ? (
             <div
               style={{ paddingLeft: `${24 + depth * 14}px` }}
-              className="py-1 text-[11px] text-zinc-400 dark:text-zinc-600 italic flex items-center justify-between pr-3"
+              className="py-1 text-[11px] text-zinc-400 dark:text-zinc-600 italic select-none"
             >
-              <span>Empty folder</span>
-              <button
-                type="button"
-                onClick={handleStartCreateSubfolder}
-                className="text-amber-500 dark:text-amber-400/80 hover:underline text-[10px] not-italic"
-              >
-                + Add subfolder
-              </button>
+              Empty folder
             </div>
           ) : (
             children.map((child) => {
-              if (!child.url) {
+              const childIsFolder = !child.url;
+              if (childIsFolder) {
                 return (
                   <FolderNode
                     key={child.id}
                     node={child}
                     depth={depth + 1}
                     collapsedFolderIds={collapsedFolderIds}
-                    onToggleCollapse={onToggleCollapse}
                     bindingsByBookmarkId={bindingsByBookmarkId}
-                    discardedTabsByTabId={discardedTabsByTabId}
                     activeTabId={activeTabId}
                     onRowClick={onRowClick}
                     onFaviconClick={onFaviconClick}
@@ -453,16 +506,17 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onCloseTab={onCloseTab}
                     onReloadTab={onReloadTab}
                     onDiscardTab={onDiscardTab}
-                    onReplaceUrl={onReplaceUrl}
-                    onCreateFolder={onCreateFolder}
+                    discardedTabsByTabId={discardedTabsByTabId}
+                    onToggleCollapse={onToggleCollapse}
                     onBookmarkCurrentPage={onBookmarkCurrentPage}
+                    onCreateFolder={onCreateFolder}
                     onRenameFolder={onRenameFolder}
                     onRenameBookmark={onRenameBookmark}
                     onOpenContextMenu={onOpenContextMenu}
                     onDeleteBookmark={onDeleteBookmark}
                     onMoveToQuickAccess={onMoveToQuickAccess}
-                    onDropItemToFolder={onDropItemToFolder}
                     onMoveBookmarkToIndex={onMoveBookmarkToIndex}
+                    onDropItemToFolder={onDropItemToFolder}
                   />
                 );
               }
@@ -485,8 +539,8 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
                   onDiscardTab={onDiscardTab}
-                  onRenameBookmark={onRenameBookmark}
                   onReplaceUrl={onReplaceUrl}
+                  onRenameBookmark={onRenameBookmark}
                   onOpenContextMenu={onOpenContextMenu}
                   onDeleteBookmark={onDeleteBookmark}
                   onMoveToQuickAccess={onMoveToQuickAccess}
