@@ -431,7 +431,7 @@ export function useTabBindings() {
   }, []);
 
   /**
-   * Close a tab
+   * Close a tab (Option 1: If closing the last tab in the window, create a fresh tab first to keep the browser window & sidebar alive)
    */
   const handleCloseTab = useCallback(
     async (tabId: number, e?: React.MouseEvent) => {
@@ -439,6 +439,10 @@ export function useTabBindings() {
         e.stopPropagation();
       }
       try {
+        const currentWindowTabs = await chrome.tabs.query({ currentWindow: true });
+        if (currentWindowTabs.length <= 1) {
+          await chrome.tabs.create({ active: true });
+        }
         await chrome.tabs.remove(tabId);
       } catch (err) {
         console.warn('[Arctic] Could not remove tab:', err);
@@ -470,7 +474,7 @@ export function useTabBindings() {
     if (tabIdsToClose.length === 0) return;
 
     // If closing all tabs in window, create a blank tab first to prevent window closure
-    if (tabIdsToClose.length === windowTabs.length) {
+    if (tabIdsToClose.length >= windowTabs.length) {
       await chrome.tabs.create({ active: true });
     }
 
