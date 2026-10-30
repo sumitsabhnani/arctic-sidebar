@@ -21,8 +21,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   }, []);
 
   return (
-    <div className="relative flex items-center w-full px-2.5 py-1.5 bg-[#18181c] border-b border-white/[0.08] animate-in fade-in slide-in-from-top-1 duration-150">
-      <Search className="w-3.5 h-3.5 text-zinc-400 mr-2 flex-shrink-0" />
+    <div className="relative flex items-center w-full px-2.5 py-1.5 bg-[#f0f2f5] dark:bg-[#18181c] border-b border-black/[0.08] dark:border-white/[0.08] animate-in fade-in slide-in-from-top-1 duration-150">
+      <Search className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400 mr-2 flex-shrink-0" />
       <input
         ref={inputRef}
         type="text"
@@ -34,7 +34,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
           }
         }}
         placeholder="Filter bookmarks & tabs... (Esc to exit)"
-        className="flex-1 bg-transparent text-xs text-white placeholder-zinc-500 focus:outline-none"
+        className="flex-1 bg-transparent text-xs text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none"
       />
 
       {searchQuery && typeof matchCount === 'number' && (
@@ -51,12 +51,12 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             onSearchChange('');
             inputRef.current?.focus();
           }}
-          className="p-0.5 rounded text-zinc-400 hover:text-white"
+          className="p-0.5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-white"
         >
           <X className="w-3.5 h-3.5" />
         </button>
       ) : (
-        <span className="flex items-center space-x-0.5 text-[10px] text-zinc-500 bg-white/5 border border-white/10 px-1 py-0.5 rounded">
+        <span className="flex items-center space-x-0.5 text-[10px] text-zinc-500 bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 px-1 py-0.5 rounded">
           <Command className="w-2.5 h-2.5" />
           <span>K</span>
         </span>

@@ -6,9 +6,11 @@ import {
   X,
   ExternalLink,
   Copy,
+  Check,
   Trash2,
   Sparkles,
-  Moon
+  Moon,
+  RefreshCw
 } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
@@ -25,6 +27,7 @@ interface BookmarkRowProps {
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
+  onReplaceUrl?: (bookmarkId: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
@@ -42,6 +45,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onCloseTab,
   onReloadTab,
   onDiscardTab,
+  onReplaceUrl,
   onOpenContextMenu,
   onDeleteBookmark,
   onMoveToQuickAccess,
@@ -50,13 +54,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [isDropTarget, setIsDropTarget] = useState(false);
+  const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
+  const [isCopied, setIsCopied] = useState(false);
 
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
   const titleText = bookmark.title || bookmark.url || 'Untitled Bookmark';
 
-  // Tooltip showing bookmark title and drifted state
   let tooltip = titleText;
   if (isNavAway && binding) {
     tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to bookmark)`;
@@ -68,6 +72,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   }
 
   const faviconSrc = bookmark.url ? getFaviconUrl(bookmark.url, 32) : '';
+
+  const handleCopyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (bookmark.url) {
+      navigator.clipboard.writeText(bookmark.url);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 1500);
+    }
+  };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!onOpenContextMenu) return;
@@ -81,6 +94,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
         }
       },
+      ...(onReplaceUrl && bookmark.url
+        ? [
+            {
+              label: 'Replace with Current Page URL',
+              icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />,
+              action: () => onReplaceUrl(bookmark.id)
+            }
+          ]
+        : []),
       ...(onMoveToQuickAccess
         ? [
             {
@@ -155,22 +177,39 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
-    setIsDropTarget(true);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const isTop = e.clientY - rect.top < rect.height / 2;
+    setDropPosition(isTop ? 'top' : 'bottom');
   };
 
   const handleDragLeave = () => {
-    setIsDropTarget(false);
+    setDropPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDropTarget(false);
+    e.stopPropagation();
+    const pos = dropPosition;
+    setDropPosition(null);
+
     try {
-      const data = JSON.parse(e.dataTransfer.getData('application/json'));
-      if (data.type === 'bookmark' && data.id !== bookmark.id && bookmark.parentId) {
-        onMoveBookmarkToIndex?.(data.id, bookmark.parentId, bookmark.index);
+      const dataStr = e.dataTransfer.getData('application/json');
+      if (!dataStr) return;
+      const data = JSON.parse(dataStr);
+
+      if (data.id === bookmark.id) return;
+
+      const targetParentId = bookmark.parentId;
+      if (!targetParentId || !onMoveBookmarkToIndex) return;
+
+      let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : 0;
+      if (pos === 'bottom') {
+        targetIndex += 1;
       }
+
+      onMoveBookmarkToIndex(data.id, targetParentId, targetIndex);
     } catch {
       // ignore
     }
@@ -199,13 +238,17 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       className={`group relative flex items-center justify-between h-[34px] pr-2.5 my-[1px] rounded-lg cursor-pointer select-none transition-all duration-150 outline-none ${
         isDragging ? 'opacity-40 scale-98' : ''
       } ${
-        isDropTarget ? 'border-t-2 border-cyan-400 bg-cyan-500/10' : ''
+        dropPosition === 'top'
+          ? 'border-t-2 border-cyan-400 bg-cyan-500/10'
+          : dropPosition === 'bottom'
+          ? 'border-b-2 border-cyan-400 bg-cyan-500/10'
+          : ''
       } ${
         isActive
-          ? 'bg-white/15 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
+          ? 'bg-black/10 dark:bg-white/15 text-zinc-900 dark:text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.1)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
           : isRunning
-          ? 'text-zinc-200 hover:bg-white/10'
-          : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/5'
+          ? 'text-zinc-800 dark:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10'
+          : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5'
       }`}
     >
       {/* Left: Favicon & Title */}
@@ -226,7 +269,6 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           onMouseLeave={() => setIsHoveringFavicon(false)}
           className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center rounded transition-transform active:scale-90"
         >
-          {/* Main Favicon Image or Fallback */}
           {!faviconError && faviconSrc ? (
             <img
               src={faviconSrc}
@@ -254,7 +296,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             <div
               className={`absolute inset-0 flex items-center justify-center rounded-sm transition-all duration-150 ${
                 isHoveringFavicon
-                  ? 'opacity-100 scale-105 bg-amber-400/20 text-amber-300'
+                  ? 'opacity-100 scale-105 bg-amber-400/20 text-amber-500 dark:text-amber-300'
                   : 'opacity-0 scale-95 text-transparent'
               }`}
             >
@@ -267,52 +309,67 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         <span
           className={`truncate text-[13px] leading-tight transition-colors duration-150 ${
             isNavAway
-              ? 'italic text-amber-200/90 font-normal'
+              ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'
               : isActive
-              ? 'text-white'
+              ? 'text-zinc-900 dark:text-white'
               : isRunning
-              ? 'text-zinc-200'
-              : 'text-zinc-400 group-hover:text-zinc-200'
+              ? 'text-zinc-800 dark:text-zinc-200'
+              : 'text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-zinc-200'
           }`}
         >
           {titleText}
         </span>
       </div>
 
-      {/* Right: Status Indicator / Reload / Close Tab Action */}
-      <div className="flex items-center flex-shrink-0 ml-1">
+      {/* Right: Actions on hover & Status Indicator */}
+      <div className="flex items-center space-x-1 flex-shrink-0 ml-1">
+        {/* Copy Link Button on hover */}
+        {bookmark.url && (
+          <button
+            type="button"
+            title={isCopied ? 'Copied link!' : 'Copy link'}
+            onClick={handleCopyLink}
+            className={`hidden group-hover:flex items-center justify-center w-4 h-4 rounded transition-all duration-100 ${
+              isCopied
+                ? 'text-emerald-500 bg-emerald-500/10'
+                : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/20'
+            }`}
+          >
+            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Copy className="w-3 h-3" />}
+          </button>
+        )}
+
+        {/* Reload button for active tab on hover */}
+        {isActive && onReloadTab && binding && (
+          <button
+            type="button"
+            title="Reload this page (Cmd+R)"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReloadTab(binding.tabId);
+            }}
+            className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/20 transition-all duration-100"
+          >
+            <RotateCw className="w-3 h-3" />
+          </button>
+        )}
+
+        {/* Running status / close tab button */}
         {isRunning && (
           <>
-            {/* Background running dot (hidden on hover when X appears) */}
             <div
               className={`w-1.5 h-1.5 rounded-full transition-opacity duration-150 ${
                 isActive
-                  ? 'bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.8)]'
-                  : 'bg-zinc-400/70 group-hover:opacity-0'
+                  ? 'bg-blue-500 shadow-[0_0_6px_rgba(59,130,246,0.8)]'
+                  : 'bg-zinc-400 dark:bg-zinc-400/70 group-hover:opacity-0'
               }`}
             />
 
-            {/* Reload button for active tab on hover */}
-            {isActive && onReloadTab && binding && (
-              <button
-                type="button"
-                title="Reload this page (Cmd+R)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onReloadTab(binding.tabId);
-                }}
-                className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-white hover:bg-white/20 transition-all duration-100 mr-0.5"
-              >
-                <RotateCw className="w-3 h-3" />
-              </button>
-            )}
-
-            {/* Close tab button (appears on group hover) */}
             <button
               type="button"
               title="Close running tab"
               onClick={(e) => binding && onCloseTab(binding.tabId, e)}
-              className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-white hover:bg-white/20 transition-all duration-100"
+              className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-rose-500 hover:bg-black/5 dark:hover:bg-white/20 transition-all duration-100"
             >
               <X className="w-3 h-3 stroke-[2.5]" />
             </button>

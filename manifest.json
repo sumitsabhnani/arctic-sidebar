@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Arctic - Arc-Style Bookmark Sidebar",
-  "version": "1.0.0",
-  "description": "Arc-style vertical bookmark sidebar using native Chrome bookmarks and sidePanel API.",
+  "name": "Arctic Sidebar",
+  "version": "1.2.0",
+  "description": "Vertical bookmark sidebar using native Chrome bookmarks and sidePanel API.",
   "permissions": [
     "sidePanel",
     "bookmarks",

@@ -26,6 +26,7 @@ export const App: React.FC = () => {
     createBookmark,
     createFolder,
     renameBookmarkOrFolder,
+    updateBookmarkUrl,
     removeBookmarkOrFolder,
     loading
   } = useBookmarks();
@@ -50,10 +51,38 @@ export const App: React.FC = () => {
     discardTab,
     discardAllBackgroundTabs,
     discardedTabsByTabId,
+    moveOpenTab,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval
   } = useTabBindings();
+
+  // Theme State
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+
+  useEffect(() => {
+    chrome.storage.local.get(['theme'], (res) => {
+      if (res.theme === 'light' || res.theme === 'dark') {
+        setTheme(res.theme);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      chrome.storage.local.set({ theme: next });
+      return next;
+    });
+  }, []);
 
   // Search State
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -181,6 +210,23 @@ export const App: React.FC = () => {
   );
 
   /**
+   * Replace an existing bookmark's URL with the currently focused page URL
+   */
+  const handleReplaceBookmarkUrl = useCallback(
+    async (bookmarkId: string) => {
+      try {
+        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (currentTab && currentTab.url) {
+          await updateBookmarkUrl(bookmarkId, currentTab.url, currentTab.title);
+        }
+      } catch (err) {
+        console.warn('[Arctic] Could not replace bookmark url:', err);
+      }
+    },
+    [updateBookmarkUrl]
+  );
+
+  /**
    * Handle drop of items (unpinned tab or bookmark) onto a folder or root workspace
    */
   const handleDropItemToFolder = useCallback(
@@ -280,8 +326,8 @@ export const App: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[#121214] text-zinc-400">
-        <Loader2 className="w-6 h-6 animate-spin text-cyan-400 mb-2" />
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#f8f9fa] dark:bg-[#121214] text-zinc-500 dark:text-zinc-400">
+        <Loader2 className="w-6 h-6 animate-spin text-cyan-500 dark:text-cyan-400 mb-2" />
         <span className="text-xs font-medium">Initializing Arctic Sidebar...</span>
       </div>
     );
@@ -290,7 +336,7 @@ export const App: React.FC = () => {
   const runningTabCount = Object.keys(bindingsByBookmarkId).length;
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#121214] text-zinc-100 select-none overflow-hidden font-sans">
+    <div className="flex flex-col h-screen w-full bg-[#f8f9fa] dark:bg-[#121214] text-zinc-800 dark:text-zinc-100 select-none overflow-hidden font-sans transition-colors duration-150">
       {/* Header with Settings, Actions, Search & New Tab */}
       <Header
         allFolders={allFolders}
@@ -298,6 +344,7 @@ export const App: React.FC = () => {
         autoArchiveInterval={autoArchiveInterval}
         isActiveTabLoading={isActiveTabLoading}
         isSearchOpen={isSearchOpen}
+        theme={theme}
         onSelectQuickAccessFolder={setQuickAccessFolderId}
         onSelectWorkspaceFolder={setWorkspaceFolderId}
         onResetFolders={resetToDefaultFolders}
@@ -308,6 +355,7 @@ export const App: React.FC = () => {
         onNewTab={() => createNewTab()}
         onReloadActiveTab={reloadActiveTab}
         onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
+        onToggleTheme={toggleTheme}
         onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
 
@@ -330,10 +378,10 @@ export const App: React.FC = () => {
         <div className="flex flex-col space-y-1.5">
           <div className="flex items-center justify-between px-1">
             <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1">
-              <Sparkles className="w-2.5 h-2.5 text-cyan-400" />
+              <Sparkles className="w-2.5 h-2.5 text-cyan-500 dark:text-cyan-400" />
               Quick Access
             </span>
-            <span className="text-[10px] text-zinc-600 font-mono">
+            <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">
               {filteredQuickAccess.length}
             </span>
           </div>
@@ -346,6 +394,7 @@ export const App: React.FC = () => {
             onOpenContextMenu={handleOpenContextMenu}
             onCloseTab={handleCloseTab}
             onMoveToWorkspace={handleMoveBookmarkToWorkspace}
+            onReplaceUrl={handleReplaceBookmarkUrl}
             onRemoveBookmark={removeBookmarkOrFolder}
           />
         </div>
@@ -375,8 +424,8 @@ export const App: React.FC = () => {
           }`}
         >
           <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1">
-              <Bookmark className="w-2.5 h-2.5 text-amber-400/80" />
+            <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-500 flex items-center gap-1">
+              <Bookmark className="w-2.5 h-2.5 text-amber-500 dark:text-amber-400/80" />
               {workspaceNode?.title || 'Workspace'}
             </span>
 
@@ -391,7 +440,7 @@ export const App: React.FC = () => {
                     activeFolderIds.workspaceId &&
                     handleBookmarkCurrentPage(activeFolderIds.workspaceId)
                   }
-                  className="p-1 rounded text-zinc-400 hover:text-cyan-300 hover:bg-white/10 transition-colors"
+                  className="p-1 rounded text-zinc-500 dark:text-zinc-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
                 >
                   <BookmarkPlus className="w-3.5 h-3.5" />
                 </button>
@@ -402,13 +451,13 @@ export const App: React.FC = () => {
                 type="button"
                 title="Create New Folder in Workspace"
                 onClick={() => setIsCreatingRootFolder(true)}
-                className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-400 hover:text-amber-300 hover:bg-white/10 transition-colors font-medium"
+                className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-600 dark:text-zinc-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors font-medium"
               >
-                <FolderPlus className="w-3 h-3 text-amber-400" />
+                <FolderPlus className="w-3 h-3 text-amber-500 dark:text-amber-400" />
                 <span>New Folder</span>
               </button>
 
-              <span className="text-[10px] text-zinc-600 font-mono">
+              <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">
                 {filteredWorkspace.length} items
               </span>
             </div>
@@ -420,9 +469,9 @@ export const App: React.FC = () => {
             {isCreatingRootFolder && (
               <form
                 onSubmit={handleConfirmCreateRootFolder}
-                className="flex items-center h-[32px] px-2 my-1 space-x-1.5 bg-white/[0.04] rounded-lg border border-cyan-500/40 animate-in fade-in slide-in-from-top-1 duration-100"
+                className="flex items-center h-[32px] px-2 my-1 space-x-1.5 bg-black/[0.03] dark:bg-white/[0.04] rounded-lg border border-cyan-500/40 animate-in fade-in slide-in-from-top-1 duration-100"
               >
-                <Folder className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
                 <input
                   type="text"
                   value={rootFolderTitle}
@@ -435,12 +484,12 @@ export const App: React.FC = () => {
                     }
                   }}
                   autoFocus
-                  className="flex-1 bg-zinc-800 border border-white/10 rounded px-2 py-0.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-400"
+                  className="flex-1 bg-white dark:bg-zinc-800 border border-black/10 dark:border-white/10 rounded px-2 py-0.5 text-xs text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-cyan-400"
                 />
                 <button
                   type="submit"
                   title="Create Folder"
-                  className="p-1 rounded text-emerald-400 hover:bg-emerald-500/20"
+                  className="p-1 rounded text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
                 >
                   <Check className="w-3 h-3" />
                 </button>
@@ -451,7 +500,7 @@ export const App: React.FC = () => {
                     setIsCreatingRootFolder(false);
                     setRootFolderTitle('');
                   }}
-                  className="p-1 rounded text-zinc-400 hover:text-white"
+                  className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-white"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -459,7 +508,7 @@ export const App: React.FC = () => {
             )}
 
             {filteredWorkspace.length === 0 && !isCreatingRootFolder ? (
-              <div className="px-3 py-4 text-center text-zinc-500 rounded-lg border border-dashed border-white/5 bg-white/[0.01]">
+              <div className="px-3 py-4 text-center text-zinc-500 rounded-lg border border-dashed border-black/10 dark:border-white/5 bg-black/[0.01] dark:bg-white/[0.01]">
                 <p className="text-xs">
                   {queryLower ? 'No matching bookmarks found.' : 'This workspace folder is empty.'}
                 </p>
@@ -467,7 +516,7 @@ export const App: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setIsCreatingRootFolder(true)}
-                    className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-amber-300 font-medium transition-colors"
+                    className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs text-amber-600 dark:text-amber-300 font-medium transition-colors"
                   >
                     <FolderPlus className="w-3 h-3" />
                     <span>+ Create a Folder</span>
@@ -492,6 +541,7 @@ export const App: React.FC = () => {
                       onCloseTab={handleCloseTab}
                       onReloadTab={reloadTab}
                       onDiscardTab={discardTab}
+                      onReplaceUrl={handleReplaceBookmarkUrl}
                       onCreateFolder={createFolder}
                       onBookmarkCurrentPage={handleBookmarkCurrentPage}
                       onRenameFolder={renameBookmarkOrFolder}
@@ -521,6 +571,7 @@ export const App: React.FC = () => {
                     onCloseTab={handleCloseTab}
                     onReloadTab={reloadTab}
                     onDiscardTab={discardTab}
+                    onReplaceUrl={handleReplaceBookmarkUrl}
                     onOpenContextMenu={handleOpenContextMenu}
                     onDeleteBookmark={removeBookmarkOrFolder}
                     onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
@@ -547,6 +598,7 @@ export const App: React.FC = () => {
           onDiscardTab={discardTab}
           onToggleMuteTab={toggleMuteTab}
           onOpenContextMenu={handleOpenContextMenu}
+          onMoveOpenTab={moveOpenTab}
         />
       </div>
 
@@ -561,20 +613,20 @@ export const App: React.FC = () => {
       )}
 
       {/* Footer Info Bar */}
-      <div className="flex items-center justify-between px-3 h-7 border-t border-white/[0.06] bg-[#141416] text-[11px] text-zinc-500">
+      <div className="flex items-center justify-between px-3 h-7 border-t border-black/[0.06] dark:border-white/[0.06] bg-[#f0f2f5] dark:bg-[#141416] text-[11px] text-zinc-500">
         <div className="flex items-center space-x-2">
           <div className="flex items-center space-x-1">
             <span
               className={`w-1.5 h-1.5 rounded-full ${
-                runningTabCount > 0 ? 'bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.6)]' : 'bg-zinc-600'
+                runningTabCount > 0 ? 'bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.6)]' : 'bg-zinc-400 dark:bg-zinc-600'
               }`}
             />
             <span>{runningTabCount} bound</span>
           </div>
-          <span className="text-zinc-600">•</span>
+          <span className="text-zinc-400 dark:text-zinc-600">•</span>
           <span>{unpinnedTabs.length} open</span>
         </div>
-        <span className="text-[10px] text-zinc-600 font-mono">v2.0.0</span>
+        <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">v2.0.0</span>
       </div>
     </div>
   );

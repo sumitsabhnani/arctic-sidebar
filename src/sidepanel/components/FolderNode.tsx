@@ -27,6 +27,7 @@ interface FolderNodeProps {
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
+  onReplaceUrl?: (bookmarkId: string) => void;
   onCreateFolder: (parentId: string, title: string) => void;
   onBookmarkCurrentPage?: (parentId: string) => void;
   onRenameFolder?: (id: string, title: string) => void;
@@ -50,6 +51,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onCloseTab,
   onReloadTab,
   onDiscardTab,
+  onReplaceUrl,
   onCreateFolder,
   onBookmarkCurrentPage,
   onRenameFolder,
@@ -72,7 +74,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   const [renameTitle, setRenameTitle] = useState(node.title || '');
 
   // Drop target state
-  const [isDragOver, setIsDragOver] = useState(false);
+  const [dropState, setDropState] = useState<'inside' | 'top' | 'bottom' | null>(null);
 
   const handleStartCreateSubfolder = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -112,29 +114,63 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
     setRenameTitle(node.title || '');
   };
 
+  const handleDragStart = (e: React.DragEvent) => {
+    e.dataTransfer.setData(
+      'application/json',
+      JSON.stringify({
+        type: 'folder',
+        id: node.id,
+        parentId: node.parentId,
+        title: node.title,
+        index: node.index
+      })
+    );
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-    setIsDragOver(true);
+    e.dataTransfer.dropEffect = 'move';
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    if (relY < 6) {
+      setDropState('top');
+    } else if (relY > rect.height - 6) {
+      setDropState('bottom');
+    } else {
+      setDropState('inside');
+    }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(false);
+    setDropState(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(false);
+    const currentDrop = dropState;
+    setDropState(null);
 
     try {
       const dataStr = e.dataTransfer.getData('application/json');
-      if (dataStr && onDropItemToFolder) {
-        const data = JSON.parse(dataStr);
+      if (!dataStr) return;
+      const data = JSON.parse(dataStr);
+
+      if (data.id === node.id) return;
+
+      if (currentDrop === 'inside' && onDropItemToFolder) {
         onDropItemToFolder(data, node.id);
+      } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId && onMoveBookmarkToIndex) {
+        let targetIndex = typeof node.index === 'number' ? node.index : 0;
+        if (currentDrop === 'bottom') {
+          targetIndex += 1;
+        }
+        onMoveBookmarkToIndex(data.id, node.parentId, targetIndex);
       }
     } catch (err) {
       console.warn('[Arctic] Could not parse dropped data:', err);
@@ -186,14 +222,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   };
 
   return (
-    <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-      className={`flex flex-col select-none rounded-lg transition-colors ${
-        isDragOver ? 'bg-cyan-500/10 ring-1 ring-cyan-400' : ''
-      }`}
-    >
+    <div className="flex flex-col select-none rounded-lg transition-colors">
       {/* Folder Header Row */}
       {isRenaming ? (
         <form
@@ -210,12 +239,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               if (e.key === 'Escape') handleCancelRename();
             }}
             autoFocus
-            className="flex-1 bg-zinc-800 border border-cyan-500/50 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+            className="flex-1 bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-1.5 py-0.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
           />
           <button
             type="submit"
             title="Confirm"
-            className="p-1 rounded text-emerald-400 hover:bg-emerald-500/20"
+            className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
           >
             <Check className="w-3 h-3" />
           </button>
@@ -223,7 +252,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             type="button"
             title="Cancel"
             onClick={handleCancelRename}
-            className="p-1 rounded text-zinc-400 hover:text-white"
+            className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
           >
             <X className="w-3 h-3" />
           </button>
@@ -232,6 +261,11 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         <div
           role="button"
           tabIndex={0}
+          draggable={true}
+          onDragStart={handleDragStart}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
           onClick={() => onToggleCollapse(node.id)}
           onContextMenu={handleContextMenu}
           onKeyDown={(e) => {
@@ -241,30 +275,34 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             }
           }}
           style={{ paddingLeft: `${8 + depth * 14}px` }}
-          className="group flex items-center justify-between h-[30px] pr-2 rounded-lg cursor-pointer text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors duration-150 outline-none"
+          className={`group flex items-center justify-between h-[30px] pr-2 rounded-lg cursor-pointer transition-colors duration-150 outline-none ${
+            dropState === 'top'
+              ? 'border-t-2 border-cyan-400 bg-cyan-500/10'
+              : dropState === 'bottom'
+              ? 'border-b-2 border-cyan-400 bg-cyan-500/10'
+              : dropState === 'inside'
+              ? 'ring-1 ring-cyan-400 bg-cyan-500/15'
+              : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/5'
+          }`}
         >
           <div className="flex items-center min-w-0 flex-1 space-x-1.5 mr-2">
-            {/* Rotating Chevron */}
             <ChevronRight
-              className={`w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-300 transition-transform duration-200 ${
+              className={`w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-transform duration-200 ${
                 isCollapsed ? 'rotate-0' : 'rotate-90'
               }`}
             />
 
-            {/* Folder Icon */}
             {isCollapsed ? (
-              <Folder className="w-3.5 h-3.5 text-zinc-400 group-hover:text-amber-400/90 transition-colors flex-shrink-0" />
+              <Folder className="w-3.5 h-3.5 text-zinc-400 group-hover:text-amber-500 dark:group-hover:text-amber-400/90 transition-colors flex-shrink-0" />
             ) : (
-              <FolderOpen className="w-3.5 h-3.5 text-amber-400/90 transition-colors flex-shrink-0" />
+              <FolderOpen className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400/90 transition-colors flex-shrink-0" />
             )}
 
-            {/* Folder Title */}
-            <span className="truncate text-xs font-semibold tracking-wide uppercase text-zinc-400 group-hover:text-zinc-200">
+            <span className="truncate text-xs font-semibold tracking-wide uppercase text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-zinc-200">
               {node.title || 'Untitled Folder'}
             </span>
           </div>
 
-          {/* Right Action: Bookmark Current Page & + Subfolder buttons on group hover */}
           <div className="flex items-center space-x-1 flex-shrink-0">
             {onBookmarkCurrentPage && (
               <button
@@ -274,7 +312,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   e.stopPropagation();
                   onBookmarkCurrentPage(node.id);
                 }}
-                className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-cyan-300 hover:bg-white/10 transition-colors"
+                className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-cyan-500 dark:hover:text-cyan-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
               >
                 <BookmarkPlus className="w-3 h-3" />
               </button>
@@ -284,12 +322,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               type="button"
               title="Add Subfolder"
               onClick={handleStartCreateSubfolder}
-              className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-amber-300 hover:bg-white/10 transition-colors"
+              className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
             >
               <FolderPlus className="w-3 h-3" />
             </button>
 
-            <span className="text-[11px] text-zinc-600 group-hover:text-zinc-500 font-mono">
+            <span className="text-[11px] text-zinc-400 dark:text-zinc-600 group-hover:text-zinc-600 dark:group-hover:text-zinc-500 font-mono">
               {itemCount}
             </span>
           </div>
@@ -306,7 +344,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               style={{ paddingLeft: `${22 + depth * 14}px` }}
               className="flex items-center h-[32px] pr-2 my-0.5 space-x-1.5 animate-in fade-in slide-in-from-top-1 duration-100"
             >
-              <Folder className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+              <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
               <input
                 type="text"
                 value={newSubfolderTitle}
@@ -316,12 +354,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   if (e.key === 'Escape') handleCancelSubfolder();
                 }}
                 autoFocus
-                className="flex-1 bg-zinc-800 border border-cyan-500/50 rounded px-2 py-0.5 text-xs text-white placeholder-zinc-500 focus:outline-none"
+                className="flex-1 bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-2 py-0.5 text-xs text-zinc-900 dark:text-white placeholder-zinc-500 focus:outline-none"
               />
               <button
                 type="submit"
                 title="Create"
-                className="p-1 rounded text-emerald-400 hover:bg-emerald-500/20"
+                className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
               >
                 <Check className="w-3 h-3" />
               </button>
@@ -329,7 +367,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                 type="button"
                 title="Cancel"
                 onClick={handleCancelSubfolder}
-                className="p-1 rounded text-zinc-400 hover:text-white"
+                className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -339,13 +377,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           {itemCount === 0 && !isCreatingSubfolder ? (
             <div
               style={{ paddingLeft: `${24 + depth * 14}px` }}
-              className="py-1 text-[11px] text-zinc-600 italic flex items-center justify-between pr-3"
+              className="py-1 text-[11px] text-zinc-400 dark:text-zinc-600 italic flex items-center justify-between pr-3"
             >
               <span>Empty folder</span>
               <button
                 type="button"
                 onClick={handleStartCreateSubfolder}
-                className="text-amber-400/80 hover:text-amber-300 text-[10px] not-italic hover:underline"
+                className="text-amber-500 dark:text-amber-400/80 hover:underline text-[10px] not-italic"
               >
                 + Add subfolder
               </button>
@@ -368,6 +406,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onCloseTab={onCloseTab}
                     onReloadTab={onReloadTab}
                     onDiscardTab={onDiscardTab}
+                    onReplaceUrl={onReplaceUrl}
                     onCreateFolder={onCreateFolder}
                     onBookmarkCurrentPage={onBookmarkCurrentPage}
                     onRenameFolder={onRenameFolder}
@@ -397,6 +436,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
                   onDiscardTab={onDiscardTab}
+                  onReplaceUrl={onReplaceUrl}
                   onOpenContextMenu={onOpenContextMenu}
                   onDeleteBookmark={onDeleteBookmark}
                   onMoveToQuickAccess={onMoveToQuickAccess}

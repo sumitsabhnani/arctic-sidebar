@@ -1,7 +1,7 @@
 {
   "name": "arctic-sidebar",
-  "version": "1.0.0",
-  "description": "Arc-Style Bookmark Sidebar Chrome Extension",
+  "version": "1.2.0",
+  "description": "Arctic Sidebar Chrome Extension",
   "type": "module",
   "scripts": {
     "dev": "vite",

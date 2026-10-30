@@ -19,6 +19,7 @@ export interface LocalSettings {
   collapsedFolderIds?: Record<string, boolean>; // Stored in chrome.storage.local for permanence
   autoArchiveInterval?: 'never' | '12h' | '24h' | '7d';
   tabOpenedAt?: Record<number, number>;
+  theme?: 'dark' | 'light';
 }
 
 export interface BookmarkFolderOption {

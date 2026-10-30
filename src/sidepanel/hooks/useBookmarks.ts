@@ -85,7 +85,7 @@ export function useBookmarks() {
   };
 
   /**
-   * Find or create the default 'Arc Sidebar' structure in 'Other Bookmarks'
+   * Find or create the default 'Arctic Sidebar' structure in 'Other Bookmarks'
    */
   const ensureDefaultFolders = async (): Promise<{
     rootId: string;
@@ -108,30 +108,33 @@ export function useBookmarks() {
 
     const otherId = otherBookmarksNode ? otherBookmarksNode.id : '1';
 
-    // Check if 'Arc Sidebar' exists inside Other Bookmarks
-    let arcSidebar = otherBookmarksNode?.children?.find(
-      (c) => !c.url && (c.title === 'Arc Sidebar' || c.title === 'Arctic Sidebar')
+    // Check if 'Arctic Sidebar' exists inside Other Bookmarks (or legacy 'Arc Sidebar')
+    let arcticSidebar = otherBookmarksNode?.children?.find(
+      (c) => !c.url && (c.title === 'Arctic Sidebar' || c.title === 'Arc Sidebar')
     );
 
     let isNewSidebar = false;
-    if (!arcSidebar) {
-      arcSidebar = await chrome.bookmarks.create({
+    if (!arcticSidebar) {
+      arcticSidebar = await chrome.bookmarks.create({
         parentId: otherId,
-        title: 'Arc Sidebar'
+        title: 'Arctic Sidebar'
       });
       isNewSidebar = true;
+    } else if (arcticSidebar.title === 'Arc Sidebar') {
+      // Auto-migrate legacy name to Arctic Sidebar
+      await chrome.bookmarks.update(arcticSidebar.id, { title: 'Arctic Sidebar' });
     }
 
-    // Refresh sub-tree of Arc Sidebar to inspect children
-    const [arcSidebarSubtree] = await chrome.bookmarks.getSubTree(arcSidebar.id);
+    // Refresh sub-tree of Arctic Sidebar to inspect children
+    const [arcticSidebarSubtree] = await chrome.bookmarks.getSubTree(arcticSidebar.id);
 
     // Find or create 'Quick Access'
-    let quickAccess = arcSidebarSubtree.children?.find(
+    let quickAccess = arcticSidebarSubtree.children?.find(
       (c) => !c.url && c.title.toLowerCase() === 'quick access'
     );
     if (!quickAccess) {
       quickAccess = await chrome.bookmarks.create({
-        parentId: arcSidebar.id,
+        parentId: arcticSidebar.id,
         title: 'Quick Access'
       });
 
@@ -161,12 +164,12 @@ export function useBookmarks() {
     }
 
     // Find or create 'Workspace'
-    let workspace = arcSidebarSubtree.children?.find(
+    let workspace = arcticSidebarSubtree.children?.find(
       (c) => !c.url && c.title.toLowerCase() === 'workspace'
     );
     if (!workspace) {
       workspace = await chrome.bookmarks.create({
-        parentId: arcSidebar.id,
+        parentId: arcticSidebar.id,
         title: 'Workspace'
       });
 
@@ -189,7 +192,7 @@ export function useBookmarks() {
     }
 
     return {
-      rootId: arcSidebar.id,
+      rootId: arcticSidebar.id,
       quickAccessId: quickAccess.id,
       workspaceId: workspace.id
     };
@@ -287,6 +290,19 @@ export function useBookmarks() {
     loadBookmarks();
   };
 
+  // Update bookmark URL & title (replace bookmarked URL)
+  const updateBookmarkUrl = async (bookmarkId: string, newUrl: string, newTitle?: string) => {
+    try {
+      await chrome.bookmarks.update(bookmarkId, {
+        url: newUrl,
+        ...(newTitle ? { title: newTitle } : {})
+      });
+      loadBookmarks();
+    } catch (err) {
+      console.warn('[Arctic] Could not update bookmark URL:', err);
+    }
+  };
+
   // Remove bookmark or folder
   const removeBookmarkOrFolder = async (id: string) => {
     try {
@@ -334,6 +350,7 @@ export function useBookmarks() {
     createBookmark,
     createFolder,
     renameBookmarkOrFolder,
+    updateBookmarkUrl,
     removeBookmarkOrFolder,
     refreshBookmarks: loadBookmarks,
     loading

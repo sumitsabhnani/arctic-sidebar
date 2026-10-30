@@ -17,6 +17,7 @@ interface OpenTabsSectionProps {
   onDiscardTab?: (tabId: number) => void;
   onToggleMuteTab: (tab: chrome.tabs.Tab) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
 }
 
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
@@ -32,7 +33,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onReloadTab,
   onDiscardTab,
   onToggleMuteTab,
-  onOpenContextMenu
+  onOpenContextMenu,
+  onMoveOpenTab
 }) => {
   return (
     <div className="flex flex-col space-y-1 pt-2 border-t border-white/[0.06]">
@@ -104,6 +106,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                 onDiscardTab={onDiscardTab}
                 onToggleMute={onToggleMuteTab}
                 onOpenContextMenu={onOpenContextMenu}
+                onMoveOpenTab={onMoveOpenTab}
               />
             );
           })

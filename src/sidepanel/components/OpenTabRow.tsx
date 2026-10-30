@@ -7,6 +7,7 @@ import {
   Sparkles,
   FolderPlus,
   Copy,
+  Check,
   RotateCw,
   CopyPlus,
   Moon
@@ -26,6 +27,7 @@ interface OpenTabRowProps {
   onDiscardTab?: (tabId: number) => void;
   onToggleMute: (tab: chrome.tabs.Tab) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
 }
 
 export const OpenTabRow: React.FC<OpenTabRowProps> = ({
@@ -39,10 +41,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onReload,
   onDiscardTab,
   onToggleMute,
-  onOpenContextMenu
+  onOpenContextMenu,
+  onMoveOpenTab
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
+  const [isCopied, setIsCopied] = useState(false);
 
   const tabId = tab.id;
   const isNewTab = !tab.url || tab.url.startsWith('chrome://newtab') || tab.url === 'about:blank';
@@ -52,6 +57,15 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const isAudible = Boolean(tab.audible);
   const isMuted = Boolean(tab.mutedInfo?.muted);
   const isDiscarded = Boolean(tab.discarded);
+
+  const handleCopyLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (tab.url) {
+      navigator.clipboard.writeText(tab.url);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 1500);
+    }
+  };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -124,14 +138,51 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         type: 'openTab',
         tabId,
         url: tab.url,
-        title: tab.title
+        title: tab.title,
+        index: tab.index
       })
     );
-    e.dataTransfer.effectAllowed = 'copyMove';
+    e.dataTransfer.effectAllowed = 'move';
   };
 
   const handleDragEnd = () => {
     setIsDragging(false);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const isTop = e.clientY - rect.top < rect.height / 2;
+    setDropPosition(isTop ? 'top' : 'bottom');
+  };
+
+  const handleDragLeave = () => {
+    setDropPosition(null);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const pos = dropPosition;
+    setDropPosition(null);
+
+    try {
+      const dataStr = e.dataTransfer.getData('application/json');
+      if (!dataStr) return;
+      const data = JSON.parse(dataStr);
+
+      if (data.type === 'openTab' && data.tabId !== tabId && onMoveOpenTab) {
+        let targetIndex = tab.index;
+        if (pos === 'bottom') {
+          targetIndex += 1;
+        }
+        onMoveOpenTab(data.tabId, targetIndex);
+      }
+    } catch {
+      // ignore
+    }
   };
 
   return (
@@ -141,6 +192,9 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       draggable={Boolean(tab.url && !isNewTab)}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       title={`${titleText}\n${tab.url || ''}${isDiscarded ? '\n(Sleeping to save memory - click to wake)' : ''}`}
       onClick={() => tabId && onFocus(tabId)}
       onContextMenu={handleContextMenu}
@@ -153,11 +207,17 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       className={`group relative flex items-center justify-between h-[34px] px-2.5 my-[1px] rounded-lg cursor-pointer select-none transition-all duration-150 outline-none ${
         isDragging ? 'opacity-40 scale-98' : ''
       } ${
+        dropPosition === 'top'
+          ? 'border-t-2 border-cyan-400 bg-cyan-500/10'
+          : dropPosition === 'bottom'
+          ? 'border-b-2 border-cyan-400 bg-cyan-500/10'
+          : ''
+      } ${
         isActive
-          ? 'bg-white/15 text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
+          ? 'bg-black/10 dark:bg-white/15 text-zinc-900 dark:text-white font-medium shadow-[0_1px_3px_rgba(0,0,0,0.1)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.3)] backdrop-blur-md'
           : isDiscarded
-          ? 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
-          : 'text-zinc-300 hover:text-white hover:bg-white/5'
+          ? 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/5'
+          : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5'
       }`}
     >
       {/* Left: Favicon & Title */}
@@ -173,7 +233,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               }`}
             />
           ) : (
-            <Globe className="w-3.5 h-3.5 text-zinc-500 group-hover:text-zinc-400" />
+            <Globe className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-600 dark:group-hover:text-zinc-400" />
           )}
 
           {/* Sleep icon overlay on favicon if hibernated */}
@@ -185,18 +245,18 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         <span
           className={`truncate text-[13px] leading-tight transition-colors duration-150 ${
             isActive
-              ? 'text-white'
+              ? 'text-zinc-900 dark:text-white'
               : isDiscarded
               ? 'text-zinc-400 italic'
-              : 'text-zinc-300 group-hover:text-white'
+              : 'text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white'
           }`}
         >
           {titleText}
         </span>
       </div>
 
-      {/* Right: Audio Indicator, Reload on active hover, & Close Button */}
-      <div className="flex items-center space-x-1.5 flex-shrink-0">
+      {/* Right: Audio Indicator, Copy Link, Reload on active hover, & Close Button */}
+      <div className="flex items-center space-x-1 flex-shrink-0">
         {/* Audio status */}
         {(isAudible || isMuted) && (
           <button
@@ -206,13 +266,29 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               e.stopPropagation();
               onToggleMute(tab);
             }}
-            className="p-0.5 rounded text-zinc-400 hover:text-white"
+            className="p-0.5 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-white"
           >
             {isMuted ? (
               <VolumeX className="w-3 h-3 text-zinc-500" />
             ) : (
               <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />
             )}
+          </button>
+        )}
+
+        {/* Copy Link Button on hover */}
+        {tab.url && !isNewTab && (
+          <button
+            type="button"
+            title={isCopied ? 'Copied link!' : 'Copy link'}
+            onClick={handleCopyLink}
+            className={`hidden group-hover:flex items-center justify-center w-4 h-4 rounded transition-all duration-100 ${
+              isCopied
+                ? 'text-emerald-500 bg-emerald-500/10'
+                : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/20'
+            }`}
+          >
+            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Copy className="w-3 h-3" />}
           </button>
         )}
 
@@ -225,7 +301,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               e.stopPropagation();
               onReload(tabId);
             }}
-            className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-white hover:bg-white/20 transition-all duration-100"
+            className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/20 transition-all duration-100"
           >
             <RotateCw className="w-3 h-3" />
           </button>
@@ -237,7 +313,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
             type="button"
             title="Close tab (Cmd+W)"
             onClick={(e) => onClose(tabId, e)}
-            className="flex items-center justify-center w-4 h-4 rounded text-zinc-500 hover:text-white hover:bg-white/20 transition-all duration-100"
+            className="flex items-center justify-center w-4 h-4 rounded text-zinc-400 dark:text-zinc-500 hover:text-rose-500 hover:bg-black/5 dark:hover:bg-white/20 transition-all duration-100"
           >
             <X className="w-3 h-3 stroke-[2.5]" />
           </button>

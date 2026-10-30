@@ -234,7 +234,10 @@ export function useTabBindings() {
       changeInfo,
       tab
     ) => {
-      refreshWindowTabs();
+      // Update in-place to avoid expensive query on every micro status event
+      setWindowTabs((prev) =>
+        prev.map((t) => (t.id === tabId ? { ...t, ...tab, ...changeInfo } : t))
+      );
 
       if (!changeInfo.url && changeInfo.status !== 'complete' && !changeInfo.title) {
         return;
@@ -325,7 +328,12 @@ export function useTabBindings() {
     chrome.windows.onFocusChanged.addListener(handleWindowFocus);
     chrome.storage.onChanged.addListener(handleStorageChange);
 
+    const cleanupInterval = setInterval(() => {
+      loadSessionState();
+    }, 5 * 60 * 1000);
+
     return () => {
+      clearInterval(cleanupInterval);
       chrome.tabs.onActivated.removeListener(handleActivated);
       chrome.tabs.onCreated.removeListener(handleCreated);
       chrome.tabs.onRemoved.removeListener(handleRemoved);
@@ -489,6 +497,21 @@ export function useTabBindings() {
       }
     }
   }, [activeTabId]);
+
+  /**
+   * Move / reorder open tab within window
+   */
+  const moveOpenTab = useCallback(
+    async (tabId: number, targetIndex: number) => {
+      try {
+        await chrome.tabs.move(tabId, { index: targetIndex });
+        await refreshWindowTabs();
+      } catch (err) {
+        console.warn('[Arctic] Could not move tab:', err);
+      }
+    },
+    [refreshWindowTabs]
+  );
 
   /**
    * Hibernate / Discard a background tab to save memory
@@ -741,6 +764,7 @@ export function useTabBindings() {
     discardTab,
     discardAllBackgroundTabs,
     discardedTabsByTabId,
+    moveOpenTab,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval,

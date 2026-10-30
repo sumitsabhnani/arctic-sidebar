@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw, ExternalLink, FolderPlus, Copy, Trash2, X } from 'lucide-react';
+import { Globe, RotateCcw, ExternalLink, FolderPlus, Copy, Trash2, X, RefreshCw } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
@@ -12,6 +12,7 @@ interface QuickAccessGridProps {
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onReplaceUrl?: (bookmarkId: string) => void;
   onRemoveBookmark?: (id: string) => void;
 }
 
@@ -23,15 +24,16 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   onOpenContextMenu,
   onCloseTab,
   onMoveToWorkspace,
+  onReplaceUrl,
   onRemoveBookmark
 }) => {
   const items = bookmarks.filter((b) => Boolean(b.url));
 
   if (items.length === 0) {
     return (
-      <div className="px-3 py-3 rounded-xl border border-dashed border-white/10 bg-white/[0.02] text-center">
-        <p className="text-xs text-zinc-500">No Quick Access favorites yet.</p>
-        <p className="text-[11px] text-zinc-600 mt-0.5">
+      <div className="px-3 py-3 rounded-xl border border-dashed border-zinc-300 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] text-center">
+        <p className="text-xs text-zinc-500 dark:text-zinc-400">No Quick Access favorites yet.</p>
+        <p className="text-[11px] text-zinc-400 dark:text-zinc-600 mt-0.5">
           Right-click any tab or bookmark to pin it here.
         </p>
       </div>
@@ -50,6 +52,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
           onOpenContextMenu={onOpenContextMenu}
           onCloseTab={onCloseTab}
           onMoveToWorkspace={onMoveToWorkspace}
+          onReplaceUrl={onReplaceUrl}
           onRemoveBookmark={onRemoveBookmark}
         />
       ))}
@@ -65,6 +68,7 @@ interface QuickAccessTileProps {
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onReplaceUrl?: (bookmarkId: string) => void;
   onRemoveBookmark?: (id: string) => void;
 }
 
@@ -76,6 +80,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   onOpenContextMenu,
   onCloseTab,
   onMoveToWorkspace,
+  onReplaceUrl,
   onRemoveBookmark
 }) => {
   const [faviconError, setFaviconError] = useState(false);
@@ -111,8 +116,17 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Move to Workspace',
-              icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
+              icon: <FolderPlus className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />,
               action: () => onMoveToWorkspace(bookmark)
+            }
+          ]
+        : []),
+      ...(onReplaceUrl
+        ? [
+            {
+              label: 'Replace with Current Page URL',
+              icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />,
+              action: () => onReplaceUrl(bookmark.id)
             }
           ]
         : []),
@@ -128,7 +142,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Close Running Tab',
-              icon: <X className="w-3.5 h-3.5 text-rose-400" />,
+              icon: <X className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />,
               action: () => onCloseTab(binding.tabId, e),
               danger: true
             }
@@ -138,7 +152,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Remove from Quick Access',
-              icon: <Trash2 className="w-3.5 h-3.5 text-rose-400" />,
+              icon: <Trash2 className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />,
               action: () => onRemoveBookmark(bookmark.id),
               danger: true,
               dividerBefore: true
@@ -160,17 +174,17 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       onMouseLeave={() => setIsHovered(false)}
       className={`group relative flex flex-col items-center justify-center h-12 rounded-xl transition-all duration-150 select-none outline-none ${
         isActive
-          ? 'bg-white/15 border border-blue-400/40 shadow-[0_0_12px_rgba(59,130,246,0.3)] text-white'
+          ? 'bg-blue-500/15 border border-blue-400/40 shadow-[0_0_12px_rgba(59,130,246,0.3)] text-blue-600 dark:text-white'
           : isRunningInBackground
-          ? 'bg-white/[0.07] border border-white/10 hover:bg-white/12 text-zinc-200'
-          : 'bg-white/[0.03] border border-white/5 hover:bg-white/[0.08] hover:border-white/10 text-zinc-400 hover:text-zinc-200'
+          ? 'bg-black/[0.04] dark:bg-white/[0.07] border border-black/10 dark:border-white/10 hover:bg-black/[0.08] dark:hover:bg-white/12 text-zinc-700 dark:text-zinc-200'
+          : 'bg-black/[0.02] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] hover:border-black/10 dark:hover:border-white/10 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
       }`}
     >
       {/* Favicon or Reset Icon */}
       <div className="relative w-5 h-5 flex items-center justify-center">
         {/* Reset Icon when Active and Navigated Away (on hover) */}
         {isActive && isNavAway && isHovered ? (
-          <RotateCcw className="w-4 h-4 text-amber-300 animate-spin-reverse stroke-[2.5]" />
+          <RotateCcw className="w-4 h-4 text-amber-500 dark:text-amber-300 animate-spin-reverse stroke-[2.5]" />
         ) : !faviconError && faviconSrc ? (
           <img
             src={faviconSrc}
@@ -179,23 +193,23 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
             className="w-5 h-5 object-contain rounded-[4px] drop-shadow-sm transition-transform group-hover:scale-105"
           />
         ) : (
-          <Globe className="w-4 h-4 text-zinc-400 group-hover:text-zinc-200" />
+          <Globe className="w-4 h-4 text-zinc-400 dark:text-zinc-400 group-hover:text-zinc-600 dark:group-hover:text-zinc-200" />
         )}
 
         {/* Small drifted dot indicator if navigated away & not hovering */}
         {isNavAway && !(isActive && isHovered) && (
-          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-[#1c1c1f]" />
+          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-[#1c1c1f]" />
         )}
       </div>
 
       {/* Background Tab Running Dot (bottom center) */}
       {isRunningInBackground && (
-        <span className="absolute bottom-1 w-1 h-1 rounded-full bg-zinc-400/70" />
+        <span className="absolute bottom-1 w-1 h-1 rounded-full bg-zinc-400/80 dark:bg-zinc-400/70" />
       )}
 
       {/* Active Tab Glow Bar (bottom center) */}
       {isActive && (
-        <span className="absolute bottom-1 w-3 h-0.5 rounded-full bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.8)]" />
+        <span className="absolute bottom-1 w-3 h-0.5 rounded-full bg-blue-500 dark:bg-blue-400 shadow-[0_0_6px_rgba(96,165,250,0.8)]" />
       )}
     </button>
   );
