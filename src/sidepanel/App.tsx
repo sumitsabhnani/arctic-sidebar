@@ -42,6 +42,8 @@ export const App: React.FC = () => {
     pinTab,
     duplicateTab,
     reloadTab,
+    reloadActiveTab,
+    isActiveTabLoading,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval
@@ -58,18 +60,23 @@ export const App: React.FC = () => {
   const [isCreatingRootFolder, setIsCreatingRootFolder] = useState(false);
   const [rootFolderTitle, setRootFolderTitle] = useState('');
 
-  // Global keyboard shortcut: Ctrl+T or Cmd+T inside sidebar opens new tab
+  // Global keyboard shortcuts:
+  // - Ctrl+T or Cmd+T: New Tab
+  // - Ctrl+R or Cmd+R: Reload current page
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 't') {
         e.preventDefault();
         createNewTab();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        reloadActiveTab();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [createNewTab]);
+  }, [createNewTab, reloadActiveTab]);
 
   const handleOpenContextMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
@@ -145,6 +152,8 @@ export const App: React.FC = () => {
         onCreateBookmark={createBookmark}
         onSetAutoArchiveInterval={setAutoArchiveInterval}
         onNewTab={() => createNewTab()}
+        onReloadActiveTab={reloadActiveTab}
+        isActiveTabLoading={isActiveTabLoading}
       />
 
       {/* Main Content Area */}
@@ -269,6 +278,7 @@ export const App: React.FC = () => {
                       onRowClick={handleRowClick}
                       onFaviconClick={handleFaviconClick}
                       onCloseTab={handleCloseTab}
+                      onReloadTab={reloadTab}
                       onCreateFolder={createFolder}
                       onRenameFolder={renameBookmarkOrFolder}
                       onOpenContextMenu={handleOpenContextMenu}
@@ -291,6 +301,7 @@ export const App: React.FC = () => {
                     onRowClick={handleRowClick}
                     onFaviconClick={handleFaviconClick}
                     onCloseTab={handleCloseTab}
+                    onReloadTab={reloadTab}
                     onOpenContextMenu={handleOpenContextMenu}
                     onDeleteBookmark={removeBookmarkOrFolder}
                     onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}

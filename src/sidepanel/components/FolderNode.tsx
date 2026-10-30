@@ -23,6 +23,7 @@ interface FolderNodeProps {
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
+  onReloadTab?: (tabId: number) => void;
   onCreateFolder: (parentId: string, title: string) => void;
   onRenameFolder?: (id: string, title: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
@@ -40,6 +41,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onRowClick,
   onFaviconClick,
   onCloseTab,
+  onReloadTab,
   onCreateFolder,
   onRenameFolder,
   onOpenContextMenu,
@@ -290,6 +292,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onRowClick={onRowClick}
                     onFaviconClick={onFaviconClick}
                     onCloseTab={onCloseTab}
+                    onReloadTab={onReloadTab}
                     onCreateFolder={onCreateFolder}
                     onRenameFolder={onRenameFolder}
                     onOpenContextMenu={onOpenContextMenu}
@@ -313,6 +316,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onRowClick={onRowClick}
                   onFaviconClick={onFaviconClick}
                   onCloseTab={onCloseTab}
+                  onReloadTab={onReloadTab}
                   onOpenContextMenu={onOpenContextMenu}
                   onDeleteBookmark={onDeleteBookmark}
                   onMoveToQuickAccess={onMoveToQuickAccess}

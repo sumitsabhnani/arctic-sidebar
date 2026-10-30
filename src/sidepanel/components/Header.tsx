@@ -8,6 +8,7 @@ import {
   Compass,
   Check,
   RotateCcw,
+  RotateCw,
   Clock
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
@@ -20,6 +21,7 @@ interface HeaderProps {
     defaultRootId: string | null;
   };
   autoArchiveInterval: 'never' | '12h' | '24h' | '7d';
+  isActiveTabLoading?: boolean;
   onSelectQuickAccessFolder: (id: string) => void;
   onSelectWorkspaceFolder: (id: string) => void;
   onResetFolders: () => void;
@@ -28,12 +30,14 @@ interface HeaderProps {
   onCreateBookmark: (parentId: string, title: string, url: string) => void;
   onSetAutoArchiveInterval: (val: 'never' | '12h' | '24h' | '7d') => void;
   onNewTab: () => void;
+  onReloadActiveTab: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   allFolders,
   activeFolderIds,
   autoArchiveInterval,
+  isActiveTabLoading = false,
   onSelectQuickAccessFolder,
   onSelectWorkspaceFolder,
   onResetFolders,
@@ -41,7 +45,8 @@ export const Header: React.FC<HeaderProps> = ({
   onCreateFolder,
   onCreateBookmark,
   onSetAutoArchiveInterval,
-  onNewTab
+  onNewTab,
+  onReloadActiveTab
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -100,6 +105,22 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center space-x-1">
+          {/* Reload Active Tab */}
+          <button
+            type="button"
+            title="Reload current page (Ctrl+R / Cmd+R)"
+            onClick={onReloadActiveTab}
+            className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-colors group"
+          >
+            <RotateCw
+              className={`w-3.5 h-3.5 transition-transform duration-300 ${
+                isActiveTabLoading
+                  ? 'animate-spin text-cyan-400'
+                  : 'group-active:rotate-180'
+              }`}
+            />
+          </button>
+
           {/* Quick New Tab */}
           <button
             type="button"

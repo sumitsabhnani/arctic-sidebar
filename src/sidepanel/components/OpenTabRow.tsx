@@ -155,6 +155,21 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           </button>
         )}
 
+        {/* Reload Button on hover for active tab */}
+        {isActive && typeof tabId === 'number' && (
+          <button
+            type="button"
+            title="Reload tab (Cmd+R)"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReload(tabId);
+            }}
+            className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-white hover:bg-white/20 transition-all duration-100"
+          >
+            <RotateCw className="w-3 h-3" />
+          </button>
+        )}
+
         {/* Close Button on hover */}
         {typeof tabId === 'number' && (
           <button

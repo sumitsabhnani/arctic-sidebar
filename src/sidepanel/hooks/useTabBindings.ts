@@ -461,8 +461,37 @@ export function useTabBindings() {
    * Reload a tab
    */
   const reloadTab = useCallback(async (tabId: number) => {
-    await chrome.tabs.reload(tabId);
+    try {
+      await chrome.tabs.reload(tabId);
+    } catch (err) {
+      console.warn('[Arctic] Could not reload tab:', err);
+    }
   }, []);
+
+  /**
+   * Reload currently active tab
+   */
+  const reloadActiveTab = useCallback(async () => {
+    if (typeof activeTabId === 'number') {
+      try {
+        await chrome.tabs.reload(activeTabId);
+      } catch (err) {
+        console.warn('[Arctic] Could not reload active tab:', err);
+      }
+    } else {
+      try {
+        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (currentTab?.id) {
+          await chrome.tabs.reload(currentTab.id);
+        }
+      } catch (err) {
+        console.warn('[Arctic] Could not query and reload tab:', err);
+      }
+    }
+  }, [activeTabId]);
+
+  const activeTab = windowTabs.find((t) => t.id === activeTabId);
+  const isActiveTabLoading = activeTab?.status === 'loading';
 
   /**
    * Toggle audio mute on a tab
@@ -665,6 +694,8 @@ export function useTabBindings() {
     pinTab,
     duplicateTab,
     reloadTab,
+    reloadActiveTab,
+    isActiveTabLoading,
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw, X, ExternalLink, Copy, Trash2, Sparkles } from 'lucide-react';
+import { Globe, RotateCcw, RotateCw, X, ExternalLink, Copy, Trash2, Sparkles } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
@@ -12,6 +12,7 @@ interface BookmarkRowProps {
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
+  onReloadTab?: (tabId: number) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
@@ -25,6 +26,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onRowClick,
   onFaviconClick,
   onCloseTab,
+  onReloadTab,
   onOpenContextMenu,
   onDeleteBookmark,
   onMoveToQuickAccess
@@ -198,6 +200,21 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
                   : 'bg-zinc-400/70 group-hover:opacity-0'
               }`}
             />
+
+            {/* Reload button for active tab on hover */}
+            {isActive && onReloadTab && binding && (
+              <button
+                type="button"
+                title="Reload this page (Cmd+R)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReloadTab(binding.tabId);
+                }}
+                className="hidden group-hover:flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-white hover:bg-white/20 transition-all duration-100 mr-0.5"
+              >
+                <RotateCw className="w-3 h-3" />
+              </button>
+            )}
 
             {/* Close tab button (appears on group hover) */}
             <button
