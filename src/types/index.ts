@@ -13,7 +13,13 @@ export interface SessionState {
   bookmarkIdByTabId: Record<number, string>;
 }
 
-export type ColorThemeId = 'glacier-blue' | 'midnight-amethyst' | 'forest-sage' | 'warm-terracotta';
+export type ColorThemeId =
+  | 'glacier-blue'
+  | 'midnight-amethyst'
+  | 'forest-sage'
+  | 'warm-terracotta'
+  | 'pure-monochrome'
+  | 'slate-grey';
 export type ThemeMode = 'dark' | 'light';
 
 export interface LocalSettings {

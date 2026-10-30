@@ -225,7 +225,7 @@ export const Header: React.FC<HeaderProps> = ({
             backgroundColor: 'var(--theme-header-bg)',
             borderColor: 'var(--theme-border-subtle)'
           }}
-          className="p-3 border-t text-zinc-800 dark:text-zinc-200 text-xs flex flex-col space-y-3 animate-in fade-in slide-in-from-top-1 duration-150 shadow-lg"
+          className="p-3 border-t text-zinc-800 dark:text-zinc-200 text-xs flex flex-col space-y-3 animate-in fade-in slide-in-from-top-1 duration-150 shadow-lg max-h-[380px] overflow-y-auto"
         >
           <div className="flex items-center justify-between">
             <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">

@@ -81,7 +81,14 @@ export const App: React.FC = () => {
       }
       if (
         typeof res.colorTheme === 'string' &&
-        ['glacier-blue', 'midnight-amethyst', 'forest-sage', 'warm-terracotta'].includes(res.colorTheme)
+        [
+          'glacier-blue',
+          'midnight-amethyst',
+          'forest-sage',
+          'warm-terracotta',
+          'pure-monochrome',
+          'slate-grey'
+        ].includes(res.colorTheme)
       ) {
         setColorTheme(res.colorTheme as ColorThemeId);
       }

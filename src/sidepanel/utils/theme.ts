@@ -1,4 +1,11 @@
-export type ColorThemeId = 'glacier-blue' | 'midnight-amethyst' | 'forest-sage' | 'warm-terracotta';
+export type ColorThemeId =
+  | 'glacier-blue'
+  | 'midnight-amethyst'
+  | 'forest-sage'
+  | 'warm-terracotta'
+  | 'pure-monochrome'
+  | 'slate-grey';
+
 export type ThemeMode = 'dark' | 'light';
 
 export interface ThemeOption {
@@ -47,5 +54,23 @@ export const COLOR_THEMES: ThemeOption[] = [
     swatchGradient: 'linear-gradient(135deg, #20110a 0%, #ea580c 50%, #fed7aa 100%)',
     accentColor: '#fb923c',
     indicatorColor: '#fed7aa'
+  },
+  {
+    id: 'pure-monochrome',
+    name: 'Pure Monochrome',
+    tag: 'Normal White',
+    description: 'Normal clean white in light mode, deep dark charcoal in dark mode. No colors.',
+    swatchGradient: 'linear-gradient(135deg, #18181b 0%, #71717a 50%, #f4f4f5 100%)',
+    accentColor: '#71717a',
+    indicatorColor: '#e4e4e7'
+  },
+  {
+    id: 'slate-grey',
+    name: 'Slate Grey',
+    tag: 'Neutral Grey',
+    description: 'Balanced neutral grey and steel tones for a calm, non-colored aesthetic.',
+    swatchGradient: 'linear-gradient(135deg, #27272a 0%, #52525b 50%, #a1a1aa 100%)',
+    accentColor: '#a1a1aa',
+    indicatorColor: '#d4d4d8'
   }
 ];

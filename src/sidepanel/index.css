@@ -168,6 +168,82 @@ html:not(.dark)[data-color-theme="warm-terracotta"] {
   --theme-scrollbar-thumb: rgba(234, 88, 12, 0.18);
 }
 
+/* 5. Pure Monochrome (White & Charcoal) - Dark */
+html.dark[data-color-theme="pure-monochrome"] {
+  --theme-bg-gradient: linear-gradient(180deg, #18181b 0%, #121214 40%, #09090b 100%);
+  --theme-header-bg: rgba(24, 24, 27, 0.90);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(255, 255, 255, 0.08);
+  --theme-accent: #ffffff;
+  --theme-accent-hover: #e4e4e7;
+  --theme-accent-bg: rgba(255, 255, 255, 0.10);
+  --theme-accent-border: rgba(255, 255, 255, 0.28);
+  --theme-accent-glow: 0 0 8px rgba(255, 255, 255, 0.15);
+  --theme-indicator: #ffffff;
+  --theme-active-card-bg: rgba(255, 255, 255, 0.12);
+  --theme-active-card-border: rgba(255, 255, 255, 0.35);
+  --theme-active-card-glow: 0 0 10px rgba(255, 255, 255, 0.20);
+  --theme-scrollbar-thumb: rgba(255, 255, 255, 0.14);
+}
+
+/* 5. Pure Monochrome (White & Charcoal) - Light (Normal White) */
+html:not(.dark)[data-color-theme="pure-monochrome"] {
+  --theme-bg-gradient: linear-gradient(180deg, #ffffff 0%, #fafafa 40%, #f4f4f5 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.95);
+  --theme-surface-bg: rgba(0, 0, 0, 0.03);
+  --theme-surface-hover: rgba(0, 0, 0, 0.06);
+  --theme-border-subtle: rgba(0, 0, 0, 0.08);
+  --theme-accent: #18181b;
+  --theme-accent-hover: #27272a;
+  --theme-accent-bg: rgba(0, 0, 0, 0.06);
+  --theme-accent-border: rgba(0, 0, 0, 0.20);
+  --theme-accent-glow: 0 0 6px rgba(0, 0, 0, 0.08);
+  --theme-indicator: #18181b;
+  --theme-active-card-bg: rgba(0, 0, 0, 0.07);
+  --theme-active-card-border: rgba(0, 0, 0, 0.22);
+  --theme-active-card-glow: 0 0 8px rgba(0, 0, 0, 0.08);
+  --theme-scrollbar-thumb: rgba(0, 0, 0, 0.16);
+}
+
+/* 6. Slate Grey (Neutral Grey) - Dark */
+html.dark[data-color-theme="slate-grey"] {
+  --theme-bg-gradient: linear-gradient(180deg, #222226 0%, #1a1a1d 40%, #131315 100%);
+  --theme-header-bg: rgba(34, 34, 38, 0.90);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(255, 255, 255, 0.08);
+  --theme-accent: #d4d4d8;
+  --theme-accent-hover: #f4f4f5;
+  --theme-accent-bg: rgba(212, 212, 216, 0.10);
+  --theme-accent-border: rgba(212, 212, 216, 0.28);
+  --theme-accent-glow: 0 0 8px rgba(212, 212, 216, 0.15);
+  --theme-indicator: #e4e4e7;
+  --theme-active-card-bg: rgba(212, 212, 216, 0.12);
+  --theme-active-card-border: rgba(212, 212, 216, 0.32);
+  --theme-active-card-glow: 0 0 10px rgba(212, 212, 216, 0.18);
+  --theme-scrollbar-thumb: rgba(255, 255, 255, 0.14);
+}
+
+/* 6. Slate Grey (Neutral Grey) - Light (Normal Grey) */
+html:not(.dark)[data-color-theme="slate-grey"] {
+  --theme-bg-gradient: linear-gradient(180deg, #f4f4f5 0%, #e9ecef 40%, #dee2e6 100%);
+  --theme-header-bg: rgba(244, 244, 245, 0.92);
+  --theme-surface-bg: rgba(0, 0, 0, 0.03);
+  --theme-surface-hover: rgba(0, 0, 0, 0.06);
+  --theme-border-subtle: rgba(0, 0, 0, 0.08);
+  --theme-accent: #3f3f46;
+  --theme-accent-hover: #27272a;
+  --theme-accent-bg: rgba(63, 63, 70, 0.08);
+  --theme-accent-border: rgba(63, 63, 70, 0.22);
+  --theme-accent-glow: 0 0 6px rgba(63, 63, 70, 0.10);
+  --theme-indicator: #3f3f46;
+  --theme-active-card-bg: rgba(63, 63, 70, 0.10);
+  --theme-active-card-border: rgba(63, 63, 70, 0.25);
+  --theme-active-card-glow: 0 0 8px rgba(63, 63, 70, 0.10);
+  --theme-scrollbar-thumb: rgba(0, 0, 0, 0.16);
+}
+
 /* -------------------------------------------------------------
    GLOBAL BODY & TYPOGRAPHY
    ------------------------------------------------------------- */
