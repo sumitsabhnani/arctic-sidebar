@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw, X } from 'lucide-react';
+import { Globe, RotateCcw, X, ExternalLink, Copy, Trash2, Sparkles } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
+import type { ContextMenuItem } from './ContextMenu';
 
 interface BookmarkRowProps {
   bookmark: chrome.bookmarks.BookmarkTreeNode;
@@ -11,6 +12,9 @@ interface BookmarkRowProps {
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
+  onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  onDeleteBookmark?: (id: string) => void;
+  onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
 }
 
 export const BookmarkRow: React.FC<BookmarkRowProps> = ({
@@ -20,7 +24,10 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   isActive,
   onRowClick,
   onFaviconClick,
-  onCloseTab
+  onCloseTab,
+  onOpenContextMenu,
+  onDeleteBookmark,
+  onMoveToQuickAccess
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
@@ -36,12 +43,68 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
 
   const faviconSrc = bookmark.url ? getFaviconUrl(bookmark.url, 32) : '';
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (!onOpenContextMenu) return;
+    e.preventDefault();
+
+    const items: ContextMenuItem[] = [
+      {
+        label: 'Open in New Tab',
+        icon: <ExternalLink className="w-3.5 h-3.5" />,
+        action: () => {
+          if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
+        }
+      },
+      ...(onMoveToQuickAccess
+        ? [
+            {
+              label: 'Pin to Quick Access',
+              icon: <Sparkles className="w-3.5 h-3.5 text-cyan-400" />,
+              action: () => onMoveToQuickAccess(bookmark)
+            }
+          ]
+        : []),
+      {
+        label: 'Copy URL',
+        icon: <Copy className="w-3.5 h-3.5" />,
+        action: () => {
+          if (bookmark.url) navigator.clipboard.writeText(bookmark.url);
+        },
+        dividerBefore: true
+      },
+      ...(isRunning && binding
+        ? [
+            {
+              label: 'Close Running Tab',
+              icon: <X className="w-3.5 h-3.5 text-rose-400" />,
+              action: () => onCloseTab(binding.tabId, e),
+              danger: true
+            }
+          ]
+        : []),
+      ...(onDeleteBookmark
+        ? [
+            {
+              label: 'Delete Bookmark',
+              icon: <Trash2 className="w-3.5 h-3.5 text-rose-400" />,
+              action: () => onDeleteBookmark(bookmark.id),
+              danger: true,
+              dividerBefore: true
+            }
+          ]
+        : [])
+    ];
+
+    onOpenContextMenu(e, items);
+  };
+
   return (
     <div
       role="button"
       tabIndex={0}
       title={tooltip}
       onClick={() => onRowClick(bookmark)}
+      onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();

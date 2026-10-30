@@ -7,7 +7,8 @@ import {
   Plus,
   Compass,
   Check,
-  RotateCcw
+  RotateCcw,
+  Clock
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
 
@@ -18,23 +19,29 @@ interface HeaderProps {
     workspaceId: string | null;
     defaultRootId: string | null;
   };
+  autoArchiveInterval: 'never' | '12h' | '24h' | '7d';
   onSelectQuickAccessFolder: (id: string) => void;
   onSelectWorkspaceFolder: (id: string) => void;
   onResetFolders: () => void;
   onToggleAllCollapsed: (collapsed: boolean) => void;
   onCreateFolder: (parentId: string, title: string) => void;
   onCreateBookmark: (parentId: string, title: string, url: string) => void;
+  onSetAutoArchiveInterval: (val: 'never' | '12h' | '24h' | '7d') => void;
+  onNewTab: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   allFolders,
   activeFolderIds,
+  autoArchiveInterval,
   onSelectQuickAccessFolder,
   onSelectWorkspaceFolder,
   onResetFolders,
   onToggleAllCollapsed,
   onCreateFolder,
-  onCreateBookmark
+  onCreateBookmark,
+  onSetAutoArchiveInterval,
+  onNewTab
 }) => {
   const [showSettings, setShowSettings] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -93,14 +100,11 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Action Buttons */}
         <div className="flex items-center space-x-1">
-          {/* Quick Add Bookmark/Folder */}
+          {/* Quick New Tab */}
           <button
             type="button"
-            title="Add bookmark or folder"
-            onClick={() => {
-              setTargetFolderId(activeFolderIds.workspaceId || '');
-              setShowAddModal(true);
-            }}
+            title="Open New Tab (Ctrl+T / Cmd+T)"
+            onClick={onNewTab}
             className="p-1 rounded-md text-zinc-400 hover:text-white hover:bg-white/10 transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -129,7 +133,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Settings Dropdown Toggle */}
           <button
             type="button"
-            title="Folder Mapping Settings"
+            title="Sidebar Settings"
             onClick={() => setShowSettings(!showSettings)}
             className={`p-1 rounded-md transition-colors ${
               showSettings
@@ -197,8 +201,28 @@ export const Header: React.FC<HeaderProps> = ({
             </select>
           </div>
 
+          {/* Ephemeral / Temp Tabs Auto-Archive Setting */}
+          <div className="flex flex-col space-y-1 pt-1 border-t border-white/[0.06]">
+            <label className="text-[11px] font-medium text-zinc-400 flex items-center gap-1">
+              <Clock className="w-3 h-3 text-cyan-400" />
+              Auto-Archive Inactive Today&apos;s Tabs
+            </label>
+            <select
+              value={autoArchiveInterval}
+              onChange={(e) =>
+                onSetAutoArchiveInterval(e.target.value as 'never' | '12h' | '24h' | '7d')
+              }
+              className="w-full bg-zinc-900 border border-white/10 rounded-md px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-cyan-500/50"
+            >
+              <option value="never">Never (Keep until manually cleared)</option>
+              <option value="12h">After 12 Hours</option>
+              <option value="24h">After 24 Hours (Recommended)</option>
+              <option value="7d">After 7 Days</option>
+            </select>
+          </div>
+
           <p className="text-[11px] text-zinc-500 italic">
-            Default folders are stored inside Chrome&apos;s &quot;Other Bookmarks&quot; &gt; &quot;Arc Sidebar&quot;.
+            Permanent bookmarks remain safe. Unpinned tabs in Today&apos;s Tabs are temporary and will be archived.
           </p>
         </div>
       )}

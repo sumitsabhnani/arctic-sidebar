@@ -1,25 +1,60 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { TabBinding } from '../../types';
+import type { TabBinding, LocalSettings } from '../../types';
 import { normalizeUrl, isUrlNavigatedAway } from '../utils/url';
 
 export function useTabBindings() {
   const [bindingsByBookmarkId, setBindingsByBookmarkId] = useState<Record<string, TabBinding>>({});
   const [bookmarkIdByTabId, setBookmarkIdByTabId] = useState<Record<number, string>>({});
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  const [windowTabs, setWindowTabs] = useState<chrome.tabs.Tab[]>([]);
+  const [autoArchiveInterval, setAutoArchiveIntervalState] = useState<'never' | '12h' | '24h' | '7d'>('24h');
   const currentWindowIdRef = useRef<number | null>(null);
 
   /**
-   * Read current session state from storage
+   * Refresh all tabs in the current window
+   */
+  const refreshWindowTabs = useCallback(async () => {
+    try {
+      const currentWin = await chrome.windows.getCurrent();
+      if (currentWin.id) {
+        currentWindowIdRef.current = currentWin.id;
+        const tabs = await chrome.tabs.query({ windowId: currentWin.id });
+        setWindowTabs(tabs);
+
+        const active = tabs.find((t) => t.active);
+        if (active?.id) {
+          setActiveTabId(active.id);
+        }
+      }
+    } catch (err) {
+      console.warn('[Arctic] Could not query window tabs:', err);
+    }
+  }, []);
+
+  /**
+   * Read current session state and local settings
    */
   const loadSessionState = useCallback(async () => {
     try {
-      const data = await chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']);
-      const bindings: Record<string, TabBinding> = (data.bindingsByBookmarkId as Record<string, TabBinding>) || {};
-      const byTab: Record<number, string> = (data.bookmarkIdByTabId as Record<number, string>) || {};
+      const [sessionData, localData] = await Promise.all([
+        chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']),
+        chrome.storage.local.get(['autoArchiveInterval', 'tabOpenedAt'])
+      ]);
+
+      const bindings: Record<string, TabBinding> =
+        (sessionData.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+      const byTab: Record<number, string> =
+        (sessionData.bookmarkIdByTabId as Record<number, string>) || {};
+
+      if (localData.autoArchiveInterval) {
+        setAutoArchiveIntervalState(localData.autoArchiveInterval as 'never' | '12h' | '24h' | '7d');
+      }
 
       // Verify open tabs to prune any dead bindings
       const allTabs = await chrome.tabs.query({});
-      const openTabIdSet = new Set(allTabs.map((t) => t.id).filter((id): id is number => typeof id === 'number'));
+      const openTabIdSet = new Set(
+        allTabs.map((t) => t.id).filter((id): id is number => typeof id === 'number')
+      );
 
       let dirty = false;
       const cleanBindings: Record<string, TabBinding> = {};
@@ -51,8 +86,65 @@ export function useTabBindings() {
 
       setBindingsByBookmarkId(cleanBindings);
       setBookmarkIdByTabId(cleanByTab);
+
+      // Track tab creation timestamps for auto-archive
+      const now = Date.now();
+      const existingTimestamps: Record<number, number> =
+        (localData.tabOpenedAt as Record<number, number>) || {};
+      let timestampsUpdated = false;
+
+      for (const tab of allTabs) {
+        if (typeof tab.id === 'number' && !existingTimestamps[tab.id]) {
+          existingTimestamps[tab.id] = now;
+          timestampsUpdated = false;
+        }
+      }
+
+      // Remove timestamps of closed tabs
+      for (const tIdStr of Object.keys(existingTimestamps)) {
+        const tId = Number(tIdStr);
+        if (!openTabIdSet.has(tId)) {
+          delete existingTimestamps[tId];
+          timestampsUpdated = true;
+        }
+      }
+
+      if (timestampsUpdated) {
+        await chrome.storage.local.set({ tabOpenedAt: existingTimestamps });
+      }
+
+      // Perform auto-archive check if configured
+      const intervalSetting = localData.autoArchiveInterval || '24h';
+      if (intervalSetting !== 'never') {
+        const thresholdMs =
+          intervalSetting === '12h'
+            ? 12 * 60 * 60 * 1000
+            : intervalSetting === '24h'
+            ? 24 * 60 * 60 * 1000
+            : 7 * 24 * 60 * 60 * 1000;
+
+        const currentActiveTab = allTabs.find((t) => t.active);
+        const tabsToClose: number[] = [];
+
+        for (const tab of allTabs) {
+          if (
+            typeof tab.id === 'number' &&
+            !cleanByTab[tab.id] &&
+            tab.id !== currentActiveTab?.id
+          ) {
+            const openedAt = existingTimestamps[tab.id];
+            if (openedAt && now - openedAt > thresholdMs) {
+              tabsToClose.push(tab.id);
+            }
+          }
+        }
+
+        if (tabsToClose.length > 0) {
+          await chrome.tabs.remove(tabsToClose);
+        }
+      }
     } catch (err) {
-      console.warn('[Arctic] Failed to read session storage:', err);
+      console.warn('[Arctic] Failed to read session/local storage:', err);
     }
   }, []);
 
@@ -78,24 +170,9 @@ export function useTabBindings() {
     []
   );
 
-  /**
-   * Track current active tab
-   */
-  const syncActiveTab = useCallback(async () => {
-    try {
-      const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (currentTab?.id) {
-        setActiveTabId(currentTab.id);
-        currentWindowIdRef.current = currentTab.windowId;
-      }
-    } catch (err) {
-      console.warn('[Arctic] Could not query active tab:', err);
-    }
-  }, []);
-
   // Initialize and register event listeners
   useEffect(() => {
-    syncActiveTab();
+    refreshWindowTabs();
     loadSessionState();
 
     // Listen to tab activation
@@ -104,12 +181,32 @@ export function useTabBindings() {
         if (currentWin.id === activeInfo.windowId) {
           setActiveTabId(activeInfo.tabId);
           currentWindowIdRef.current = activeInfo.windowId;
+          refreshWindowTabs();
+        }
+      });
+    };
+
+    // Listen to tab creation (e.g. Ctrl+T, link clicked)
+    const handleCreated = (tab: chrome.tabs.Tab) => {
+      chrome.windows.getCurrent((currentWin) => {
+        if (currentWin.id === tab.windowId) {
+          refreshWindowTabs();
+          // Record timestamp for new tab
+          if (typeof tab.id === 'number') {
+            chrome.storage.local.get(['tabOpenedAt'], (res) => {
+              const timestamps = (res.tabOpenedAt as Record<number, number>) || {};
+              timestamps[tab.id!] = Date.now();
+              chrome.storage.local.set({ tabOpenedAt: timestamps });
+            });
+          }
         }
       });
     };
 
     // Listen to tab removal
     const handleRemoved = (tabId: number) => {
+      refreshWindowTabs();
+
       setBookmarkIdByTabId((prevByTab) => {
         const bookmarkId = prevByTab[tabId];
         if (!bookmarkId) return prevByTab;
@@ -131,12 +228,14 @@ export function useTabBindings() {
       });
     };
 
-    // Listen to tab updates (URL change, navigation away)
+    // Listen to tab updates (URL change, navigation away, favicon, title, muted)
     const handleUpdated = (
       tabId: number,
       changeInfo: chrome.tabs.OnUpdatedInfo,
       tab: chrome.tabs.Tab
     ) => {
+      refreshWindowTabs();
+
       if (!changeInfo.url && changeInfo.status !== 'complete' && !changeInfo.title) {
         return;
       }
@@ -185,7 +284,12 @@ export function useTabBindings() {
       });
     };
 
-    // Listen to session storage changes from background or other contexts
+    // Listen to tab moves or attaches
+    const handleMoved = () => refreshWindowTabs();
+    const handleAttached = () => refreshWindowTabs();
+    const handleDetached = () => refreshWindowTabs();
+
+    // Listen to session storage changes
     const handleStorageChange = (
       changes: { [key: string]: chrome.storage.StorageChange },
       areaName: string
@@ -207,30 +311,181 @@ export function useTabBindings() {
     // Listen to window focus
     const handleWindowFocus = (winId: number) => {
       if (winId !== chrome.windows.WINDOW_ID_NONE) {
-        syncActiveTab();
+        refreshWindowTabs();
       }
     };
 
     chrome.tabs.onActivated.addListener(handleActivated);
+    chrome.tabs.onCreated.addListener(handleCreated);
     chrome.tabs.onRemoved.addListener(handleRemoved);
     chrome.tabs.onUpdated.addListener(handleUpdated);
+    chrome.tabs.onMoved.addListener(handleMoved);
+    chrome.tabs.onAttached.addListener(handleAttached);
+    chrome.tabs.onDetached.addListener(handleDetached);
     chrome.windows.onFocusChanged.addListener(handleWindowFocus);
     chrome.storage.onChanged.addListener(handleStorageChange);
 
     return () => {
       chrome.tabs.onActivated.removeListener(handleActivated);
+      chrome.tabs.onCreated.removeListener(handleCreated);
       chrome.tabs.onRemoved.removeListener(handleRemoved);
       chrome.tabs.onUpdated.removeListener(handleUpdated);
+      chrome.tabs.onMoved.removeListener(handleMoved);
+      chrome.tabs.onAttached.removeListener(handleAttached);
+      chrome.tabs.onDetached.removeListener(handleDetached);
       chrome.windows.onFocusChanged.removeListener(handleWindowFocus);
       chrome.storage.onChanged.removeListener(handleStorageChange);
     };
-  }, [loadSessionState, syncActiveTab]);
+  }, [loadSessionState, refreshWindowTabs]);
 
   /**
-   * Row Body Click Handler:
-   * - If bound to an open tab: switch to that tab.
-   * - If not bound: check if an unbound tab in current window matches bookmark.url.
-   *   If so, bind and switch to it. Otherwise, create a new tab and bind it.
+   * Filter window tabs that are NOT bound to any bookmark (unpinned / temp tabs)
+   */
+  const unpinnedTabs = windowTabs.filter(
+    (tab) => typeof tab.id === 'number' && !bookmarkIdByTabId[tab.id]
+  );
+
+  /**
+   * Create a new tab (e.g. Ctrl+T or '+ New Tab' button)
+   */
+  const createNewTab = useCallback(async (url?: string) => {
+    const newTab = await chrome.tabs.create({ url, active: true });
+    if (newTab.id) {
+      setActiveTabId(newTab.id);
+    }
+    await refreshWindowTabs();
+    return newTab;
+  }, [refreshWindowTabs]);
+
+  /**
+   * Focus a tab
+   */
+  const focusTab = useCallback(async (tabId: number) => {
+    await chrome.tabs.update(tabId, { active: true });
+    setActiveTabId(tabId);
+  }, []);
+
+  /**
+   * Close a tab
+   */
+  const handleCloseTab = useCallback(
+    async (tabId: number, e?: React.MouseEvent) => {
+      if (e) {
+        e.stopPropagation();
+      }
+      try {
+        await chrome.tabs.remove(tabId);
+      } catch (err) {
+        console.warn('[Arctic] Could not remove tab:', err);
+      }
+
+      const bookmarkId = bookmarkIdByTabId[tabId];
+      const nextByTab = { ...bookmarkIdByTabId };
+      delete nextByTab[tabId];
+
+      const nextBindings = { ...bindingsByBookmarkId };
+      if (bookmarkId) {
+        delete nextBindings[bookmarkId];
+      }
+
+      await persistSession(nextBindings, nextByTab);
+      await refreshWindowTabs();
+    },
+    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
+  );
+
+  /**
+   * Close all unpinned tabs in the current window (Clear / Archive action)
+   */
+  const closeAllUnpinnedTabs = useCallback(async () => {
+    const tabIdsToClose = unpinnedTabs
+      .map((t) => t.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    if (tabIdsToClose.length === 0) return;
+
+    // If closing all tabs in window, create a blank tab first to prevent window closure
+    if (tabIdsToClose.length === windowTabs.length) {
+      await chrome.tabs.create({ active: true });
+    }
+
+    await chrome.tabs.remove(tabIdsToClose);
+    await refreshWindowTabs();
+  }, [unpinnedTabs, windowTabs.length, refreshWindowTabs]);
+
+  /**
+   * Pin an unpinned tab to a bookmark folder (Quick Access or Workspace)
+   */
+  const pinTab = useCallback(
+    async (tab: chrome.tabs.Tab, targetFolderId: string) => {
+      if (typeof tab.id !== 'number' || !tab.url) return;
+
+      const title = tab.title || tab.url || 'Pinned Tab';
+      const newBookmark = await chrome.bookmarks.create({
+        parentId: targetFolderId,
+        title,
+        url: tab.url
+      });
+
+      const newBinding: TabBinding = {
+        bookmarkId: newBookmark.id,
+        tabId: tab.id,
+        windowId: tab.windowId,
+        originalUrl: tab.url,
+        currentUrl: tab.url,
+        currentTitle: title,
+        isNavigatedAway: false
+      };
+
+      const newBindings = { ...bindingsByBookmarkId, [newBookmark.id]: newBinding };
+      const newByTab = { ...bookmarkIdByTabId, [tab.id]: newBookmark.id };
+
+      await persistSession(newBindings, newByTab);
+      await refreshWindowTabs();
+    },
+    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
+  );
+
+  /**
+   * Duplicate a tab
+   */
+  const duplicateTab = useCallback(
+    async (tabId: number) => {
+      await chrome.tabs.duplicate(tabId);
+      await refreshWindowTabs();
+    },
+    [refreshWindowTabs]
+  );
+
+  /**
+   * Reload a tab
+   */
+  const reloadTab = useCallback(async (tabId: number) => {
+    await chrome.tabs.reload(tabId);
+  }, []);
+
+  /**
+   * Toggle audio mute on a tab
+   */
+  const toggleMuteTab = useCallback(async (tab: chrome.tabs.Tab) => {
+    if (typeof tab.id !== 'number') return;
+    const isMuted = Boolean(tab.mutedInfo?.muted);
+    await chrome.tabs.update(tab.id, { muted: !isMuted });
+  }, []);
+
+  /**
+   * Update auto-archive interval setting
+   */
+  const setAutoArchiveInterval = useCallback(
+    async (interval: 'never' | '12h' | '24h' | '7d') => {
+      setAutoArchiveIntervalState(interval);
+      await chrome.storage.local.set({ autoArchiveInterval: interval } as LocalSettings);
+    },
+    []
+  );
+
+  /**
+   * Row Body Click Handler for Bookmarks
    */
   const handleRowClick = useCallback(
     async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
@@ -285,6 +540,7 @@ export function useTabBindings() {
         await persistSession(newBindings, newByTab);
         await chrome.tabs.update(tabId, { active: true });
         setActiveTabId(tabId);
+        await refreshWindowTabs();
         return;
       }
 
@@ -311,16 +567,14 @@ export function useTabBindings() {
 
         await persistSession(newBindings, newByTab);
         setActiveTabId(tabId);
+        await refreshWindowTabs();
       }
     },
-    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession]
+    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
   );
 
   /**
-   * Favicon Click Handler:
-   * - Dedicated click handler (e.stopPropagation()).
-   * - If bound to an open tab: switch to it AND immediately navigate back to bookmark.url.
-   * - If not bound: opens and binds tab at bookmark.url.
+   * Favicon Click Handler for Bookmarks
    */
   const handleFaviconClick = useCallback(
     async (bookmark: chrome.bookmarks.BookmarkTreeNode, e?: React.MouseEvent) => {
@@ -335,7 +589,6 @@ export function useTabBindings() {
         try {
           const tab = await chrome.tabs.get(existingBinding.tabId);
           if (tab) {
-            // Activate and reset URL to original bookmark URL
             await chrome.tabs.update(existingBinding.tabId, {
               url: bookmark.url,
               active: true
@@ -344,7 +597,6 @@ export function useTabBindings() {
               await chrome.windows.update(tab.windowId, { focused: true });
             }
 
-            // Immediately clear navigated away state locally
             const updatedBinding: TabBinding = {
               ...existingBinding,
               currentUrl: bookmark.url,
@@ -356,6 +608,7 @@ export function useTabBindings() {
             };
             await persistSession(nextBindings, bookmarkIdByTabId);
             setActiveTabId(existingBinding.tabId);
+            await refreshWindowTabs();
             return;
           }
         } catch {
@@ -363,17 +616,13 @@ export function useTabBindings() {
         }
       }
 
-      // Not bound: open and bind
       await handleRowClick(bookmark);
     },
-    [bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession]
+    [bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession, refreshWindowTabs]
   );
 
   /**
-   * Quick Access Grid Tile Click:
-   * - If bound & already active AND isNavigatedAway === true: reset tab to originalUrl.
-   * - If bound & not active: focus tab.
-   * - If not bound: open & bind.
+   * Quick Access Grid Tile Click
    */
   const handleQuickAccessClick = useCallback(
     async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
@@ -381,7 +630,6 @@ export function useTabBindings() {
       const binding = bindingsByBookmarkId[bookmark.id];
 
       if (binding && binding.tabId === activeTabId && binding.isNavigatedAway) {
-        // Reset active tab back to original URL
         await chrome.tabs.update(binding.tabId, { url: bookmark.url, active: true });
         const updatedBinding: TabBinding = {
           ...binding,
@@ -393,49 +641,34 @@ export function useTabBindings() {
           [bookmark.id]: updatedBinding
         };
         await persistSession(nextBindings, bookmarkIdByTabId);
+        await refreshWindowTabs();
         return;
       }
 
       await handleRowClick(bookmark);
     },
-    [activeTabId, bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession]
-  );
-
-  /**
-   * Close / Unbind tab:
-   * - Closes the tab without removing the bookmark.
-   */
-  const handleCloseTab = useCallback(
-    async (tabId: number, e: React.MouseEvent) => {
-      e.stopPropagation();
-      try {
-        await chrome.tabs.remove(tabId);
-      } catch (err) {
-        console.warn('[Arctic] Could not remove tab:', err);
-      }
-
-      const bookmarkId = bookmarkIdByTabId[tabId];
-      const nextByTab = { ...bookmarkIdByTabId };
-      delete nextByTab[tabId];
-
-      const nextBindings = { ...bindingsByBookmarkId };
-      if (bookmarkId) {
-        delete nextBindings[bookmarkId];
-      }
-
-      await persistSession(nextBindings, nextByTab);
-    },
-    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession]
+    [activeTabId, bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession, refreshWindowTabs]
   );
 
   return {
     bindingsByBookmarkId,
     bookmarkIdByTabId,
     activeTabId,
+    unpinnedTabs,
+    createNewTab,
+    focusTab,
     handleRowClick,
     handleFaviconClick,
     handleQuickAccessClick,
     handleCloseTab,
-    refreshBindings: loadSessionState
+    closeAllUnpinnedTabs,
+    pinTab,
+    duplicateTab,
+    reloadTab,
+    toggleMuteTab,
+    autoArchiveInterval,
+    setAutoArchiveInterval,
+    refreshBindings: loadSessionState,
+    refreshWindowTabs
   };
 }

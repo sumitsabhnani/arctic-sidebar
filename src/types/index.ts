@@ -17,6 +17,8 @@ export interface LocalSettings {
   quickAccessFolderId?: string;
   workspaceFolderId?: string;
   collapsedFolderIds?: Record<string, boolean>; // Stored in chrome.storage.local for permanence
+  autoArchiveInterval?: 'never' | '12h' | '24h' | '7d';
+  tabOpenedAt?: Record<number, number>;
 }
 
 export interface BookmarkFolderOption {

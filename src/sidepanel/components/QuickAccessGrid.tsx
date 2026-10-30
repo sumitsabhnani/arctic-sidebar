@@ -1,32 +1,38 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw } from 'lucide-react';
+import { Globe, RotateCcw, ExternalLink, FolderPlus, Copy, Trash2, X } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
+import type { ContextMenuItem } from './ContextMenu';
 
 interface QuickAccessGridProps {
   bookmarks: chrome.bookmarks.BookmarkTreeNode[];
   bindingsByBookmarkId: Record<string, TabBinding>;
   activeTabId: number | null;
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
+  onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onRemoveBookmark?: (id: string) => void;
 }
 
 export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   bookmarks,
   bindingsByBookmarkId,
   activeTabId,
-  onTileClick
+  onTileClick,
+  onOpenContextMenu,
+  onCloseTab,
+  onMoveToWorkspace,
+  onRemoveBookmark
 }) => {
-  // Filter only items that are URLs
   const items = bookmarks.filter((b) => Boolean(b.url));
 
   if (items.length === 0) {
     return (
       <div className="px-3 py-3 rounded-xl border border-dashed border-white/10 bg-white/[0.02] text-center">
-        <p className="text-xs text-zinc-500">
-          No Quick Access favorites yet.
-        </p>
+        <p className="text-xs text-zinc-500">No Quick Access favorites yet.</p>
         <p className="text-[11px] text-zinc-600 mt-0.5">
-          Bookmarks placed in &quot;Quick Access&quot; appear here.
+          Right-click any tab or bookmark to pin it here.
         </p>
       </div>
     );
@@ -41,6 +47,10 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
           binding={bindingsByBookmarkId[bookmark.id]}
           activeTabId={activeTabId}
           onTileClick={onTileClick}
+          onOpenContextMenu={onOpenContextMenu}
+          onCloseTab={onCloseTab}
+          onMoveToWorkspace={onMoveToWorkspace}
+          onRemoveBookmark={onRemoveBookmark}
         />
       ))}
     </div>
@@ -52,13 +62,21 @@ interface QuickAccessTileProps {
   binding?: TabBinding;
   activeTabId: number | null;
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
+  onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onRemoveBookmark?: (id: string) => void;
 }
 
 const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   bookmark,
   binding,
   activeTabId,
-  onTileClick
+  onTileClick,
+  onOpenContextMenu,
+  onCloseTab,
+  onMoveToWorkspace,
+  onRemoveBookmark
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -77,11 +95,67 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
     tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}`;
   }
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    if (!onOpenContextMenu) return;
+    e.preventDefault();
+
+    const items: ContextMenuItem[] = [
+      {
+        label: 'Open in New Tab',
+        icon: <ExternalLink className="w-3.5 h-3.5" />,
+        action: () => {
+          if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
+        }
+      },
+      ...(onMoveToWorkspace
+        ? [
+            {
+              label: 'Move to Workspace',
+              icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
+              action: () => onMoveToWorkspace(bookmark)
+            }
+          ]
+        : []),
+      {
+        label: 'Copy URL',
+        icon: <Copy className="w-3.5 h-3.5" />,
+        action: () => {
+          if (bookmark.url) navigator.clipboard.writeText(bookmark.url);
+        },
+        dividerBefore: true
+      },
+      ...(binding && onCloseTab
+        ? [
+            {
+              label: 'Close Running Tab',
+              icon: <X className="w-3.5 h-3.5 text-rose-400" />,
+              action: () => onCloseTab(binding.tabId, e),
+              danger: true
+            }
+          ]
+        : []),
+      ...(onRemoveBookmark
+        ? [
+            {
+              label: 'Remove from Quick Access',
+              icon: <Trash2 className="w-3.5 h-3.5 text-rose-400" />,
+              action: () => onRemoveBookmark(bookmark.id),
+              danger: true,
+              dividerBefore: true
+            }
+          ]
+        : [])
+    ];
+
+    onOpenContextMenu(e, items);
+  };
+
   return (
     <button
       type="button"
       title={tooltip}
       onClick={() => onTileClick(bookmark)}
+      onContextMenu={handleContextMenu}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`group relative flex flex-col items-center justify-center h-12 rounded-xl transition-all duration-150 select-none outline-none ${

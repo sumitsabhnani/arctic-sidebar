@@ -2,6 +2,7 @@ import React from 'react';
 import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding } from '../../types';
+import type { ContextMenuItem } from './ContextMenu';
 
 interface FolderNodeProps {
   node: chrome.bookmarks.BookmarkTreeNode;
@@ -13,6 +14,9 @@ interface FolderNodeProps {
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
+  onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  onDeleteBookmark?: (id: string) => void;
+  onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
 }
 
 export const FolderNode: React.FC<FolderNodeProps> = ({
@@ -24,7 +28,10 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   activeTabId,
   onRowClick,
   onFaviconClick,
-  onCloseTab
+  onCloseTab,
+  onOpenContextMenu,
+  onDeleteBookmark,
+  onMoveToQuickAccess
 }) => {
   const isCollapsed = Boolean(collapsedFolderIds[node.id]);
   const children = node.children || [];
@@ -99,6 +106,9 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onRowClick={onRowClick}
                     onFaviconClick={onFaviconClick}
                     onCloseTab={onCloseTab}
+                    onOpenContextMenu={onOpenContextMenu}
+                    onDeleteBookmark={onDeleteBookmark}
+                    onMoveToQuickAccess={onMoveToQuickAccess}
                   />
                 );
               }
@@ -117,6 +127,9 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onRowClick={onRowClick}
                   onFaviconClick={onFaviconClick}
                   onCloseTab={onCloseTab}
+                  onOpenContextMenu={onOpenContextMenu}
+                  onDeleteBookmark={onDeleteBookmark}
+                  onMoveToQuickAccess={onMoveToQuickAccess}
                 />
               );
             })
