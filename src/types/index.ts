@@ -22,9 +22,18 @@ export type ColorThemeId =
   | 'slate-grey';
 export type ThemeMode = 'dark' | 'light';
 
+export interface SpaceItem {
+  id: string;
+  name: string;
+  folderId: string;
+  icon?: string;
+}
+
 export interface LocalSettings {
   quickAccessFolderId?: string;
   workspaceFolderId?: string;
+  spaces?: SpaceItem[];
+  activeSpaceId?: string;
   collapsedFolderIds?: Record<string, boolean>; // Stored in chrome.storage.local for permanence
   autoArchiveInterval?: 'never' | '12h' | '24h' | '7d';
   tabOpenedAt?: Record<number, number>;

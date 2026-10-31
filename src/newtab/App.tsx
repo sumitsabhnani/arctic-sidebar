@@ -25,7 +25,7 @@ export function isLikelyUrl(input: string): boolean {
   if (/^https?:\/\//i.test(trimmed)) return true;
   if (/^localhost(:\d+)?(\/.*)?$/i.test(trimmed)) return true;
   if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(\/.*)?$/.test(trimmed)) return true;
-  if (!/\s/.test(trimmed) && /^[a-zA-Z0-9-]+\.[a-zA-Z]{2,}(\/.*)?$/i.test(trimmed)) {
+  if (!/\s/.test(trimmed) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/.*)?$/i.test(trimmed)) {
     return true;
   }
   return false;

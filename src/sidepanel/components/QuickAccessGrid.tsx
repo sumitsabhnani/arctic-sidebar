@@ -1,5 +1,17 @@
 import React, { useState } from 'react';
-import { Globe, RotateCcw, ExternalLink, FolderPlus, Link2, Trash2, X, RefreshCw, Edit2 } from 'lucide-react';
+import {
+  Globe,
+  RotateCcw,
+  ExternalLink,
+  FolderPlus,
+  Link2,
+  Trash2,
+  X,
+  RefreshCw,
+  Edit2,
+  Volume2,
+  VolumeX
+} from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
@@ -7,11 +19,13 @@ import type { ContextMenuItem } from './ContextMenu';
 interface QuickAccessGridProps {
   bookmarks: chrome.bookmarks.BookmarkTreeNode[];
   bindingsByBookmarkId: Record<string, TabBinding>;
+  tabsByTabId: Record<number, chrome.tabs.Tab>;
   activeTabId: number | null;
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onTileDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
+  onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
   onRenameBookmark?: (id: string, title: string) => void;
@@ -22,11 +36,13 @@ interface QuickAccessGridProps {
 export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   bookmarks,
   bindingsByBookmarkId,
+  tabsByTabId,
   activeTabId,
   onTileClick,
   onTileDoubleClick,
   onOpenContextMenu,
   onCloseTab,
+  onToggleMuteTab,
   onMoveToWorkspace,
   onReplaceUrl,
   onRenameBookmark,
@@ -48,23 +64,29 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
 
   return (
     <div className="grid grid-cols-4 gap-1.5 w-full">
-      {items.map((bookmark) => (
-        <QuickAccessTile
-          key={bookmark.id}
-          bookmark={bookmark}
-          binding={bindingsByBookmarkId[bookmark.id]}
-          activeTabId={activeTabId}
-          onTileClick={onTileClick}
-          onTileDoubleClick={onTileDoubleClick}
-          onOpenContextMenu={onOpenContextMenu}
-          onCloseTab={onCloseTab}
-          onMoveToWorkspace={onMoveToWorkspace}
-          onReplaceUrl={onReplaceUrl}
-          onRenameBookmark={onRenameBookmark}
-          onRemoveBookmark={onRemoveBookmark}
-          onReorderQuickAccess={onReorderQuickAccess}
-        />
-      ))}
+      {items.map((bookmark) => {
+        const binding = bindingsByBookmarkId[bookmark.id];
+        const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
+        return (
+          <QuickAccessTile
+            key={bookmark.id}
+            bookmark={bookmark}
+            binding={binding}
+            boundTab={boundTab}
+            activeTabId={activeTabId}
+            onTileClick={onTileClick}
+            onTileDoubleClick={onTileDoubleClick}
+            onOpenContextMenu={onOpenContextMenu}
+            onCloseTab={onCloseTab}
+            onToggleMuteTab={onToggleMuteTab}
+            onMoveToWorkspace={onMoveToWorkspace}
+            onReplaceUrl={onReplaceUrl}
+            onRenameBookmark={onRenameBookmark}
+            onRemoveBookmark={onRemoveBookmark}
+            onReorderQuickAccess={onReorderQuickAccess}
+          />
+        );
+      })}
     </div>
   );
 };
@@ -72,11 +94,13 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
 interface QuickAccessTileProps {
   bookmark: chrome.bookmarks.BookmarkTreeNode;
   binding?: TabBinding;
+  boundTab?: chrome.tabs.Tab;
   activeTabId: number | null;
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onTileDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
+  onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
   onRenameBookmark?: (id: string, title: string) => void;
@@ -87,11 +111,13 @@ interface QuickAccessTileProps {
 const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   bookmark,
   binding,
+  boundTab,
   activeTabId,
   onTileClick,
   onTileDoubleClick,
   onOpenContextMenu,
   onCloseTab,
+  onToggleMuteTab,
   onMoveToWorkspace,
   onReplaceUrl,
   onRenameBookmark,
@@ -106,6 +132,8 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const isActive = Boolean(binding && binding.tabId === activeTabId);
   const isRunningInBackground = Boolean(binding && binding.tabId !== activeTabId);
   const isNavAway = binding?.isNavigatedAway ?? false;
+  const isAudible = Boolean(boundTab?.audible);
+  const isMuted = Boolean(boundTab?.mutedInfo?.muted);
 
   const titleText = bookmark.title || bookmark.url || 'Favorite';
   const faviconSrc = bookmark.url ? getFaviconUrl(bookmark.url, 48) : '';
@@ -129,10 +157,23 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
         }
       },
+      ...(binding && onToggleMuteTab
+        ? [
+            {
+              label: isMuted ? 'Unmute Tab' : 'Mute Tab',
+              icon: isMuted ? (
+                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <VolumeX className="w-3.5 h-3.5" />
+              ),
+              action: () => onToggleMuteTab(binding.tabId)
+            }
+          ]
+        : []),
       ...(onMoveToWorkspace
         ? [
             {
-              label: 'Move to Workspace',
+              label: 'Move to Active Space',
               icon: <FolderPlus className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />,
               action: () => onMoveToWorkspace(bookmark)
             }
@@ -283,6 +324,37 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           : 'bg-black/[0.02] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] hover:border-black/10 dark:hover:border-white/10 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
       }`}
     >
+      {/* Quick Audio Mute / Playing Indicator Badge on Top-Right of Pinned Tile */}
+      {binding && (isAudible || isMuted) && (
+        <span
+          role="button"
+          tabIndex={0}
+          title={isMuted ? 'Unmute tab' : 'Mute tab'}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleMuteTab?.(binding.tabId);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.stopPropagation();
+              e.preventDefault();
+              onToggleMuteTab?.(binding.tabId);
+            }
+          }}
+          className={`absolute top-1 right-1 z-10 w-4 h-4 rounded-full flex items-center justify-center transition-all shadow-sm ${
+            isMuted
+              ? 'bg-rose-500/20 text-rose-500 dark:text-rose-400 hover:bg-rose-500/30'
+              : 'bg-cyan-500/20 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-500/35'
+          }`}
+        >
+          {isMuted ? (
+            <VolumeX className="w-2.5 h-2.5 stroke-[2.5]" />
+          ) : (
+            <Volume2 className="w-2.5 h-2.5 stroke-[2.5] animate-pulse" />
+          )}
+        </span>
+      )}
+
       {/* Favicon or Reset Icon */}
       <div className="relative w-5 h-5 flex items-center justify-center pointer-events-none">
         {/* Reset Icon when Active and Navigated Away (on hover) */}
@@ -300,7 +372,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         )}
 
         {/* Small drifted dot indicator if navigated away & not hovering */}
-        {isNavAway && !(isActive && isHovered) && (
+        {isNavAway && !(isActive && isHovered) && !(isAudible || isMuted) && (
           <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-[#1c1c1f]" />
         )}
       </div>

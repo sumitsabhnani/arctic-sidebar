@@ -11,18 +11,23 @@ import {
   RotateCw,
   CopyPlus,
   Moon,
-  Edit2
+  Edit2,
+  ArrowRightLeft,
+  Folder
 } from 'lucide-react';
+import type { SpaceItem } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
 interface OpenTabRowProps {
   tab: chrome.tabs.Tab;
   isActive: boolean;
+  spaces?: SpaceItem[];
   onFocus: (tabId: number) => void;
   onClose: (tabId: number, e: React.MouseEvent) => void;
   onPinToQuickAccess: (tab: chrome.tabs.Tab) => void;
   onPinToWorkspace: (tab: chrome.tabs.Tab) => void;
+  onPinToSpace?: (tab: chrome.tabs.Tab, targetSpaceFolderId: string) => void;
   onDuplicate: (tabId: number) => void;
   onReload: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
@@ -35,10 +40,12 @@ interface OpenTabRowProps {
 export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   tab,
   isActive,
+  spaces = [],
   onFocus,
   onClose,
   onPinToQuickAccess,
   onPinToWorkspace,
+  onPinToSpace,
   onDuplicate,
   onReload,
   onDiscardTab,
@@ -50,7 +57,6 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const [faviconError, setFaviconError] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
-  const [isCopied, setIsCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(tab.title || '');
 
@@ -62,15 +68,6 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const isAudible = Boolean(tab.audible);
   const isMuted = Boolean(tab.mutedInfo?.muted);
   const isDiscarded = Boolean(tab.discarded);
-
-  const handleCopyLink = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (tab.url) {
-      navigator.clipboard.writeText(tab.url);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 1500);
-    }
-  };
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -84,11 +81,24 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         disabled: !tab.url || isNewTab
       },
       {
-        label: 'Pin to Workspace',
+        label: 'Pin to Active Space',
         icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
         action: () => onPinToWorkspace(tab),
         disabled: !tab.url || isNewTab
       },
+      ...(onPinToSpace && spaces.length > 0 && tab.url && !isNewTab
+        ? [
+            {
+              label: 'Move to Space',
+              icon: <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />,
+              submenu: spaces.map((sp) => ({
+                label: sp.name,
+                icon: <Folder className="w-3.5 h-3.5 text-amber-400" />,
+                action: () => onPinToSpace(tab, sp.folderId)
+              }))
+            }
+          ]
+        : []),
       ...(!isActive && !isDiscarded && onDiscardTab
         ? [
             {
@@ -327,7 +337,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         </span>
       </div>
 
-      {/* Right: Audio Indicator, Copy Link, Reload on active hover, & Close Button */}
+      {/* Right: Audio Indicator, Split View, Copy Link, Reload on active hover, & Close Button */}
       <div className="flex items-center space-x-1 flex-shrink-0">
         {/* Audio status */}
         {(isAudible || isMuted) && (
@@ -338,44 +348,17 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               e.stopPropagation();
               onToggleMute(tab);
             }}
-            className="p-0.5 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-white"
-          >
-            {isMuted ? (
-              <VolumeX className="w-3 h-3 text-zinc-500" />
-            ) : (
-              <Volume2 className="w-3 h-3 text-cyan-400 animate-pulse" />
-            )}
-          </button>
-        )}
-
-        {/* Copy Link Button on hover */}
-        {tab.url && !isNewTab && (
-          <button
-            type="button"
-            data-tooltip={isCopied ? 'Copied link!' : 'Copy link'}
-            onClick={handleCopyLink}
-            className={`hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full transition-all duration-100 ${
-              isCopied
-                ? 'text-emerald-500 bg-emerald-500/15 dark:bg-emerald-500/25'
-                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20'
+            className={`flex items-center justify-center w-5 h-5 rounded-full transition-colors ${
+              isMuted
+                ? 'text-rose-500 dark:text-rose-400 bg-rose-500/15 hover:bg-rose-500/25'
+                : 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/15 hover:bg-cyan-500/25'
             }`}
           >
-            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Link2 className="w-3.5 h-3.5 stroke-[2]" />}
-          </button>
-        )}
-
-        {/* Reload Button on hover for active tab */}
-        {isActive && typeof tabId === 'number' && (
-          <button
-            type="button"
-            data-tooltip="Reload tab (Cmd+R)"
-            onClick={(e) => {
-              e.stopPropagation();
-              onReload(tabId);
-            }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20 transition-all duration-100"
-          >
-            <RotateCw className="w-3 h-3" />
+            {isMuted ? (
+              <VolumeX className="w-3 h-3 stroke-[2.5]" />
+            ) : (
+              <Volume2 className="w-3 h-3 stroke-[2.5] animate-pulse" />
+            )}
           </button>
         )}
 

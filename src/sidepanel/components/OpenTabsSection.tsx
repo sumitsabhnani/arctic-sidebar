@@ -1,11 +1,13 @@
 import React from 'react';
 import { Layers, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
+import type { SpaceItem } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
 
 interface OpenTabsSectionProps {
   unpinnedTabs: chrome.tabs.Tab[];
   activeTabId: number | null;
+  spaces?: SpaceItem[];
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
   onFocusTab: (tabId: number) => void;
@@ -14,6 +16,7 @@ interface OpenTabsSectionProps {
   onNewTab: () => void;
   onPinToQuickAccess: (tab: chrome.tabs.Tab) => void;
   onPinToWorkspace: (tab: chrome.tabs.Tab) => void;
+  onPinToSpace?: (tab: chrome.tabs.Tab, targetSpaceFolderId: string) => void;
   onDuplicateTab: (tabId: number) => void;
   onReloadTab: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
@@ -26,6 +29,7 @@ interface OpenTabsSectionProps {
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   unpinnedTabs,
   activeTabId,
+  spaces = [],
   isCollapsed = false,
   onToggleCollapse,
   onFocusTab,
@@ -34,6 +38,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onNewTab,
   onPinToQuickAccess,
   onPinToWorkspace,
+  onPinToSpace,
   onDuplicateTab,
   onReloadTab,
   onDiscardTab,
@@ -115,10 +120,12 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   key={tab.id}
                   tab={tab}
                   isActive={isActive}
+                  spaces={spaces}
                   onFocus={onFocusTab}
                   onClose={onCloseTab}
                   onPinToQuickAccess={onPinToQuickAccess}
                   onPinToWorkspace={onPinToWorkspace}
+                  onPinToSpace={onPinToSpace}
                   onDuplicate={onDuplicateTab}
                   onReload={onReloadTab}
                   onDiscardTab={onDiscardTab}

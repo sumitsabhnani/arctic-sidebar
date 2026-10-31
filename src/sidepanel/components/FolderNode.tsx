@@ -8,10 +8,11 @@ import {
   Edit2,
   Trash2,
   Check,
-  X
+  X,
+  ArrowRightLeft
 } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
-import type { TabBinding } from '../../types';
+import type { TabBinding, SpaceItem } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
 
 function getDescendantBookmarkIds(folder: chrome.bookmarks.BookmarkTreeNode): string[] {
@@ -34,14 +35,19 @@ interface FolderNodeProps {
   collapsedFolderIds: Record<string, boolean>;
   onToggleCollapse: (folderId: string) => void;
   bindingsByBookmarkId: Record<string, TabBinding>;
+  tabsByTabId?: Record<number, chrome.tabs.Tab>;
   discardedTabsByTabId?: Record<number, boolean>;
   activeTabId: number | null;
+  spaces?: SpaceItem[];
+  activeSpaceId?: string;
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onFaviconDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
+  onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
+  onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
   onCreateFolder: (parentId: string, title: string) => void;
   onBookmarkCurrentPage?: (parentId: string) => void;
@@ -60,14 +66,19 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   collapsedFolderIds,
   onToggleCollapse,
   bindingsByBookmarkId,
+  tabsByTabId = {},
   discardedTabsByTabId = {},
   activeTabId,
+  spaces = [],
+  activeSpaceId,
   onRowClick,
   onFaviconClick,
   onFaviconDoubleClick,
   onCloseTab,
   onReloadTab,
   onDiscardTab,
+  onToggleMuteTab,
+  onMoveToSpace,
   onReplaceUrl,
   onCreateFolder,
   onBookmarkCurrentPage,
@@ -228,6 +239,8 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
     }
   };
 
+  const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
+
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!onOpenContextMenu) return;
     e.preventDefault();
@@ -247,6 +260,19 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
         action: () => handleStartCreateSubfolder()
       },
+      ...(onMoveToSpace && otherSpaces.length > 0
+        ? [
+            {
+              label: 'Move Folder to Space',
+              icon: <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />,
+              submenu: otherSpaces.map((sp) => ({
+                label: sp.name,
+                icon: <Folder className="w-3.5 h-3.5 text-amber-400" />,
+                action: () => onMoveToSpace(node.id, sp.folderId)
+              }))
+            }
+          ]
+        : []),
       ...(runningTabIdsUnderFolder.length > 0 && onDiscardTab
         ? [
             {
@@ -369,11 +395,6 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               setIsRenaming(true);
             }}
           >
-            {/* Folder Icon (no > chevron; aligns with website favicons).
-                On hover:
-                - If collapsed (closed): show FolderOpen on hover
-                - If open: show Folder (closed) on hover
-            */}
             <div className="relative w-4 h-4 flex items-center justify-center flex-shrink-0">
               {isCollapsed ? (
                 <>
@@ -499,13 +520,19 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     depth={depth + 1}
                     collapsedFolderIds={collapsedFolderIds}
                     bindingsByBookmarkId={bindingsByBookmarkId}
+                    tabsByTabId={tabsByTabId}
                     activeTabId={activeTabId}
+                    spaces={spaces}
+                    activeSpaceId={activeSpaceId}
                     onRowClick={onRowClick}
                     onFaviconClick={onFaviconClick}
                     onFaviconDoubleClick={onFaviconDoubleClick}
                     onCloseTab={onCloseTab}
                     onReloadTab={onReloadTab}
                     onDiscardTab={onDiscardTab}
+                    onToggleMuteTab={onToggleMuteTab}
+                    onMoveToSpace={onMoveToSpace}
+                    onReplaceUrl={onReplaceUrl}
                     discardedTabsByTabId={discardedTabsByTabId}
                     onToggleCollapse={onToggleCollapse}
                     onBookmarkCurrentPage={onBookmarkCurrentPage}
@@ -522,6 +549,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               }
 
               const binding = bindingsByBookmarkId[child.id];
+              const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
               const isActive = Boolean(binding && binding.tabId === activeTabId);
               const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
 
@@ -531,14 +559,19 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   bookmark={child}
                   depth={depth + 1}
                   binding={binding}
+                  boundTab={boundTab}
                   isActive={isActive}
                   isDiscarded={isDiscarded}
+                  spaces={spaces}
+                  activeSpaceId={activeSpaceId}
                   onRowClick={onRowClick}
                   onFaviconClick={onFaviconClick}
                   onFaviconDoubleClick={onFaviconDoubleClick}
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
                   onDiscardTab={onDiscardTab}
+                  onToggleMuteTab={onToggleMuteTab}
+                  onMoveToSpace={onMoveToSpace}
                   onReplaceUrl={onReplaceUrl}
                   onRenameBookmark={onRenameBookmark}
                   onOpenContextMenu={onOpenContextMenu}

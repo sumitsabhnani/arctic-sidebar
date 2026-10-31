@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Settings,
   FolderTree,
   ChevronsUpDown,
-  Plus,
   Check,
   RotateCcw,
   RotateCw,
@@ -11,7 +10,11 @@ import {
   Search,
   Moon,
   Sun,
-  Palette
+  Palette,
+  Link2,
+  Lock,
+  Globe,
+  Sparkles
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
 import type { ColorThemeId, ThemeMode } from '../utils/theme';
@@ -25,6 +28,7 @@ interface HeaderProps {
     defaultRootId: string | null;
   };
   autoArchiveInterval: 'never' | '12h' | '24h' | '7d';
+  activeTabUrl?: string;
   isActiveTabLoading?: boolean;
   isSearchOpen?: boolean;
   theme: ThemeMode;
@@ -36,18 +40,43 @@ interface HeaderProps {
   onCreateFolder: (parentId: string, title: string) => void;
   onCreateBookmark: (parentId: string, title: string, url: string) => void;
   onSetAutoArchiveInterval: (val: 'never' | '12h' | '24h' | '7d') => void;
-  onNewTab: () => void;
   onReloadActiveTab: () => void;
+  onNavigateActiveTab?: (input: string) => void;
   onToggleSearch: () => void;
   onToggleTheme: () => void;
   onSelectColorTheme: (themeId: ColorThemeId) => void;
   onDiscardAllBackgroundTabs?: () => void;
 }
 
+function formatDisplayUrl(rawUrl?: string): { display: string; isSecure: boolean; isInternal: boolean } {
+  if (!rawUrl || rawUrl === 'about:blank' || rawUrl.startsWith('chrome://newtab') || rawUrl.includes('/newtab.html')) {
+    return { display: 'Search or enter URL...', isSecure: false, isInternal: true };
+  }
+  if (rawUrl.startsWith('chrome://') || rawUrl.startsWith('chrome-extension://')) {
+    return { display: rawUrl, isSecure: false, isInternal: true };
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    const isSecure = parsed.protocol === 'https:';
+    let host = parsed.hostname;
+    if (host.startsWith('www.')) host = host.slice(4);
+    const path = parsed.pathname === '/' ? '' : parsed.pathname;
+    const search = parsed.search || '';
+    return {
+      display: `${host}${path}${search}`,
+      isSecure,
+      isInternal: false
+    };
+  } catch {
+    return { display: rawUrl, isSecure: false, isInternal: false };
+  }
+}
+
 export const Header: React.FC<HeaderProps> = ({
   allFolders,
   activeFolderIds,
   autoArchiveInterval,
+  activeTabUrl = '',
   isActiveTabLoading = false,
   isSearchOpen = false,
   theme,
@@ -59,17 +88,28 @@ export const Header: React.FC<HeaderProps> = ({
   onCreateFolder,
   onCreateBookmark,
   onSetAutoArchiveInterval,
-  onNewTab,
   onReloadActiveTab,
+  onNavigateActiveTab,
   onToggleSearch,
   onToggleTheme,
   onSelectColorTheme,
   onDiscardAllBackgroundTabs
 }) => {
   const [showSettings, setShowSettings] = useState(false);
-  const [showThemePicker, setShowThemePicker] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [areAllCollapsed, setAreAllCollapsed] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+
+  // URL Bar Inline Editing State
+  const [isEditingUrl, setIsEditingUrl] = useState(false);
+  const [urlInput, setUrlInput] = useState(activeTabUrl);
+  const urlInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isEditingUrl) {
+      setUrlInput(activeTabUrl);
+    }
+  }, [activeTabUrl, isEditingUrl]);
 
   // Add Item state
   const [addType, setAddType] = useState<'bookmark' | 'folder'>('bookmark');
@@ -81,6 +121,23 @@ export const Header: React.FC<HeaderProps> = ({
     const nextState = !areAllCollapsed;
     setAreAllCollapsed(nextState);
     onToggleAllCollapsed(nextState);
+  };
+
+  const handleCopyCurrentUrl = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!activeTabUrl) return;
+    navigator.clipboard.writeText(activeTabUrl);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 1500);
+  };
+
+  const handleUrlSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = urlInput.trim();
+    if (trimmed && onNavigateActiveTab) {
+      onNavigateActiveTab(trimmed);
+    }
+    setIsEditingUrl(false);
   };
 
   const handleQuickAdd = async (e: React.FormEvent) => {
@@ -103,6 +160,14 @@ export const Header: React.FC<HeaderProps> = ({
     setShowAddModal(false);
   };
 
+  const { display: displayUrl, isSecure, isInternal } = formatDisplayUrl(activeTabUrl);
+  const canCopyUrl = Boolean(
+    activeTabUrl &&
+      activeTabUrl !== 'about:blank' &&
+      !activeTabUrl.startsWith('chrome://newtab') &&
+      !activeTabUrl.includes('/newtab.html')
+  );
+
   return (
     <div
       style={{
@@ -111,43 +176,118 @@ export const Header: React.FC<HeaderProps> = ({
       }}
       className="relative flex flex-col w-full border-b backdrop-blur-md transition-colors duration-200"
     >
-      {/* Action Items Bar */}
-      <div className="flex items-center justify-between px-2.5 h-10">
-        {/* Left Action Items: Navigation & Primary Actions */}
-        <div className="flex items-center space-x-1">
-          {/* Quick New Tab */}
-          <button
-            type="button"
-            data-tooltip="Open New Tab (Cmd+T)"
-            data-tooltip-pos="bottom"
-            onClick={onNewTab}
-            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
+      {/* Top Address / URL Bar with Copy Link & Reload */}
+      <div className="px-2.5 pt-2 pb-1">
+        <div
+          className={`flex items-center h-8 px-2.5 rounded-xl border transition-all duration-150 ${
+            isEditingUrl
+              ? 'bg-white dark:bg-zinc-900 border-[var(--theme-accent)] shadow-sm'
+              : 'bg-black/[0.04] dark:bg-white/[0.05] hover:bg-black/[0.06] dark:hover:bg-white/[0.08] border-black/[0.06] dark:border-white/[0.07]'
+          }`}
+        >
+          {/* Protocol / Security Icon */}
+          <span className="flex-shrink-0 mr-2 text-zinc-400 dark:text-zinc-500">
+            {isInternal ? (
+              <Sparkles className="w-3.5 h-3.5 theme-accent-text" />
+            ) : isSecure ? (
+              <Lock className="w-3 h-3 text-emerald-500/80 dark:text-emerald-400/80" />
+            ) : (
+              <Globe className="w-3.5 h-3.5" />
+            )}
+          </span>
 
-          {/* Reload Active Tab */}
-          <button
-            type="button"
-            data-tooltip="Reload current page (Cmd+R)"
-            data-tooltip-pos="bottom"
-            onClick={onReloadActiveTab}
-            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors group"
-          >
-            <RotateCw
-              className={`w-4 h-4 transition-transform duration-300 ${
-                isActiveTabLoading
-                  ? 'animate-spin theme-accent-text'
-                  : 'group-active:rotate-180'
+          {/* URL Display or Editable Input */}
+          {isEditingUrl ? (
+            <form onSubmit={handleUrlSubmit} className="flex-1 min-w-0 mr-1">
+              <input
+                ref={urlInputRef}
+                type="text"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                onBlur={() => setIsEditingUrl(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setIsEditingUrl(false);
+                    setUrlInput(activeTabUrl);
+                  }
+                }}
+                placeholder="Search Google or enter URL..."
+                autoFocus
+                onFocus={(e) => e.target.select()}
+                className="w-full bg-transparent text-xs text-zinc-900 dark:text-white placeholder-zinc-400 focus:outline-none select-text"
+              />
+            </form>
+          ) : (
+            <button
+              type="button"
+              title={activeTabUrl ? `${activeTabUrl}\n(Click to edit URL)` : 'Click to enter URL or search'}
+              onClick={() => {
+                setUrlInput(canCopyUrl ? activeTabUrl : '');
+                setIsEditingUrl(true);
+              }}
+              className={`flex-1 min-w-0 text-left truncate text-xs mr-1.5 transition-colors ${
+                isInternal
+                  ? 'text-zinc-400 dark:text-zinc-500'
+                  : 'text-zinc-700 dark:text-zinc-200 font-medium'
               }`}
-            />
-          </button>
+            >
+              {displayUrl}
+            </button>
+          )}
 
+          {/* Right URL Bar Actions: Copy Link & Reload */}
+          <div className="flex items-center space-x-0.5 flex-shrink-0">
+            {/* Copy Current URL Button */}
+            <button
+              type="button"
+              disabled={!canCopyUrl}
+              data-tooltip={isCopied ? 'Copied URL!' : 'Copy URL'}
+              data-tooltip-pos="bottom-right"
+              onClick={handleCopyCurrentUrl}
+              className={`p-1 rounded-md transition-colors ${
+                !canCopyUrl
+                  ? 'opacity-30 cursor-not-allowed text-zinc-400'
+                  : isCopied
+                  ? 'text-emerald-500 bg-emerald-500/15'
+                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
+              }`}
+            >
+              {isCopied ? (
+                <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+              ) : (
+                <Link2 className="w-3.5 h-3.5" />
+              )}
+            </button>
+
+            {/* Reload Active Tab Button */}
+            <button
+              type="button"
+              data-tooltip="Reload (Cmd+R)"
+              data-tooltip-pos="bottom-right"
+              onClick={onReloadActiveTab}
+              className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors group"
+            >
+              <RotateCw
+                className={`w-3.5 h-3.5 transition-transform duration-300 ${
+                  isActiveTabLoading
+                    ? 'animate-spin theme-accent-text'
+                    : 'group-active:rotate-180'
+                }`}
+              />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Action Items Bar */}
+      <div className="flex items-center justify-between px-2.5 h-8 pb-1">
+        {/* Left Action Items: Search */}
+        <div className="flex items-center space-x-1">
           {/* Toggle Search */}
           <button
             type="button"
-            data-tooltip="Search bookmarks & tabs (Cmd+K)"
-            data-tooltip-pos="bottom"
+            data-tooltip="Search (Cmd+K)"
+            data-tooltip-pos="bottom-left"
             onClick={onToggleSearch}
             className={`p-1.5 rounded-md transition-colors ${
               isSearchOpen
@@ -159,61 +299,25 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </div>
 
-        {/* Right Action Items: Utilities & Settings */}
+        {/* Right Action Items: Collapse/Expand Folders & Settings */}
         <div className="flex items-center space-x-1">
           {/* Toggle Expand / Collapse All */}
           <button
             type="button"
-            data-tooltip={areAllCollapsed ? 'Expand all folders' : 'Collapse all folders'}
-            data-tooltip-pos="bottom"
+            data-tooltip={areAllCollapsed ? 'Expand folders' : 'Collapse folders'}
+            data-tooltip-pos="bottom-right"
             onClick={handleToggleExpandAll}
             className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
           >
             <ChevronsUpDown className="w-4 h-4" />
           </button>
 
-          {/* Theme Palette Switcher */}
-          <button
-            type="button"
-            data-tooltip="Color Theme"
-            data-tooltip-pos="bottom"
-            onClick={() => {
-              setShowThemePicker(!showThemePicker);
-              if (showSettings) setShowSettings(false);
-            }}
-            className={`p-1.5 rounded-md transition-colors ${
-              showThemePicker
-                ? 'theme-accent-text theme-accent-tint'
-                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
-            }`}
-          >
-            <Palette className="w-4 h-4" />
-          </button>
-
-          {/* Theme Mode Toggle (Dark / Light) */}
-          <button
-            type="button"
-            data-tooltip={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-            data-tooltip-pos="bottom"
-            onClick={onToggleTheme}
-            className="p-1.5 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-          >
-            {theme === 'dark' ? (
-              <Sun className="w-4 h-4 text-amber-300" />
-            ) : (
-              <Moon className="w-4 h-4 text-indigo-500" />
-            )}
-          </button>
-
           {/* Settings Dropdown Toggle */}
           <button
             type="button"
-            data-tooltip="Settings & Folders"
-            data-tooltip-pos="bottom"
-            onClick={() => {
-              setShowSettings(!showSettings);
-              if (showThemePicker) setShowThemePicker(false);
-            }}
+            data-tooltip="Settings & Appearance"
+            data-tooltip-pos="bottom-right"
+            onClick={() => setShowSettings(!showSettings)}
             className={`p-1.5 rounded-md transition-colors ${
               showSettings
                 ? 'theme-accent-text theme-accent-tint'
@@ -225,98 +329,6 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Color Themes Popover */}
-      {showThemePicker && (
-        <div
-          style={{
-            backgroundColor: 'var(--theme-header-bg)',
-            borderColor: 'var(--theme-border-subtle)'
-          }}
-          className="p-3 border-t text-zinc-800 dark:text-zinc-200 text-xs flex flex-col space-y-3 animate-in fade-in slide-in-from-top-1 duration-150 shadow-lg max-h-[380px] overflow-y-auto"
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
-              <Palette className="w-3.5 h-3.5 theme-accent-text" />
-              Arc Color Themes
-            </span>
-            <div className="flex items-center space-x-1 bg-black/5 dark:bg-white/5 p-0.5 rounded-lg border border-black/5 dark:border-white/5">
-              <button
-                type="button"
-                onClick={() => theme === 'light' && onToggleTheme()}
-                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
-                  theme === 'dark'
-                    ? 'bg-black/20 dark:bg-white/15 text-zinc-900 dark:text-white shadow-sm'
-                    : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400'
-                }`}
-              >
-                <Moon className="w-3 h-3 text-indigo-400" />
-                <span>Dark</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => theme === 'dark' && onToggleTheme()}
-                className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
-                  theme === 'light'
-                    ? 'bg-white dark:bg-white/20 text-zinc-900 dark:text-white shadow-sm'
-                    : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400'
-                }`}
-              >
-                <Sun className="w-3 h-3 text-amber-500" />
-                <span>Light</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-1.5">
-            {COLOR_THEMES.map((t) => {
-              const isSelected = colorTheme === t.id;
-              return (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => onSelectColorTheme(t.id)}
-                  className={`group relative flex items-center justify-between px-2.5 py-2 rounded-xl text-left transition-all duration-150 border ${
-                    isSelected
-                      ? 'theme-active-card font-medium text-zinc-900 dark:text-white'
-                      : 'border-black/5 dark:border-white/5 hover:border-black/15 dark:hover:border-white/15 bg-black/[0.02] dark:bg-white/[0.02] hover:bg-black/[0.05] dark:hover:bg-white/[0.05] text-zinc-700 dark:text-zinc-300'
-                  }`}
-                >
-                  <div className="flex items-center space-x-2.5 min-w-0 flex-1">
-                    {/* Swatch Pill with indicator dot */}
-                    <div
-                      style={{ background: t.swatchGradient }}
-                      className="w-7 h-7 rounded-lg shadow-sm flex items-center justify-center flex-shrink-0 border border-white/20 relative"
-                    >
-                      <span
-                        style={{ backgroundColor: t.indicatorColor }}
-                        className="w-2 h-2 rounded-full shadow-[0_0_4px_rgba(0,0,0,0.5)]"
-                      />
-                    </div>
-                    <div className="flex flex-col min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-xs font-semibold truncate">{t.name}</span>
-                        <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400 font-mono flex-shrink-0">
-                          {t.tag}
-                        </span>
-                      </div>
-                      <span className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate leading-snug">
-                        {t.description}
-                      </span>
-                    </div>
-                  </div>
-
-                  {isSelected && (
-                    <div className="w-4 h-4 rounded-full theme-accent-bg text-white dark:text-black flex items-center justify-center flex-shrink-0 shadow-sm ml-2">
-                      <Check className="w-2.5 h-2.5 stroke-[3]" />
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Settings Panel / Dropdown */}
       {showSettings && (
         <div
@@ -324,14 +336,43 @@ export const Header: React.FC<HeaderProps> = ({
             backgroundColor: 'var(--theme-header-bg)',
             borderColor: 'var(--theme-border-subtle)'
           }}
-          className="p-3 border-t text-zinc-800 dark:text-zinc-300 text-xs flex flex-col space-y-3 animate-in fade-in slide-in-from-top-1 duration-150 shadow-lg"
+          className="p-3 border-t text-zinc-800 dark:text-zinc-300 text-xs flex flex-col space-y-3 animate-in fade-in slide-in-from-top-1 duration-150 shadow-lg max-h-[420px] overflow-y-auto"
         >
-          {/* Color Themes Section in Settings */}
-          <div className="flex flex-col space-y-1.5">
-            <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
-              <Palette className="w-3.5 h-3.5 theme-accent-text" />
-              Theme & Appearance
-            </span>
+          {/* Color Themes & Dark/Light Mode Section in Settings */}
+          <div className="flex flex-col space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
+                <Palette className="w-3.5 h-3.5 theme-accent-text" />
+                Theme & Appearance
+              </span>
+              <div className="flex items-center space-x-1 bg-black/5 dark:bg-white/5 p-0.5 rounded-lg border border-black/5 dark:border-white/5">
+                <button
+                  type="button"
+                  onClick={() => theme === 'light' && onToggleTheme()}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                    theme === 'dark'
+                      ? 'bg-black/20 dark:bg-white/15 text-zinc-900 dark:text-white shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400'
+                  }`}
+                >
+                  <Moon className="w-3 h-3 text-indigo-400" />
+                  <span>Dark</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => theme === 'dark' && onToggleTheme()}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                    theme === 'light'
+                      ? 'bg-white dark:bg-white/20 text-zinc-900 dark:text-white shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400'
+                  }`}
+                >
+                  <Sun className="w-3 h-3 text-amber-500" />
+                  <span>Light</span>
+                </button>
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-1.5 pt-0.5">
               {COLOR_THEMES.map((t) => {
                 const isSelected = colorTheme === t.id;
@@ -392,10 +433,10 @@ export const Header: React.FC<HeaderProps> = ({
             </select>
           </div>
 
-          {/* Workspace Mapping Selector */}
+          {/* Active Space Folder Mapping Selector */}
           <div className="flex flex-col space-y-1">
             <label className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
-              Workspace Folder (Sidebar Tree)
+              Active Space Folder (Sidebar Tree)
             </label>
             <select
               value={activeFolderIds.workspaceId || ''}

@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 /* -------------------------------------------------------------
-   ARC-INSPIRED COLOR THEMES & CSS VARIABLES
+   ARCTIC SIDEBAR COLOR THEMES & CSS VARIABLES
    ------------------------------------------------------------- */
 
 :root {
@@ -344,8 +344,17 @@ html:not(.dark) body {
 }
 
 /* -------------------------------------------------------------
-   FAST HOVER TOOLTIPS (300ms delay, sleek Arc-inspired styling)
+   FAST HOVER TOOLTIPS (300ms delay, sleek Arctic styling)
    ------------------------------------------------------------- */
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
 
 [data-tooltip] {
   position: relative;
@@ -398,4 +407,28 @@ html:not(.dark) [data-tooltip]::before {
 
 [data-tooltip-pos="bottom"]:hover::before {
   transform: translateX(-50%) translateY(0);
+}
+
+/* Tooltip positioned below and aligned left (prevents clipping on left edge) */
+[data-tooltip-pos="bottom-left"]::before {
+  top: calc(100% + 6px);
+  left: 0;
+  right: auto;
+  transform: translateY(-3px);
+}
+
+[data-tooltip-pos="bottom-left"]:hover::before {
+  transform: translateY(0);
+}
+
+/* Tooltip positioned below and aligned right (prevents clipping on right edge) */
+[data-tooltip-pos="bottom-right"]::before {
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  transform: translateY(-3px);
+}
+
+[data-tooltip-pos="bottom-right"]:hover::before {
+  transform: translateY(0);
 }

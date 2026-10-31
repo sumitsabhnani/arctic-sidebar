@@ -11,9 +11,13 @@ import {
   Sparkles,
   Moon,
   RefreshCw,
-  Edit2
+  Edit2,
+  Volume2,
+  VolumeX,
+  ArrowRightLeft,
+  Folder
 } from 'lucide-react';
-import type { TabBinding } from '../../types';
+import type { TabBinding, SpaceItem } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -21,14 +25,19 @@ interface BookmarkRowProps {
   bookmark: chrome.bookmarks.BookmarkTreeNode;
   depth?: number;
   binding?: TabBinding;
+  boundTab?: chrome.tabs.Tab;
   isActive: boolean;
   isDiscarded?: boolean;
+  spaces?: SpaceItem[];
+  activeSpaceId?: string;
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onFaviconDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
+  onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
+  onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
   onRenameBookmark?: (id: string, title: string) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
@@ -42,14 +51,19 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   bookmark,
   depth = 0,
   binding,
+  boundTab,
   isActive,
   isDiscarded = false,
+  spaces = [],
+  activeSpaceId,
   onRowClick,
   onFaviconClick,
   onFaviconDoubleClick,
   onCloseTab,
   onReloadTab,
   onDiscardTab,
+  onToggleMuteTab,
+  onMoveToSpace,
   onRenameBookmark,
   onReplaceUrl,
   onOpenContextMenu,
@@ -62,12 +76,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
-  const [isCopied, setIsCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(bookmark.title || '');
 
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
+  const isAudible = Boolean(boundTab?.audible);
+  const isMuted = Boolean(boundTab?.mutedInfo?.muted);
   const titleText = bookmark.title || bookmark.url || 'Untitled Bookmark';
 
   let tooltip = titleText;
@@ -82,14 +97,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
 
   const faviconSrc = bookmark.url ? getFaviconUrl(bookmark.url, 32) : '';
 
-  const handleCopyLink = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (bookmark.url) {
-      navigator.clipboard.writeText(bookmark.url);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 1500);
-    }
-  };
+  const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!onOpenContextMenu) return;
@@ -103,6 +111,28 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
         }
       },
+      ...(isRunning && binding && onReloadTab
+        ? [
+            {
+              label: 'Reload Tab',
+              icon: <RotateCw className="w-3.5 h-3.5" />,
+              action: () => onReloadTab(binding.tabId)
+            }
+          ]
+        : []),
+      ...(isRunning && binding && onToggleMuteTab
+        ? [
+            {
+              label: isMuted ? 'Unmute Tab' : 'Mute Tab',
+              icon: isMuted ? (
+                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+              ) : (
+                <VolumeX className="w-3.5 h-3.5" />
+              ),
+              action: () => onToggleMuteTab(binding.tabId)
+            }
+          ]
+        : []),
       ...(onReplaceUrl && bookmark.url
         ? [
             {
@@ -130,6 +160,19 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               label: 'Pin to Quick Access',
               icon: <Sparkles className="w-3.5 h-3.5 text-cyan-400" />,
               action: () => onMoveToQuickAccess(bookmark)
+            }
+          ]
+        : []),
+      ...(onMoveToSpace && otherSpaces.length > 0
+        ? [
+            {
+              label: 'Move to Space',
+              icon: <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />,
+              submenu: otherSpaces.map((sp) => ({
+                label: sp.name,
+                icon: <Folder className="w-3.5 h-3.5 text-amber-400" />,
+                action: () => onMoveToSpace(bookmark.id, sp.folderId)
+              }))
             }
           ]
         : []),
@@ -406,36 +449,28 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         </span>
       </div>
 
-      {/* Right: Actions on hover & Status Indicator */}
+      {/* Right: Audio Mute Indicator, Split View, Copy Link, Reload, & Status */}
       <div className="flex items-center space-x-1 flex-shrink-0 ml-1">
-        {/* Copy Link Button on hover */}
-        {bookmark.url && (
+        {/* Quick Audio Mute Indicator on Pinned Bookmark Tab */}
+        {isRunning && binding && (isAudible || isMuted) && (
           <button
             type="button"
-            data-tooltip={isCopied ? 'Copied link!' : 'Copy link'}
-            onClick={handleCopyLink}
-            className={`hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full transition-all duration-100 ${
-              isCopied
-                ? 'text-emerald-500 bg-emerald-500/15 dark:bg-emerald-500/25'
-                : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20'
-            }`}
-          >
-            {isCopied ? <Check className="w-3 h-3 stroke-[2.5]" /> : <Link2 className="w-3.5 h-3.5 stroke-[2]" />}
-          </button>
-        )}
-
-        {/* Reload button for active tab on hover */}
-        {isActive && onReloadTab && binding && (
-          <button
-            type="button"
-            data-tooltip="Reload this page (Cmd+R)"
+            title={isMuted ? 'Tab is muted (Click to unmute)' : 'Tab is playing audio (Click to mute)'}
             onClick={(e) => {
               e.stopPropagation();
-              onReloadTab(binding.tabId);
+              onToggleMuteTab?.(binding.tabId);
             }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20 transition-all duration-100"
+            className={`flex items-center justify-center w-5 h-5 rounded-full transition-colors ${
+              isMuted
+                ? 'text-rose-500 dark:text-rose-400 bg-rose-500/15 hover:bg-rose-500/25'
+                : 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/15 hover:bg-cyan-500/25'
+            }`}
           >
-            <RotateCw className="w-3 h-3" />
+            {isMuted ? (
+              <VolumeX className="w-3 h-3 stroke-[2.5]" />
+            ) : (
+              <Volume2 className="w-3 h-3 stroke-[2.5] animate-pulse" />
+            )}
           </button>
         )}
 

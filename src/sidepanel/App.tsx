@@ -7,9 +7,10 @@ import { QuickAccessGrid } from './components/QuickAccessGrid';
 import { FolderNode } from './components/FolderNode';
 import { BookmarkRow } from './components/BookmarkRow';
 import { OpenTabsSection } from './components/OpenTabsSection';
+import { SpacesSwitcher } from './components/SpacesSwitcher';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
-import { Bookmark, Loader2, FolderPlus, BookmarkPlus, Folder, Check, X, ChevronDown } from 'lucide-react';
+import { Loader2, FolderPlus, BookmarkPlus, Folder, Check, X } from 'lucide-react';
 
 export const App: React.FC = () => {
   const {
@@ -19,6 +20,13 @@ export const App: React.FC = () => {
     collapsedFolderIds,
     toggleFolderCollapse,
     setAllFoldersCollapsed,
+    spaces,
+    activeSpaceId,
+    selectSpace,
+    createSpace,
+    renameSpace,
+    deleteSpace,
+    moveNodeToSpace,
     activeFolderIds,
     setQuickAccessFolderId,
     setWorkspaceFolderId,
@@ -34,6 +42,7 @@ export const App: React.FC = () => {
   const {
     bindingsByBookmarkId,
     bookmarkIdByTabId,
+    tabsByTabId,
     activeTabId,
     unpinnedTabs,
     createNewTab,
@@ -49,6 +58,8 @@ export const App: React.FC = () => {
     reloadTab,
     reloadActiveTab,
     isActiveTabLoading,
+    activeTabUrl,
+    navigateActiveTab,
     discardTab,
     discardAllBackgroundTabs,
     discardedTabsByTabId,
@@ -145,11 +156,11 @@ export const App: React.FC = () => {
     items: ContextMenuItem[];
   } | null>(null);
 
-  // Inline Root Folder Creation in Workspace
+  // Inline Root Folder Creation in active Space / Home
   const [isCreatingRootFolder, setIsCreatingRootFolder] = useState(false);
   const [rootFolderTitle, setRootFolderTitle] = useState('');
 
-  // Inline Workspace Root Folder Renaming
+  // Inline Space / Home Root Folder Renaming
   const [isRenamingWorkspace, setIsRenamingWorkspace] = useState(false);
   const [workspaceRenameTitle, setWorkspaceRenameTitle] = useState('');
 
@@ -201,6 +212,12 @@ export const App: React.FC = () => {
   const handlePinTabToWorkspace = async (tab: chrome.tabs.Tab) => {
     if (activeFolderIds.workspaceId) {
       await pinTab(tab, activeFolderIds.workspaceId);
+    }
+  };
+
+  const handlePinTabToSpace = async (tab: chrome.tabs.Tab, targetSpaceFolderId: string) => {
+    if (targetSpaceFolderId) {
+      await pinTab(tab, targetSpaceFolderId);
     }
   };
 
@@ -286,7 +303,7 @@ export const App: React.FC = () => {
   );
 
   /**
-   * Handle drop of items (unpinned tab or bookmark) onto a folder, bookmark, or workspace
+   * Handle drop of items (unpinned tab, bookmark, or folder) onto a folder, bookmark, or space
    */
   const handleDropItemToFolder = useCallback(
     async (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => {
@@ -298,7 +315,8 @@ export const App: React.FC = () => {
           windowId: 0
         };
         await pinTab(tab as chrome.tabs.Tab, targetFolderId, targetIndex);
-      } else if (data.type === 'bookmark' && typeof data.id === 'string') {
+      } else if ((data.type === 'bookmark' || data.type === 'folder') && typeof data.id === 'string') {
+        if (data.id === targetFolderId) return;
         await chrome.bookmarks.move(data.id, {
           parentId: targetFolderId,
           ...(typeof targetIndex === 'number' ? { index: targetIndex } : {})
@@ -404,6 +422,12 @@ export const App: React.FC = () => {
     filteredWorkspace.length +
     filteredUnpinnedTabs.length;
 
+  const activeSpaceObj = spaces.find((s) => s.id === activeSpaceId);
+  const spaceDisplayTitle =
+    activeSpaceObj?.name ||
+    (workspaceNode?.title?.toLowerCase() === 'workspace' ? 'Home' : workspaceNode?.title) ||
+    'Home';
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-[#f8f9fa] dark:bg-[#121214] text-zinc-500 dark:text-zinc-400">
@@ -413,18 +437,17 @@ export const App: React.FC = () => {
     );
   }
 
-  const runningTabCount = Object.keys(bindingsByBookmarkId).length;
-
   return (
     <div
       style={{ background: 'var(--theme-bg-gradient)' }}
       className="flex flex-col h-screen w-full text-zinc-800 dark:text-zinc-100 select-none overflow-hidden font-sans transition-colors duration-200"
     >
-      {/* Header with Settings, Actions, Search, New Tab & Theme */}
+      {/* Header with Settings, Actions, Search, Split View, New Tab & Theme */}
       <Header
         allFolders={allFolders}
         activeFolderIds={activeFolderIds}
         autoArchiveInterval={autoArchiveInterval}
+        activeTabUrl={activeTabUrl}
         isActiveTabLoading={isActiveTabLoading}
         isSearchOpen={isSearchOpen}
         theme={theme}
@@ -436,8 +459,8 @@ export const App: React.FC = () => {
         onCreateFolder={createFolder}
         onCreateBookmark={createBookmark}
         onSetAutoArchiveInterval={setAutoArchiveInterval}
-        onNewTab={() => createNewTab()}
         onReloadActiveTab={reloadActiveTab}
+        onNavigateActiveTab={navigateActiveTab}
         onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
         onToggleTheme={toggleTheme}
         onSelectColorTheme={handleSelectColorTheme}
@@ -465,11 +488,13 @@ export const App: React.FC = () => {
             <QuickAccessGrid
               bookmarks={filteredQuickAccess}
               bindingsByBookmarkId={bindingsByBookmarkId}
+              tabsByTabId={tabsByTabId}
               activeTabId={activeTabId}
               onTileClick={handleQuickAccessClick}
               onTileDoubleClick={handleFaviconDoubleClick}
               onOpenContextMenu={handleOpenContextMenu}
               onCloseTab={handleCloseTab}
+              onToggleMuteTab={toggleMuteTab}
               onMoveToWorkspace={handleMoveBookmarkToWorkspace}
               onReplaceUrl={handleReplaceBookmarkUrl}
               onRenameBookmark={renameBookmarkOrFolder}
@@ -479,7 +504,7 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {/* Section 2: Workspace Vertical Tabs Tree (Permanent Bookmarks & Folders) */}
+        {/* Section 2: Active Space / Home Vertical Tabs Tree (Permanent Bookmarks & Folders) */}
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -499,11 +524,12 @@ export const App: React.FC = () => {
               }
             }
           }}
-          className={`flex flex-col space-y-1 rounded-xl transition-colors ${
+          className={`flex flex-col space-y-1.5 rounded-xl transition-colors ${
             isWorkspaceDragOver ? 'theme-drag-over-inside' : ''
           }`}
         >
-          <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
+          {/* Prominent Space / Home Title Header (larger than tabs/folders, no left icon, no dropdown arrow) */}
+          <div className="flex items-center justify-between px-2 pt-1.5 pb-1">
             {isRenamingWorkspace ? (
               <form
                 onSubmit={(e) => {
@@ -530,49 +556,37 @@ export const App: React.FC = () => {
                   }}
                   autoFocus
                   onFocus={(e) => e.target.select()}
-                  className="bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-1.5 py-0.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
+                  className="bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-2 py-0.5 text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none"
                 />
               </form>
             ) : (
-              <button
-                type="button"
-                onClick={() => toggleSectionCollapse('workspace')}
-                className="flex items-center space-x-1 text-left group cursor-pointer"
+              <span
+                title="Double-click to rename space"
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  if (workspaceNode) {
+                    setWorkspaceRenameTitle(spaceDisplayTitle);
+                    setIsRenamingWorkspace(true);
+                  }
+                }}
+                className="text-[15.5px] font-bold tracking-tight text-zinc-900 dark:text-zinc-100 cursor-text select-text"
               >
-                <ChevronDown
-                  className={`w-3 h-3 text-zinc-400 dark:text-zinc-500 transition-transform duration-150 ${
-                    collapsedSections.workspace ? '-rotate-90' : 'rotate-0'
-                  }`}
-                />
-                <span
-                  title="Double-click to rename workspace folder"
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    if (workspaceNode) {
-                      setWorkspaceRenameTitle(workspaceNode.title || 'Workspace');
-                      setIsRenamingWorkspace(true);
-                    }
-                  }}
-                  className="text-xs font-semibold text-zinc-700 dark:text-zinc-300 flex items-center gap-1 group-hover:text-zinc-900 dark:group-hover:text-zinc-100 cursor-text select-text"
-                >
-                  <Bookmark className="w-2.5 h-2.5 text-amber-500 dark:text-amber-400/80" />
-                  {workspaceNode?.title || 'Workspace'}
-                </span>
-              </button>
+                {spaceDisplayTitle}
+              </span>
             )}
 
             {/* Folder creation and Quick Bookmark action */}
             <div className="flex items-center space-x-1">
-              {/* Quick Bookmark Current Page in Workspace Root */}
+              {/* Quick Bookmark Current Page in Space Root */}
               {activeFolderIds.workspaceId && (
                 <button
                   type="button"
-                  title="Bookmark current page in Workspace"
+                  title={`Bookmark current page in ${spaceDisplayTitle}`}
                   onClick={() =>
                     activeFolderIds.workspaceId &&
                     handleBookmarkCurrentPage(activeFolderIds.workspaceId)
                   }
-                  className="p-1 rounded text-zinc-500 dark:text-zinc-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                  className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
                 >
                   <BookmarkPlus className="w-3.5 h-3.5" />
                 </button>
@@ -581,156 +595,163 @@ export const App: React.FC = () => {
               {/* New Folder Button */}
               <button
                 type="button"
-                title="Create New Folder in Workspace"
-                onClick={() => {
-                  if (collapsedSections.workspace) {
-                    toggleSectionCollapse('workspace');
-                  }
-                  setIsCreatingRootFolder(true);
-                }}
-                className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-600 dark:text-zinc-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors font-medium"
+                title={`Create New Folder in ${spaceDisplayTitle}`}
+                onClick={() => setIsCreatingRootFolder(true)}
+                className="flex items-center space-x-1 px-1.5 py-0.5 rounded-md text-[10.5px] text-zinc-600 dark:text-zinc-400 hover:text-amber-600 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors font-medium"
               >
                 <FolderPlus className="w-3 h-3 text-amber-500 dark:text-amber-400" />
                 <span>New Folder</span>
               </button>
 
-              <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">
-                {filteredWorkspace.length} items
+              <span className="text-[10.5px] text-zinc-400 dark:text-zinc-500 font-mono pl-0.5">
+                {filteredWorkspace.length}
               </span>
             </div>
           </div>
 
           {/* Render Vertical Tree */}
-          {!collapsedSections.workspace && (
-            <div className="flex flex-col -mx-1 animate-in fade-in duration-100">
-              {/* Inline New Folder Input Row */}
-              {isCreatingRootFolder && (
-                <form
-                  onSubmit={handleConfirmCreateRootFolder}
-                  className="flex items-center h-[32px] px-2 my-1 space-x-1.5 bg-black/[0.03] dark:bg-white/[0.04] rounded-lg border border-cyan-500/40 animate-in fade-in slide-in-from-top-1 duration-100"
-                >
-                  <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
-                  <input
-                    type="text"
-                    value={rootFolderTitle}
-                    onChange={(e) => setRootFolderTitle(e.target.value)}
-                    placeholder="New folder name..."
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') {
-                        setIsCreatingRootFolder(false);
-                        setRootFolderTitle('');
-                      }
-                    }}
-                    autoFocus
-                    className="flex-1 bg-white dark:bg-zinc-800 border border-black/10 dark:border-white/10 rounded px-2 py-0.5 text-xs text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-cyan-400"
-                  />
-                  <button
-                    type="submit"
-                    title="Create Folder"
-                    className="p-1 rounded text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
-                  >
-                    <Check className="w-3 h-3" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Cancel"
-                    onClick={() => {
+          <div className="flex flex-col -mx-1 animate-in fade-in duration-100">
+            {/* Inline New Folder Input Row */}
+            {isCreatingRootFolder && (
+              <form
+                onSubmit={handleConfirmCreateRootFolder}
+                className="flex items-center h-[32px] px-2 my-1 space-x-1.5 bg-black/[0.03] dark:bg-white/[0.04] rounded-lg border border-cyan-500/40 animate-in fade-in slide-in-from-top-1 duration-100"
+              >
+                <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
+                <input
+                  type="text"
+                  value={rootFolderTitle}
+                  onChange={(e) => setRootFolderTitle(e.target.value)}
+                  placeholder="New folder name..."
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
                       setIsCreatingRootFolder(false);
                       setRootFolderTitle('');
-                    }}
-                    className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-white"
+                    }
+                  }}
+                  autoFocus
+                  className="flex-1 bg-white dark:bg-zinc-800 border border-black/10 dark:border-white/10 rounded px-2 py-0.5 text-xs text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none focus:border-cyan-400"
+                />
+                <button
+                  type="submit"
+                  title="Create Folder"
+                  className="p-1 rounded text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20"
+                >
+                  <Check className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  title="Cancel"
+                  onClick={() => {
+                    setIsCreatingRootFolder(false);
+                    setRootFolderTitle('');
+                  }}
+                  className="p-1 rounded text-zinc-400 hover:text-zinc-700 dark:hover:text-white"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </form>
+            )}
+
+            {filteredWorkspace.length === 0 && !isCreatingRootFolder ? (
+              <div className="px-3 py-4 text-center text-zinc-500 rounded-xl border border-dashed border-black/10 dark:border-white/5 bg-black/[0.01] dark:bg-white/[0.01]">
+                <p className="text-xs">
+                  {queryLower
+                    ? 'No matching bookmarks found.'
+                    : `No tabs or folders in ${spaceDisplayTitle} yet.`}
+                </p>
+                {!queryLower && (
+                  <button
+                    type="button"
+                    onClick={() => setIsCreatingRootFolder(true)}
+                    className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs text-amber-600 dark:text-amber-300 font-medium transition-colors"
                   >
-                    <X className="w-3 h-3" />
+                    <FolderPlus className="w-3 h-3" />
+                    <span>+ Create a Folder</span>
                   </button>
-                </form>
-              )}
-
-              {filteredWorkspace.length === 0 && !isCreatingRootFolder ? (
-                <div className="px-3 py-4 text-center text-zinc-500 rounded-lg border border-dashed border-black/10 dark:border-white/5 bg-black/[0.01] dark:bg-white/[0.01]">
-                  <p className="text-xs">
-                    {queryLower ? 'No matching bookmarks found.' : 'This workspace folder is empty.'}
-                  </p>
-                  {!queryLower && (
-                    <button
-                      type="button"
-                      onClick={() => setIsCreatingRootFolder(true)}
-                      className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs text-amber-600 dark:text-amber-300 font-medium transition-colors"
-                    >
-                      <FolderPlus className="w-3 h-3" />
-                      <span>+ Create a Folder</span>
-                    </button>
-                  )}
-                </div>
-              ) : (
-                filteredWorkspace.map((child) => {
-                  if (!child.url) {
-                    return (
-                      <FolderNode
-                        key={child.id}
-                        node={child}
-                        depth={0}
-                        collapsedFolderIds={collapsedFolderIds}
-                        onToggleCollapse={toggleFolderCollapse}
-                        bindingsByBookmarkId={bindingsByBookmarkId}
-                        discardedTabsByTabId={discardedTabsByTabId}
-                        activeTabId={activeTabId}
-                        onRowClick={handleRowClick}
-                        onFaviconClick={handleFaviconClick}
-                        onFaviconDoubleClick={handleFaviconDoubleClick}
-                        onCloseTab={handleCloseTab}
-                        onReloadTab={reloadTab}
-                        onDiscardTab={discardTab}
-                        onReplaceUrl={handleReplaceBookmarkUrl}
-                        onCreateFolder={createFolder}
-                        onBookmarkCurrentPage={handleBookmarkCurrentPage}
-                        onRenameFolder={renameBookmarkOrFolder}
-                        onRenameBookmark={renameBookmarkOrFolder}
-                        onOpenContextMenu={handleOpenContextMenu}
-                        onDeleteBookmark={removeBookmarkOrFolder}
-                        onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
-                        onDropItemToFolder={handleDropItemToFolder}
-                        onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
-                      />
-                    );
-                  }
-
-                  const binding = bindingsByBookmarkId[child.id];
-                  const isActive = Boolean(binding && binding.tabId === activeTabId);
-                  const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
-
+                )}
+              </div>
+            ) : (
+              filteredWorkspace.map((child) => {
+                if (!child.url) {
                   return (
-                    <BookmarkRow
+                    <FolderNode
                       key={child.id}
-                      bookmark={child}
+                      node={child}
                       depth={0}
-                      binding={binding}
-                      isActive={isActive}
-                      isDiscarded={isDiscarded}
+                      collapsedFolderIds={collapsedFolderIds}
+                      onToggleCollapse={toggleFolderCollapse}
+                      bindingsByBookmarkId={bindingsByBookmarkId}
+                      tabsByTabId={tabsByTabId}
+                      discardedTabsByTabId={discardedTabsByTabId}
+                      activeTabId={activeTabId}
+                      spaces={spaces}
+                      activeSpaceId={activeSpaceId}
                       onRowClick={handleRowClick}
                       onFaviconClick={handleFaviconClick}
                       onFaviconDoubleClick={handleFaviconDoubleClick}
                       onCloseTab={handleCloseTab}
                       onReloadTab={reloadTab}
                       onDiscardTab={discardTab}
+                      onToggleMuteTab={toggleMuteTab}
+                      onMoveToSpace={moveNodeToSpace}
                       onReplaceUrl={handleReplaceBookmarkUrl}
+                      onCreateFolder={createFolder}
+                      onBookmarkCurrentPage={handleBookmarkCurrentPage}
+                      onRenameFolder={renameBookmarkOrFolder}
                       onRenameBookmark={renameBookmarkOrFolder}
                       onOpenContextMenu={handleOpenContextMenu}
                       onDeleteBookmark={removeBookmarkOrFolder}
                       onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
-                      onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
                       onDropItemToFolder={handleDropItemToFolder}
+                      onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
                     />
                   );
-                })
-              )}
-            </div>
-          )}
+                }
+
+                const binding = bindingsByBookmarkId[child.id];
+                const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
+                const isActive = Boolean(binding && binding.tabId === activeTabId);
+                const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
+
+                return (
+                  <BookmarkRow
+                    key={child.id}
+                    bookmark={child}
+                    depth={0}
+                    binding={binding}
+                    boundTab={boundTab}
+                    isActive={isActive}
+                    isDiscarded={isDiscarded}
+                    spaces={spaces}
+                    activeSpaceId={activeSpaceId}
+                    onRowClick={handleRowClick}
+                    onFaviconClick={handleFaviconClick}
+                    onFaviconDoubleClick={handleFaviconDoubleClick}
+                    onCloseTab={handleCloseTab}
+                    onReloadTab={reloadTab}
+                    onDiscardTab={discardTab}
+                    onToggleMuteTab={toggleMuteTab}
+                    onMoveToSpace={moveNodeToSpace}
+                    onReplaceUrl={handleReplaceBookmarkUrl}
+                    onRenameBookmark={renameBookmarkOrFolder}
+                    onOpenContextMenu={handleOpenContextMenu}
+                    onDeleteBookmark={removeBookmarkOrFolder}
+                    onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
+                    onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
+                    onDropItemToFolder={handleDropItemToFolder}
+                  />
+                );
+              })
+            )}
+          </div>
         </div>
 
         {/* Section 3: Today's Tabs / Open Tabs (Ephemeral Unpinned Tabs) */}
         <OpenTabsSection
           unpinnedTabs={filteredUnpinnedTabs}
           activeTabId={activeTabId}
+          spaces={spaces}
           isCollapsed={collapsedSections.todayTabs}
           onToggleCollapse={() => toggleSectionCollapse('todayTabs')}
           onFocusTab={focusTab}
@@ -739,6 +760,7 @@ export const App: React.FC = () => {
           onNewTab={() => createNewTab()}
           onPinToQuickAccess={handlePinTabToQuickAccess}
           onPinToWorkspace={handlePinTabToWorkspace}
+          onPinToSpace={handlePinTabToSpace}
           onDuplicateTab={duplicateTab}
           onReloadTab={reloadTab}
           onDiscardTab={discardTab}
@@ -759,22 +781,17 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Footer Info Bar */}
-      <div className="flex items-center justify-between px-3 h-7 border-t border-black/[0.06] dark:border-white/[0.06] bg-[#f0f2f5] dark:bg-[#141416] text-[11px] text-zinc-500">
-        <div className="flex items-center space-x-2">
-          <div className="flex items-center space-x-1">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                runningTabCount > 0 ? 'bg-emerald-500 dark:bg-emerald-400 shadow-[0_0_4px_rgba(52,211,153,0.6)]' : 'bg-zinc-400 dark:bg-zinc-600'
-              }`}
-            />
-            <span>{runningTabCount} bound</span>
-          </div>
-          <span className="text-zinc-400 dark:text-zinc-600">•</span>
-          <span>{unpinnedTabs.length} open</span>
-        </div>
-        <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">v2.1.0</span>
-      </div>
+      {/* Bottom Multiple Spaces Switcher Dock */}
+      <SpacesSwitcher
+        spaces={spaces}
+        activeSpaceId={activeSpaceId}
+        onSelectSpace={selectSpace}
+        onCreateSpace={createSpace}
+        onRenameSpace={renameSpace}
+        onDeleteSpace={deleteSpace}
+        onDropItemToSpace={(data, targetFolderId) => handleDropItemToFolder(data, targetFolderId)}
+        onOpenContextMenu={handleOpenContextMenu}
+      />
     </div>
   );
 };

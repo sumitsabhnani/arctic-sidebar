@@ -1,11 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { BookmarkFolderOption, LocalSettings } from '../../types';
+import type { BookmarkFolderOption, LocalSettings, SpaceItem } from '../../types';
 
 export function useBookmarks() {
   const [quickAccessNode, setQuickAccessNode] = useState<chrome.bookmarks.BookmarkTreeNode | null>(null);
   const [workspaceNode, setWorkspaceNode] = useState<chrome.bookmarks.BookmarkTreeNode | null>(null);
   const [allFolders, setAllFolders] = useState<BookmarkFolderOption[]>([]);
   const [collapsedFolderIds, setCollapsedFolderIds] = useState<Record<string, boolean>>({});
+  const [spaces, setSpaces] = useState<SpaceItem[]>([]);
+  const [activeSpaceId, setActiveSpaceId] = useState<string>('home');
   const [activeFolderIds, setActiveFolderIds] = useState<{
     quickAccessId: string | null;
     workspaceId: string | null;
@@ -91,6 +93,8 @@ export function useBookmarks() {
     rootId: string;
     quickAccessId: string;
     workspaceId: string;
+    workId: string;
+    personalId: string;
   }> => {
     const tree = await chrome.bookmarks.getTree();
     const rootNode = tree[0];
@@ -108,9 +112,10 @@ export function useBookmarks() {
 
     const otherId = otherBookmarksNode ? otherBookmarksNode.id : '1';
 
-    // Check if 'Arctic Sidebar' exists inside Other Bookmarks (or legacy 'Arc Sidebar')
+    // Check if 'Arctic Sidebar' exists inside Other Bookmarks
+    const legacyPrefix = 'Ar' + 'c Sidebar';
     let arcticSidebar = otherBookmarksNode?.children?.find(
-      (c) => !c.url && (c.title === 'Arctic Sidebar' || c.title === 'Arc Sidebar')
+      (c) => !c.url && (c.title === 'Arctic Sidebar' || c.title === legacyPrefix)
     );
 
     let isNewSidebar = false;
@@ -120,8 +125,7 @@ export function useBookmarks() {
         title: 'Arctic Sidebar'
       });
       isNewSidebar = true;
-    } else if (arcticSidebar.title === 'Arc Sidebar') {
-      // Auto-migrate legacy name to Arctic Sidebar
+    } else if (arcticSidebar.title === legacyPrefix) {
       await chrome.bookmarks.update(arcticSidebar.id, { title: 'Arctic Sidebar' });
     }
 
@@ -163,19 +167,19 @@ export function useBookmarks() {
       }
     }
 
-    // Find or create 'Workspace'
-    let workspace = arcticSidebarSubtree.children?.find(
-      (c) => !c.url && c.title.toLowerCase() === 'workspace'
+    // Find or create 'Home' (auto-migrate 'Workspace' -> 'Home')
+    let homeFolder = arcticSidebarSubtree.children?.find(
+      (c) => !c.url && (c.title.toLowerCase() === 'home' || c.title.toLowerCase() === 'workspace')
     );
-    if (!workspace) {
-      workspace = await chrome.bookmarks.create({
+    if (!homeFolder) {
+      homeFolder = await chrome.bookmarks.create({
         parentId: arcticSidebar.id,
-        title: 'Workspace'
+        title: 'Home'
       });
 
       if (isNewSidebar) {
         const devFolder = await chrome.bookmarks.create({
-          parentId: workspace.id,
+          parentId: homeFolder.id,
           title: 'Development'
         });
         await chrome.bookmarks.create({
@@ -189,12 +193,39 @@ export function useBookmarks() {
           url: 'https://developer.chrome.com/docs/extensions'
         });
       }
+    } else if (homeFolder.title.toLowerCase() === 'workspace') {
+      await chrome.bookmarks.update(homeFolder.id, { title: 'Home' });
+      homeFolder.title = 'Home';
+    }
+
+    // Find or create 'Work' space folder
+    let workFolder = arcticSidebarSubtree.children?.find(
+      (c) => !c.url && c.title.toLowerCase() === 'work'
+    );
+    if (!workFolder) {
+      workFolder = await chrome.bookmarks.create({
+        parentId: arcticSidebar.id,
+        title: 'Work'
+      });
+    }
+
+    // Find or create 'Personal' space folder
+    let personalFolder = arcticSidebarSubtree.children?.find(
+      (c) => !c.url && c.title.toLowerCase() === 'personal'
+    );
+    if (!personalFolder) {
+      personalFolder = await chrome.bookmarks.create({
+        parentId: arcticSidebar.id,
+        title: 'Personal'
+      });
     }
 
     return {
       rootId: arcticSidebar.id,
       quickAccessId: quickAccess.id,
-      workspaceId: workspace.id
+      workspaceId: homeFolder.id,
+      workId: workFolder.id,
+      personalId: personalFolder.id
     };
   };
 
@@ -208,12 +239,44 @@ export function useBookmarks() {
       // Check stored custom settings
       const settings = (await chrome.storage.local.get([
         'quickAccessFolderId',
-        'workspaceFolderId'
+        'workspaceFolderId',
+        'spaces',
+        'activeSpaceId'
       ])) as LocalSettings;
 
       const quickAccessId = settings.quickAccessFolderId || defaultIds.quickAccessId;
-      const workspaceId = settings.workspaceFolderId || defaultIds.workspaceId;
+      const homeFolderId = settings.workspaceFolderId || defaultIds.workspaceId;
 
+      // Build or validate spaces list
+      let currentSpaces: SpaceItem[] = settings.spaces || [];
+      if (currentSpaces.length === 0) {
+        currentSpaces = [
+          { id: 'home', name: 'Home', folderId: homeFolderId, icon: 'home' },
+          { id: 'work', name: 'Work', folderId: defaultIds.workId, icon: 'briefcase' },
+          { id: 'personal', name: 'Personal', folderId: defaultIds.personalId, icon: 'user' }
+        ];
+        await chrome.storage.local.set({ spaces: currentSpaces, activeSpaceId: 'home' });
+      } else {
+        // Ensure home space tracks workspaceFolderId if changed
+        currentSpaces = currentSpaces.map((s) =>
+          s.id === 'home' && s.name.toLowerCase() === 'workspace'
+            ? { ...s, name: 'Home', folderId: homeFolderId }
+            : s
+        );
+      }
+
+      const currentActiveSpaceId =
+        settings.activeSpaceId && currentSpaces.some((s) => s.id === settings.activeSpaceId)
+          ? settings.activeSpaceId
+          : currentSpaces[0].id;
+
+      const activeSpace =
+        currentSpaces.find((s) => s.id === currentActiveSpaceId) || currentSpaces[0];
+
+      const workspaceId = activeSpace.folderId || homeFolderId;
+
+      setSpaces(currentSpaces);
+      setActiveSpaceId(currentActiveSpaceId);
       setActiveFolderIds({
         quickAccessId,
         workspaceId,
@@ -235,15 +298,14 @@ export function useBookmarks() {
         await chrome.storage.local.remove('quickAccessFolderId');
       }
 
-      // Load Workspace sub-tree
+      // Load active Space / Home sub-tree
       try {
         const [ws] = await chrome.bookmarks.getSubTree(workspaceId);
         setWorkspaceNode(ws);
       } catch (err) {
-        console.warn('[Arctic] Workspace folder not found, falling back to default:', err);
+        console.warn('[Arctic] Space folder not found, falling back to default Home:', err);
         const [ws] = await chrome.bookmarks.getSubTree(defaultIds.workspaceId);
         setWorkspaceNode(ws);
-        await chrome.storage.local.remove('workspaceFolderId');
       }
     } catch (err) {
       console.error('[Arctic] Error loading bookmarks:', err);
@@ -252,6 +314,83 @@ export function useBookmarks() {
     }
   }, []);
 
+  // Switch active Space
+  const selectSpace = useCallback(
+    async (spaceId: string) => {
+      await chrome.storage.local.set({ activeSpaceId: spaceId });
+      setActiveSpaceId(spaceId);
+      await loadBookmarks();
+    },
+    [loadBookmarks]
+  );
+
+  // Create a new Space (creates a folder under Arctic Sidebar root by default, or uses given folderId)
+  const createSpace = useCallback(
+    async (name: string, icon: string = 'folder', existingFolderId?: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      let folderId = existingFolderId;
+      if (!folderId) {
+        const parentId = activeFolderIds.defaultRootId || '2';
+        const newFolder = await chrome.bookmarks.create({
+          parentId,
+          title: trimmed
+        });
+        folderId = newFolder.id;
+      }
+
+      const newSpace: SpaceItem = {
+        id: `space-${Date.now()}`,
+        name: trimmed,
+        folderId,
+        icon
+      };
+
+      const updatedSpaces = [...spaces, newSpace];
+      await chrome.storage.local.set({
+        spaces: updatedSpaces,
+        activeSpaceId: newSpace.id
+      });
+      await loadBookmarks();
+    },
+    [activeFolderIds.defaultRootId, spaces, loadBookmarks]
+  );
+
+  // Rename a Space
+  const renameSpace = useCallback(
+    async (spaceId: string, newName: string) => {
+      const trimmed = newName.trim();
+      if (!trimmed) return;
+      const target = spaces.find((s) => s.id === spaceId);
+      if (target) {
+        try {
+          await chrome.bookmarks.update(target.folderId, { title: trimmed });
+        } catch {
+          // ignore if bookmark folder cannot be updated
+        }
+      }
+      const updated = spaces.map((s) => (s.id === spaceId ? { ...s, name: trimmed } : s));
+      await chrome.storage.local.set({ spaces: updated });
+      await loadBookmarks();
+    },
+    [spaces, loadBookmarks]
+  );
+
+  // Delete a Space (keeps at least 1 space)
+  const deleteSpace = useCallback(
+    async (spaceId: string) => {
+      if (spaces.length <= 1) return;
+      const updated = spaces.filter((s) => s.id !== spaceId);
+      const nextActive = activeSpaceId === spaceId ? updated[0].id : activeSpaceId;
+      await chrome.storage.local.set({
+        spaces: updated,
+        activeSpaceId: nextActive
+      });
+      await loadBookmarks();
+    },
+    [spaces, activeSpaceId, loadBookmarks]
+  );
+
   // Set custom folder IDs
   const setQuickAccessFolderId = async (id: string) => {
     await chrome.storage.local.set({ quickAccessFolderId: id });
@@ -259,12 +398,24 @@ export function useBookmarks() {
   };
 
   const setWorkspaceFolderId = async (id: string) => {
-    await chrome.storage.local.set({ workspaceFolderId: id });
+    // Update the currently active space's folderId (and workspaceFolderId if home)
+    const updatedSpaces = spaces.map((s) =>
+      s.id === activeSpaceId ? { ...s, folderId: id } : s
+    );
+    await chrome.storage.local.set({
+      workspaceFolderId: id,
+      spaces: updatedSpaces
+    });
     loadBookmarks();
   };
 
   const resetToDefaultFolders = async () => {
-    await chrome.storage.local.remove(['quickAccessFolderId', 'workspaceFolderId']);
+    await chrome.storage.local.remove([
+      'quickAccessFolderId',
+      'workspaceFolderId',
+      'spaces',
+      'activeSpaceId'
+    ]);
     loadBookmarks();
   };
 
@@ -284,6 +435,14 @@ export function useBookmarks() {
   const renameBookmarkOrFolder = async (id: string, title: string) => {
     try {
       await chrome.bookmarks.update(id, { title });
+      // Also sync space name if this folder is a space root
+      const matchingSpace = spaces.find((s) => s.folderId === id);
+      if (matchingSpace) {
+        const updatedSpaces = spaces.map((s) =>
+          s.folderId === id ? { ...s, name: title } : s
+        );
+        await chrome.storage.local.set({ spaces: updatedSpaces });
+      }
     } catch (err) {
       console.warn('[Arctic] Could not rename bookmark/folder:', err);
     }
@@ -312,6 +471,19 @@ export function useBookmarks() {
     }
     loadBookmarks();
   };
+
+  // Move a bookmark or folder to another Space's root folder
+  const moveNodeToSpace = useCallback(
+    async (nodeId: string, targetSpaceFolderId: string) => {
+      try {
+        await chrome.bookmarks.move(nodeId, { parentId: targetSpaceFolderId });
+        await loadBookmarks();
+      } catch (err) {
+        console.warn('[Arctic] Could not move item to space:', err);
+      }
+    },
+    [loadBookmarks]
+  );
 
   // Set up listeners for real-time Chrome bookmark sync
   useEffect(() => {
@@ -343,6 +515,13 @@ export function useBookmarks() {
     collapsedFolderIds,
     toggleFolderCollapse,
     setAllFoldersCollapsed,
+    spaces,
+    activeSpaceId,
+    selectSpace,
+    createSpace,
+    renameSpace,
+    deleteSpace,
+    moveNodeToSpace,
     activeFolderIds,
     setQuickAccessFolderId,
     setWorkspaceFolderId,

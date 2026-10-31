@@ -249,7 +249,7 @@ export function useTabBindings() {
       });
     };
 
-    // Listen to tab updates (URL change, navigation away, favicon, title, muted)
+    // Listen to tab updates (URL change, navigation away, favicon, title, muted, audible)
     const handleUpdated: Parameters<typeof chrome.tabs.onUpdated.addListener>[0] = (
       tabId,
       changeInfo,
@@ -404,6 +404,16 @@ export function useTabBindings() {
   }, [loadSessionState, refreshWindowTabs]);
 
   /**
+   * Map of all window tabs by tabId for instant lookup (audible, mutedInfo, discarded, etc.)
+   */
+  const tabsByTabId = windowTabs.reduce<Record<number, chrome.tabs.Tab>>((acc, tab) => {
+    if (typeof tab.id === 'number') {
+      acc[tab.id] = tab;
+    }
+    return acc;
+  }, {});
+
+  /**
    * Filter window tabs that are NOT bound to any bookmark (unpinned / temp tabs)
    */
   const unpinnedTabs = windowTabs.filter(
@@ -437,7 +447,7 @@ export function useTabBindings() {
   }, []);
 
   /**
-   * Close a tab (Option 1: If closing the last tab in the window, create a fresh tab first to keep the browser window & sidebar alive)
+   * Close a tab (If closing the last tab in the window, create a fresh tab first to keep the browser window & sidebar alive)
    */
   const handleCloseTab = useCallback(
     async (tabId: number, e?: React.MouseEvent) => {
@@ -489,7 +499,7 @@ export function useTabBindings() {
   }, [unpinnedTabs, windowTabs.length, refreshWindowTabs]);
 
   /**
-   * Pin an unpinned tab to a bookmark folder (Quick Access or Workspace)
+   * Pin an unpinned tab to a bookmark folder (Quick Access or Home/Space)
    */
   const pinTab = useCallback(
     async (tab: chrome.tabs.Tab, targetFolderId: string, targetIndex?: number) => {
@@ -617,6 +627,39 @@ export function useTabBindings() {
 
   const activeTab = windowTabs.find((t) => t.id === activeTabId);
   const isActiveTabLoading = activeTab?.status === 'loading';
+  const activeTabUrl = activeTab?.url || '';
+  const activeTabTitle = activeTab?.title || '';
+
+  const navigateActiveTab = useCallback(
+    async (rawInput: string) => {
+      const trimmed = rawInput.trim();
+      if (!trimmed) return;
+
+      let finalUrl = trimmed;
+      const isLikelyUrl =
+        /^https?:\/\//i.test(trimmed) ||
+        /^chrome:\/\//i.test(trimmed) ||
+        /^localhost(:\d+)?(\/.*)?$/i.test(trimmed) ||
+        /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(\/.*)?$/.test(trimmed) ||
+        (!/\s/.test(trimmed) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/.*)?$/i.test(trimmed));
+
+      if (isLikelyUrl) {
+        if (!/^https?:\/\//i.test(trimmed) && !/^chrome:\/\//i.test(trimmed)) {
+          finalUrl = `https://${trimmed}`;
+        }
+      } else {
+        finalUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+      }
+
+      if (typeof activeTabId === 'number') {
+        await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
+      } else {
+        await chrome.tabs.create({ url: finalUrl, active: true });
+      }
+      await refreshWindowTabs();
+    },
+    [activeTabId, refreshWindowTabs]
+  );
 
   // Map of discarded tabs by tabId
   const discardedTabsByTabId = windowTabs.reduce<Record<number, boolean>>((acc, tab) => {
@@ -627,13 +670,28 @@ export function useTabBindings() {
   }, {});
 
   /**
-   * Toggle audio mute on a tab
+   * Toggle audio mute on a tab (by tab object or tabId)
    */
-  const toggleMuteTab = useCallback(async (tab: chrome.tabs.Tab) => {
-    if (typeof tab.id !== 'number') return;
-    const isMuted = Boolean(tab.mutedInfo?.muted);
-    await chrome.tabs.update(tab.id, { muted: !isMuted });
-  }, []);
+  const toggleMuteTab = useCallback(
+    async (tabOrId: chrome.tabs.Tab | number) => {
+      try {
+        if (typeof tabOrId === 'number') {
+          const existing = tabsByTabId[tabOrId] || (await chrome.tabs.get(tabOrId));
+          if (!existing || typeof existing.id !== 'number') return;
+          const isMuted = Boolean(existing.mutedInfo?.muted);
+          await chrome.tabs.update(existing.id, { muted: !isMuted });
+        } else {
+          if (typeof tabOrId.id !== 'number') return;
+          const isMuted = Boolean(tabOrId.mutedInfo?.muted);
+          await chrome.tabs.update(tabOrId.id, { muted: !isMuted });
+        }
+        await refreshWindowTabs();
+      } catch (err) {
+        console.warn('[Arctic] Could not toggle mute on tab:', err);
+      }
+    },
+    [tabsByTabId, refreshWindowTabs]
+  );
 
   /**
    * Update auto-archive interval setting
@@ -894,6 +952,7 @@ export function useTabBindings() {
   return {
     bindingsByBookmarkId,
     bookmarkIdByTabId,
+    tabsByTabId,
     activeTabId,
     unpinnedTabs,
     createNewTab,
@@ -909,6 +968,9 @@ export function useTabBindings() {
     reloadTab,
     reloadActiveTab,
     isActiveTabLoading,
+    activeTabUrl,
+    activeTabTitle,
+    navigateActiveTab,
     discardTab,
     discardAllBackgroundTabs,
     discardedTabsByTabId,
