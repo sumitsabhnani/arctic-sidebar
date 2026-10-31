@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Arctic Sidebar — Chrome Web Store Screenshots Studio (1280x800)</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -17,6 +18,43 @@
             mono: ['"JetBrains Mono"', 'monospace'],
           }
         }
+      }
+    }
+
+    async function downloadSlide(slideId, filename, buttonEl) {
+      const node = document.getElementById(slideId);
+      if (!node) return;
+      const originalText = buttonEl ? buttonEl.innerHTML : '';
+      if (buttonEl) buttonEl.innerHTML = '⏳ Generating PNG...';
+      try {
+        const dataUrl = await htmlToImage.toPng(node, {
+          width: 1280,
+          height: 800,
+          pixelRatio: 1
+        });
+        const link = document.createElement('a');
+        link.download = filename;
+        link.href = dataUrl;
+        link.click();
+        if (buttonEl) buttonEl.innerHTML = '✓ Downloaded!';
+        setTimeout(() => { if (buttonEl) buttonEl.innerHTML = originalText; }, 2000);
+      } catch (err) {
+        console.error(err);
+        alert('Could not export canvas directly. You can also use Mac shortcut: Cmd+Shift+4, press Spacebar, then click on the card to save a PNG to your Desktop!');
+        if (buttonEl) buttonEl.innerHTML = originalText;
+      }
+    }
+
+    async function downloadAllSlides() {
+      const slides = [
+        { id: 'slide-1', name: '1-hero-sidebar-1280x800.png' },
+        { id: 'slide-2', name: '2-command-bar-1280x800.png' },
+        { id: 'slide-3', name: '3-memory-saver-1280x800.png' },
+        { id: 'slide-4', name: '4-color-themes-1280x800.png' }
+      ];
+      for (const s of slides) {
+        await downloadSlide(s.id, s.name);
+        await new Promise(r => setTimeout(r, 400));
       }
     }
   </script>
@@ -45,401 +83,438 @@
     <div>
       <div class="flex items-center space-x-2">
         <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">1280 × 800 PX</span>
-        <h1 class="text-xl font-bold text-white tracking-tight">Chrome Web Store Screenshot Studio</h1>
+        <h1 class="text-xl font-bold text-white tracking-tight">Chrome Web Store Screenshots Studio</h1>
       </div>
-      <p class="text-xs text-zinc-400 mt-1">
-        Each slide below is rendered at exact Chrome Web Store dimensions (<code class="text-cyan-400">1280x800</code>). Right-click each slide &gt; <span class="text-white font-semibold">Inspect</span> &gt; <span class="text-white font-semibold">Capture node screenshot</span>, or use browser screenshot shortcuts.
+      <p class="text-xs text-zinc-400 mt-1 max-w-xl">
+        Each slide below is rendered at exact Chrome Web Store dimensions (<code class="text-cyan-400">1280x800</code>). Click any <strong>"Download PNG"</strong> button below to save it directly to your computer.
       </p>
     </div>
     <div class="flex items-center space-x-3">
-      <button onclick="window.print()" class="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-200 transition-colors border border-zinc-700">
-        Export All (PDF)
+      <button onclick="downloadAllSlides()" class="px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white shadow-lg shadow-cyan-600/30 transition-all flex items-center space-x-1.5">
+        <span>📸</span>
+        <span>Download All 4 Slides</span>
       </button>
-      <a href="#slide-1" class="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-xs font-semibold text-white shadow-lg shadow-cyan-600/30 transition-all">
-        Jump to Slides
-      </a>
+      <button onclick="window.print()" class="px-3.5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-zinc-300 transition-colors border border-zinc-700">
+        Export PDF
+      </button>
     </div>
   </header>
 
   <!-- ========================================================================= -->
   <!-- SLIDE 1: HERO & SIDEBAR WORKSPACE -->
   <!-- ========================================================================= -->
-  <section id="slide-1" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#0c1424] via-[#09101d] to-[#040810] border border-cyan-500/20 p-12 flex flex-col justify-between">
-    <!-- Top Marketing Headline -->
-    <div class="flex items-start justify-between">
-      <div class="max-w-2xl">
-        <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 text-xs font-semibold tracking-wide mb-3">
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
-          <span>THE ARC-INSPIRED SIDEBAR FOR CHROME</span>
-        </div>
-        <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
-          Bring the Arc vertical tab workflow <br />
-          <span class="bg-gradient-to-r from-cyan-400 via-sky-300 to-indigo-300 bg-clip-text text-transparent">straight into Google Chrome</span>
-        </h2>
-        <p class="text-sm text-zinc-400 mt-2 font-medium">
-          Vertical tabs, spaces, pinned favorites, tab hibernation, and workspace folders inside Chrome's native Side Panel.
-        </p>
-      </div>
-
-      <!-- Feature Pill Badges -->
-      <div class="flex flex-col items-end space-y-2">
-        <div class="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-white/10 text-xs font-medium text-zinc-300 shadow-md">
-          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          <span>100% On-Device Privacy</span>
-        </div>
-        <div class="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-white/10 text-xs font-medium text-zinc-300 shadow-md">
-          <span class="text-indigo-400 font-mono">🌙</span>
-          <span>Tab Memory Saver</span>
-        </div>
-      </div>
+  <div class="flex flex-col space-y-2">
+    <div class="no-print w-[1280px] flex items-center justify-between px-1 text-xs font-medium text-zinc-400">
+      <span class="font-semibold text-zinc-300">Slide 1: Hero &amp; Spaces (1280x800)</span>
+      <button onclick="downloadSlide('slide-1', '1-hero-sidebar-1280x800.png', this)" class="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold flex items-center space-x-1.5 transition-all shadow-md">
+        <span>📸</span><span>Download PNG</span>
+      </button>
     </div>
 
-    <!-- UI Mockup: Browser Window Preview -->
-    <div class="w-full h-[520px] rounded-2xl bg-[#111827] border border-cyan-500/30 shadow-[0_25px_70px_rgba(0,0,0,0.8)] overflow-hidden flex">
-      <!-- Left: Arctic Sidebar (320px) -->
-      <div class="w-[320px] h-full bg-[#0e1726] border-r border-white/10 flex flex-col justify-between p-3 select-none">
-        <div>
-          <!-- Header Address Bar -->
-          <div class="bg-black/30 border border-white/10 rounded-xl px-2.5 py-1.5 flex items-center justify-between mb-3">
-            <div class="flex items-center space-x-1.5 text-zinc-400 text-xs truncate">
-              <svg class="w-3.5 h-3.5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
-              <span class="text-zinc-200 font-medium">github.com/sumitsabhnani</span>
-            </div>
-            <div class="flex items-center space-x-1">
-              <span class="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px]">🔗</span>
-              <span class="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px]">↻</span>
-            </div>
+    <section id="slide-1" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#0c1424] via-[#09101d] to-[#040810] border border-cyan-500/20 p-12 flex flex-col justify-between">
+      <!-- Top Marketing Headline -->
+      <div class="flex items-start justify-between">
+        <div class="max-w-2xl">
+          <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 text-xs font-semibold tracking-wide mb-3">
+            <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+            <span>THE ARC-INSPIRED SIDEBAR FOR CHROME</span>
           </div>
-
-          <!-- Quick Access 2x2 Grid -->
-          <div class="grid grid-cols-4 gap-2 mb-4">
-            <div class="h-14 rounded-xl bg-cyan-500/15 border border-cyan-500/40 flex flex-col items-center justify-center relative">
-              <span class="text-lg">🐙</span>
-              <span class="absolute bottom-1 w-3 h-0.5 rounded-full bg-cyan-400"></span>
-            </div>
-            <div class="h-14 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center">
-              <span class="text-lg">▶️</span>
-            </div>
-            <div class="h-14 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center">
-              <span class="text-lg">✉️</span>
-            </div>
-            <div class="h-14 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center">
-              <span class="text-lg">✨</span>
-            </div>
-          </div>
-
-          <!-- Section: Home Workspace -->
-          <div class="flex items-center justify-between text-xs font-semibold text-zinc-400 px-1 mb-2">
-            <span class="flex items-center space-x-1 text-zinc-300"><span>🏠</span><span>Home</span></span>
-            <span class="text-[10px] text-zinc-500">4 items</span>
-          </div>
-
-          <!-- Tabs Tree -->
-          <div class="space-y-1 text-xs">
-            <!-- Active Tab -->
-            <div class="px-2.5 py-2 rounded-lg bg-cyan-500/15 border border-cyan-400/40 text-white font-medium flex items-center justify-between">
-              <div class="flex items-center space-x-2 truncate">
-                <span class="text-cyan-400">🐙</span>
-                <span class="truncate">Arctic Sidebar Repository</span>
-              </div>
-              <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
-            </div>
-
-            <!-- Sleeping Tab -->
-            <div class="px-2.5 py-1.5 rounded-lg text-zinc-400 hover:bg-white/5 flex items-center justify-between">
-              <div class="flex items-center space-x-2 truncate">
-                <span>📁</span>
-                <span class="truncate">Research &amp; Docs</span>
-              </div>
-              <span class="text-[10px] text-indigo-400 font-mono">🌙 Sleep</span>
-            </div>
-
-            <div class="px-2.5 py-1.5 rounded-lg text-zinc-400 hover:bg-white/5 flex items-center justify-between">
-              <div class="flex items-center space-x-2 truncate">
-                <span>⚡</span>
-                <span class="truncate">Linear Issues</span>
-              </div>
-            </div>
-
-            <!-- Today's Tabs -->
-            <div class="pt-3 pb-1 flex items-center justify-between text-xs font-semibold text-zinc-500 px-1">
-              <span>TODAY'S TABS</span>
-              <span class="text-[10px]">+ New Tab</span>
-            </div>
-            <div class="px-2.5 py-1.5 rounded-lg text-zinc-300 hover:bg-white/5 flex items-center justify-between">
-              <div class="flex items-center space-x-2 truncate">
-                <span>📰</span>
-                <span class="truncate">Hacker News</span>
-              </div>
-              <span class="text-zinc-500 text-[10px]">✕</span>
-            </div>
-          </div>
+          <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
+            Bring the Arc vertical tab workflow <br />
+            <span class="bg-gradient-to-r from-cyan-400 via-sky-300 to-indigo-300 bg-clip-text text-transparent">straight into Google Chrome</span>
+          </h2>
+          <p class="text-sm text-zinc-400 mt-2 font-medium">
+            Vertical tabs, spaces, pinned favorites, tab hibernation, and workspace folders inside Chrome's native Side Panel.
+          </p>
         </div>
 
-        <!-- Bottom Spaces Switcher -->
-        <div class="pt-2 border-t border-white/10 flex items-center justify-between px-1">
-          <div class="flex space-x-1.5">
-            <span class="px-2 py-1 rounded-md bg-cyan-500/20 border border-cyan-500/40 text-[11px] font-bold text-cyan-300">Home</span>
-            <span class="px-2 py-1 rounded-md bg-white/5 text-[11px] font-medium text-zinc-400">Work</span>
-            <span class="px-2 py-1 rounded-md bg-white/5 text-[11px] font-medium text-zinc-400">Personal</span>
+        <!-- Feature Pill Badges -->
+        <div class="flex flex-col items-end space-y-2">
+          <div class="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-white/10 text-xs font-medium text-zinc-300 shadow-md">
+            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+            <span>100% On-Device Privacy</span>
           </div>
-          <span class="text-zinc-500 text-xs hover:text-white cursor-pointer">+</span>
+          <div class="flex items-center space-x-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-white/10 text-xs font-medium text-zinc-300 shadow-md">
+            <span class="text-indigo-400 font-mono">🌙</span>
+            <span>Tab Memory Saver</span>
+          </div>
         </div>
       </div>
 
-      <!-- Right: Main Web Content Area -->
-      <div class="flex-1 bg-[#0b0f19] flex flex-col items-center justify-center p-8 text-center">
-        <div class="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-3xl mb-4 shadow-xl">
-          ❄️
+      <!-- UI Mockup: Browser Window Preview -->
+      <div class="w-full h-[520px] rounded-2xl bg-[#111827] border border-cyan-500/30 shadow-[0_25px_70px_rgba(0,0,0,0.8)] overflow-hidden flex">
+        <!-- Left: Arctic Sidebar (320px) -->
+        <div class="w-[320px] h-full bg-[#0e1726] border-r border-white/10 flex flex-col justify-between p-3 select-none">
+          <div>
+            <!-- Header Address Bar -->
+            <div class="bg-black/30 border border-white/10 rounded-xl px-2.5 py-1.5 flex items-center justify-between mb-3">
+              <div class="flex items-center space-x-1.5 text-zinc-400 text-xs truncate">
+                <svg class="w-3.5 h-3.5 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+                <span class="text-zinc-200 font-medium">github.com/sumitsabhnani</span>
+              </div>
+              <div class="flex items-center space-x-1">
+                <span class="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px]">🔗</span>
+                <span class="w-5 h-5 rounded-full bg-white/10 flex items-center justify-center text-[10px]">↻</span>
+              </div>
+            </div>
+
+            <!-- Quick Access 2x2 Grid -->
+            <div class="grid grid-cols-4 gap-2 mb-4">
+              <div class="h-14 rounded-xl bg-cyan-500/15 border border-cyan-500/40 flex flex-col items-center justify-center relative">
+                <span class="text-lg">🐙</span>
+                <span class="absolute bottom-1 w-3 h-0.5 rounded-full bg-cyan-400"></span>
+              </div>
+              <div class="h-14 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center">
+                <span class="text-lg">▶️</span>
+              </div>
+              <div class="h-14 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center">
+                <span class="text-lg">✉️</span>
+              </div>
+              <div class="h-14 rounded-xl bg-white/5 border border-white/10 flex flex-col items-center justify-center">
+                <span class="text-lg">✨</span>
+              </div>
+            </div>
+
+            <!-- Section: Home Workspace -->
+            <div class="flex items-center justify-between text-xs font-semibold text-zinc-400 px-1 mb-2">
+              <span class="flex items-center space-x-1 text-zinc-300"><span>🏠</span><span>Home</span></span>
+              <span class="text-[10px] text-zinc-500">4 items</span>
+            </div>
+
+            <!-- Tabs Tree -->
+            <div class="space-y-1 text-xs">
+              <!-- Active Tab -->
+              <div class="px-2.5 py-2 rounded-lg bg-cyan-500/15 border border-cyan-400/40 text-white font-medium flex items-center justify-between">
+                <div class="flex items-center space-x-2 truncate">
+                  <span class="text-cyan-400">🐙</span>
+                  <span class="truncate">Arctic Sidebar Repository</span>
+                </div>
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+              </div>
+
+              <!-- Sleeping Tab -->
+              <div class="px-2.5 py-1.5 rounded-lg text-zinc-400 hover:bg-white/5 flex items-center justify-between">
+                <div class="flex items-center space-x-2 truncate">
+                  <span>📁</span>
+                  <span class="truncate">Research &amp; Docs</span>
+                </div>
+                <span class="text-[10px] text-indigo-400 font-mono">🌙 Sleep</span>
+              </div>
+
+              <div class="px-2.5 py-1.5 rounded-lg text-zinc-400 hover:bg-white/5 flex items-center justify-between">
+                <div class="flex items-center space-x-2 truncate">
+                  <span>⚡</span>
+                  <span class="truncate">Linear Issues</span>
+                </div>
+              </div>
+
+              <!-- Today's Tabs -->
+              <div class="pt-3 pb-1 flex items-center justify-between text-xs font-semibold text-zinc-500 px-1">
+                <span>TODAY'S TABS</span>
+                <span class="text-[10px]">+ New Tab</span>
+              </div>
+              <div class="px-2.5 py-1.5 rounded-lg text-zinc-300 hover:bg-white/5 flex items-center justify-between">
+                <div class="flex items-center space-x-2 truncate">
+                  <span>📰</span>
+                  <span class="truncate">Hacker News</span>
+                </div>
+                <span class="text-zinc-500 text-[10px]">✕</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bottom Spaces Switcher -->
+          <div class="pt-2 border-t border-white/10 flex items-center justify-between px-1">
+            <div class="flex space-x-1.5">
+              <span class="px-2 py-1 rounded-md bg-cyan-500/20 border border-cyan-500/40 text-[11px] font-bold text-cyan-300">Home</span>
+              <span class="px-2 py-1 rounded-md bg-white/5 text-[11px] font-medium text-zinc-400">Work</span>
+              <span class="px-2 py-1 rounded-md bg-white/5 text-[11px] font-medium text-zinc-400">Personal</span>
+            </div>
+            <span class="text-zinc-500 text-xs">+</span>
+          </div>
         </div>
-        <h3 class="text-2xl font-bold text-white mb-2">Full Chrome Experience, Zero Clutter</h3>
-        <p class="text-sm text-zinc-400 max-w-md">
-          Browse freely with full window visibility. Click or scroll on the sidebar to jump between tabs, spaces, and folders.
-        </p>
+
+        <!-- Right: Main Web Content Area -->
+        <div class="flex-1 bg-[#0b0f19] flex flex-col items-center justify-center p-8 text-center">
+          <div class="w-16 h-16 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-3xl mb-4 shadow-xl">
+            ❄️
+          </div>
+          <h3 class="text-2xl font-bold text-white mb-2">Full Chrome Experience, Zero Clutter</h3>
+          <p class="text-sm text-zinc-400 max-w-md">
+            Browse freely with full window visibility. Click or scroll on the sidebar to jump between tabs, spaces, and folders.
+          </p>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
+  </div>
 
   <!-- ========================================================================= -->
   <!-- SLIDE 2: NEW TAB COMMAND BAR -->
   <!-- ========================================================================= -->
-  <section id="slide-2" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#121624] via-[#0d121e] to-[#080b12] border border-cyan-500/20 p-12 flex flex-col justify-between">
-    <div class="max-w-2xl">
-      <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 text-xs font-semibold tracking-wide mb-3">
-        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-        <span>ARCTIC COMMAND BAR</span>
+  <div class="flex flex-col space-y-2">
+    <div class="no-print w-[1280px] flex items-center justify-between px-1 text-xs font-medium text-zinc-400">
+      <span class="font-semibold text-zinc-300">Slide 2: Instant Command Bar (1280x800)</span>
+      <button onclick="downloadSlide('slide-2', '2-command-bar-1280x800.png', this)" class="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold flex items-center space-x-1.5 transition-all shadow-md">
+        <span>📸</span><span>Download PNG</span>
+      </button>
+    </div>
+
+    <section id="slide-2" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#121624] via-[#0d121e] to-[#080b12] border border-cyan-500/20 p-12 flex flex-col justify-between">
+      <div class="max-w-2xl">
+        <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-400 text-xs font-semibold tracking-wide mb-3">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>ARCTIC COMMAND BAR</span>
+        </div>
+        <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
+          Instant search &amp; jump <br />
+          <span class="bg-gradient-to-r from-cyan-400 to-sky-200 bg-clip-text text-transparent">on every New Tab</span>
+        </h2>
+        <p class="text-sm text-zinc-400 mt-2 font-medium">
+          Centered command palette with real-time history autocomplete, bookmark search, and direct URL navigation without reaching for the top address bar.
+        </p>
       </div>
-      <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
-        Instant search &amp; jump <br />
-        <span class="bg-gradient-to-r from-cyan-400 to-sky-200 bg-clip-text text-transparent">on every New Tab</span>
-      </h2>
-      <p class="text-sm text-zinc-400 mt-2 font-medium">
-        Centered command palette with real-time history autocomplete, bookmark search, and direct URL navigation without reaching for the top address bar.
-      </p>
-    </div>
 
-    <!-- Centered Command Bar Preview -->
-    <div class="w-full flex justify-center py-6">
-      <div class="w-full max-w-[680px] rounded-2xl bg-[#18181c]/95 border border-cyan-500/40 shadow-[0_25px_70px_rgba(0,0,0,0.7)] p-4 flex flex-col space-y-3">
-        <!-- Input row -->
-        <div class="flex items-center space-x-3 px-3 py-2 bg-black/30 rounded-xl border border-white/10">
-          <svg class="w-5 h-5 text-cyan-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-          <span class="text-base text-white font-medium flex-1">git</span>
-          <span class="w-0.5 h-5 bg-cyan-400 animate-pulse"></span>
-          <span class="px-2 py-0.5 rounded text-[11px] bg-white/10 text-zinc-400">↵ Jump</span>
-        </div>
-
-        <!-- Autocomplete Suggestions List -->
-        <div class="space-y-1.5 pt-1">
-          <!-- Item 1: Top URL Hit -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl bg-cyan-500/15 border border-cyan-400/30 text-white">
-            <div class="flex items-center space-x-3 truncate">
-              <span class="w-6 h-6 rounded bg-indigo-500/20 text-indigo-300 flex items-center justify-center text-xs">🌐</span>
-              <div class="truncate">
-                <div class="text-sm font-semibold text-white truncate">Open github.com</div>
-                <div class="text-xs text-zinc-400 truncate">github.com</div>
-              </div>
-            </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Direct URL</span>
+      <!-- Centered Command Bar Preview -->
+      <div class="w-full flex justify-center py-6">
+        <div class="w-full max-w-[680px] rounded-2xl bg-[#18181c]/95 border border-cyan-500/40 shadow-[0_25px_70px_rgba(0,0,0,0.7)] p-4 flex flex-col space-y-3">
+          <!-- Input row -->
+          <div class="flex items-center space-x-3 px-3 py-2 bg-black/30 rounded-xl border border-white/10">
+            <svg class="w-5 h-5 text-cyan-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <span class="text-base text-white font-medium flex-1">git</span>
+            <span class="w-0.5 h-5 bg-cyan-400"></span>
+            <span class="px-2 py-0.5 rounded text-[11px] bg-white/10 text-zinc-400">↵ Jump</span>
           </div>
 
-          <!-- Item 2: Bookmark -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 text-zinc-200">
-            <div class="flex items-center space-x-3 truncate">
-              <span class="w-6 h-6 rounded bg-amber-500/20 text-amber-300 flex items-center justify-center text-xs">⭐</span>
-              <div class="truncate">
-                <div class="text-sm font-semibold truncate">GitHub · Where software is built</div>
-                <div class="text-xs text-zinc-500 truncate">https://github.com/dashboard</div>
+          <!-- Autocomplete Suggestions List -->
+          <div class="space-y-1.5 pt-1">
+            <!-- Item 1: Top URL Hit -->
+            <div class="flex items-center justify-between p-2.5 rounded-xl bg-cyan-500/15 border border-cyan-400/30 text-white">
+              <div class="flex items-center space-x-3 truncate">
+                <span class="w-6 h-6 rounded bg-indigo-500/20 text-indigo-300 flex items-center justify-center text-xs">🌐</span>
+                <div class="truncate">
+                  <div class="text-sm font-semibold text-white truncate">Open github.com</div>
+                  <div class="text-xs text-zinc-400 truncate">github.com</div>
+                </div>
               </div>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Direct URL</span>
             </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">Bookmark</span>
+
+            <!-- Item 2: Bookmark -->
+            <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 text-zinc-200">
+              <div class="flex items-center space-x-3 truncate">
+                <span class="w-6 h-6 rounded bg-amber-500/20 text-amber-300 flex items-center justify-center text-xs">⭐</span>
+                <div class="truncate">
+                  <div class="text-sm font-semibold truncate">GitHub · Where software is built</div>
+                  <div class="text-xs text-zinc-500 truncate">https://github.com/dashboard</div>
+                </div>
+              </div>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30">Bookmark</span>
+            </div>
+
+            <!-- Item 3: History -->
+            <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 text-zinc-200">
+              <div class="flex items-center space-x-3 truncate">
+                <span class="w-6 h-6 rounded bg-white/10 text-zinc-400 flex items-center justify-center text-xs">🕒</span>
+                <div class="truncate">
+                  <div class="text-sm font-semibold truncate">Git Documentation &amp; Cheatsheet</div>
+                  <div class="text-xs text-zinc-500 truncate">https://git-scm.com/docs</div>
+                </div>
+              </div>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-white/10 text-zinc-400">History</span>
+            </div>
+
+            <!-- Item 4: Google Search -->
+            <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 text-zinc-200">
+              <div class="flex items-center space-x-3 truncate">
+                <span class="w-6 h-6 rounded bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-xs">🔍</span>
+                <div class="truncate">
+                  <div class="text-sm font-semibold truncate">Search Google for &ldquo;git&rdquo;</div>
+                </div>
+              </div>
+              <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Search</span>
+            </div>
           </div>
 
-          <!-- Item 3: History -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 text-zinc-200">
-            <div class="flex items-center space-x-3 truncate">
-              <span class="w-6 h-6 rounded bg-white/10 text-zinc-400 flex items-center justify-center text-xs">🕒</span>
-              <div class="truncate">
-                <div class="text-sm font-semibold truncate">Git Documentation &amp; Cheatsheet</div>
-                <div class="text-xs text-zinc-500 truncate">https://git-scm.com/docs</div>
-              </div>
-            </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-white/10 text-zinc-400">History</span>
+          <!-- Footer Shortcuts -->
+          <div class="flex items-center justify-between pt-2 border-t border-white/10 text-[11px] text-zinc-500 px-2">
+            <span><kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">↑</kbd> <kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">↓</kbd> navigate</span>
+            <span><kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">↵</kbd> open</span>
+            <span><kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">esc</kbd> dismiss</span>
           </div>
-
-          <!-- Item 4: Google Search -->
-          <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-white/5 text-zinc-200">
-            <div class="flex items-center space-x-3 truncate">
-              <span class="w-6 h-6 rounded bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-xs">🔍</span>
-              <div class="truncate">
-                <div class="text-sm font-semibold truncate">Search Google for &ldquo;git&rdquo;</div>
-              </div>
-            </div>
-            <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-cyan-500/20 text-cyan-300">Search</span>
-          </div>
-        </div>
-
-        <!-- Footer Shortcuts -->
-        <div class="flex items-center justify-between pt-2 border-t border-white/10 text-[11px] text-zinc-500 px-2">
-          <span><kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">↑</kbd> <kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">↓</kbd> navigate</span>
-          <span><kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">↵</kbd> open</span>
-          <span><kbd class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 font-mono">esc</kbd> dismiss</span>
         </div>
       </div>
-    </div>
 
-    <!-- Bottom tagline -->
-    <div class="text-center text-xs text-zinc-500">
-      Auto-focuses every time you click back to a new tab — start typing immediately.
-    </div>
-  </section>
+      <!-- Bottom tagline -->
+      <div class="text-center text-xs text-zinc-500">
+        Auto-focuses every time you click back to a new tab — start typing immediately.
+      </div>
+    </section>
+  </div>
 
   <!-- ========================================================================= -->
   <!-- SLIDE 3: MEMORY SAVER & TAB SLEEP -->
   <!-- ========================================================================= -->
-  <section id="slide-3" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#10121d] via-[#090b12] to-[#040508] border border-indigo-500/20 p-12 flex flex-col justify-between">
-    <div class="max-w-2xl">
-      <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/25 text-indigo-400 text-xs font-semibold tracking-wide mb-3">
-        <span class="text-sm">🌙</span>
-        <span>ZERO RAM LEAKS &amp; SMART DISCARD</span>
-      </div>
-      <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
-        Reclaim your computer's RAM with <br />
-        <span class="bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-300 bg-clip-text text-transparent">built-in Tab Sleep &amp; Folder Archiving</span>
-      </h2>
-      <p class="text-sm text-zinc-400 mt-2 font-medium">
-        Put heavy tabs to sleep with 1 click without losing your place. Hibernate entire folders at once or let automatic archive keep your browser snappy.
-      </p>
+  <div class="flex flex-col space-y-2">
+    <div class="no-print w-[1280px] flex items-center justify-between px-1 text-xs font-medium text-zinc-400">
+      <span class="font-semibold text-zinc-300">Slide 3: Tab Memory Saver &amp; Archiving (1280x800)</span>
+      <button onclick="downloadSlide('slide-3', '3-memory-saver-1280x800.png', this)" class="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold flex items-center space-x-1.5 transition-all shadow-md">
+        <span>📸</span><span>Download PNG</span>
+      </button>
     </div>
 
-    <!-- 3 Feature Highlight Columns -->
-    <div class="grid grid-cols-3 gap-6 my-auto">
-      <!-- Card 1 -->
-      <div class="p-6 rounded-2xl bg-white/5 border border-white/10 flex flex-col space-y-3">
-        <div class="w-10 h-10 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xl">
-          🌙
+    <section id="slide-3" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#10121d] via-[#090b12] to-[#040508] border border-indigo-500/20 p-12 flex flex-col justify-between">
+      <div class="max-w-2xl">
+        <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/25 text-indigo-400 text-xs font-semibold tracking-wide mb-3">
+          <span class="text-sm">🌙</span>
+          <span>ZERO RAM LEAKS &amp; SMART DISCARD</span>
         </div>
-        <h3 class="text-lg font-bold text-white">Hibernate Any Tab</h3>
-        <p class="text-xs text-zinc-400 leading-relaxed">
-          Unloads JavaScript, DOM, and video memory to 0 MB RAM. The tab stays in your sidebar and instantly wakes upon clicking.
+        <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
+          Reclaim your computer's RAM with <br />
+          <span class="bg-gradient-to-r from-indigo-400 via-purple-300 to-pink-300 bg-clip-text text-transparent">built-in Tab Sleep &amp; Folder Archiving</span>
+        </h2>
+        <p class="text-sm text-zinc-400 mt-2 font-medium">
+          Put heavy tabs to sleep with 1 click without losing your place. Hibernate entire folders at once or let automatic archive keep your browser snappy.
         </p>
-        <div class="mt-auto pt-3 border-t border-white/5 flex items-center space-x-2">
-          <span class="px-2 py-0.5 rounded text-[10px] bg-indigo-500/20 text-indigo-300 font-mono">0 MB RAM</span>
-          <span class="text-[11px] text-zinc-500">Instant resume</span>
+      </div>
+
+      <!-- 3 Feature Highlight Columns -->
+      <div class="grid grid-cols-3 gap-6 my-auto">
+        <!-- Card 1 -->
+        <div class="p-6 rounded-2xl bg-white/5 border border-white/10 flex flex-col space-y-3">
+          <div class="w-10 h-10 rounded-xl bg-indigo-500/20 text-indigo-400 flex items-center justify-center text-xl">
+            🌙
+          </div>
+          <h3 class="text-lg font-bold text-white">Hibernate Any Tab</h3>
+          <p class="text-xs text-zinc-400 leading-relaxed">
+            Unloads JavaScript, DOM, and video memory to 0 MB RAM. The tab stays in your sidebar and instantly wakes upon clicking.
+          </p>
+          <div class="mt-auto pt-3 border-t border-white/5 flex items-center space-x-2">
+            <span class="px-2 py-0.5 rounded text-[10px] bg-indigo-500/20 text-indigo-300 font-mono">0 MB RAM</span>
+            <span class="text-[11px] text-zinc-500">Instant resume</span>
+          </div>
+        </div>
+
+        <!-- Card 2 -->
+        <div class="p-6 rounded-2xl bg-white/5 border border-white/10 flex flex-col space-y-3">
+          <div class="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center text-xl">
+            📦
+          </div>
+          <h3 class="text-lg font-bold text-white">Archive All Tabs in Folder</h3>
+          <p class="text-xs text-zinc-400 leading-relaxed">
+            Working on a big research project? Put all 10+ tabs under that folder to sleep simultaneously with one click.
+          </p>
+          <div class="mt-auto pt-3 border-t border-white/5 flex items-center space-x-2">
+            <span class="px-2 py-0.5 rounded text-[10px] bg-purple-500/20 text-purple-300 font-mono">1-Click Sleep</span>
+          </div>
+        </div>
+
+        <!-- Card 3 -->
+        <div class="p-6 rounded-2xl bg-white/5 border border-white/10 flex flex-col space-y-3">
+          <div class="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xl">
+            ⏱️
+          </div>
+          <h3 class="text-lg font-bold text-white">Auto-Archive Inactive Tabs</h3>
+          <p class="text-xs text-zinc-400 leading-relaxed">
+            Set custom timers (12h, 24h, 7d). Old temporary tabs are automatically cleaned up so you never end up with 100+ open tabs.
+          </p>
+          <div class="mt-auto pt-3 border-t border-white/5 flex items-center space-x-2">
+            <span class="px-2 py-0.5 rounded text-[10px] bg-cyan-500/20 text-cyan-300 font-mono">Set &amp; Forget</span>
+          </div>
         </div>
       </div>
 
-      <!-- Card 2 -->
-      <div class="p-6 rounded-2xl bg-white/5 border border-white/10 flex flex-col space-y-3">
-        <div class="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center text-xl">
-          📦
-        </div>
-        <h3 class="text-lg font-bold text-white">Archive All Tabs in Folder</h3>
-        <p class="text-xs text-zinc-400 leading-relaxed">
-          Working on a big research project? Put all 10+ tabs under that folder to sleep simultaneously with one click.
-        </p>
-        <div class="mt-auto pt-3 border-t border-white/5 flex items-center space-x-2">
-          <span class="px-2 py-0.5 rounded text-[10px] bg-purple-500/20 text-purple-300 font-mono">1-Click Sleep</span>
-        </div>
+      <!-- Bottom summary badge -->
+      <div class="flex items-center justify-center space-x-6 text-xs text-zinc-400 pt-4 border-t border-white/10">
+        <span>✓ Native Chrome Memory Discard API</span>
+        <span>•</span>
+        <span>✓ Preserves Tab History &amp; Scroll Position</span>
+        <span>•</span>
+        <span>✓ Eliminates Chrome Battery Drain</span>
       </div>
-
-      <!-- Card 3 -->
-      <div class="p-6 rounded-2xl bg-white/5 border border-white/10 flex flex-col space-y-3">
-        <div class="w-10 h-10 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center text-xl">
-          ⏱️
-        </div>
-        <h3 class="text-lg font-bold text-white">Auto-Archive Inactive Tabs</h3>
-        <p class="text-xs text-zinc-400 leading-relaxed">
-          Set custom timers (12h, 24h, 7d). Old temporary tabs are automatically cleaned up so you never end up with 100+ open tabs.
-        </p>
-        <div class="mt-auto pt-3 border-t border-white/5 flex items-center space-x-2">
-          <span class="px-2 py-0.5 rounded text-[10px] bg-cyan-500/20 text-cyan-300 font-mono">Set &amp; Forget</span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Bottom summary badge -->
-    <div class="flex items-center justify-center space-x-6 text-xs text-zinc-400 pt-4 border-t border-white/10">
-      <span>✓ Native Chrome Memory Discard API</span>
-      <span>•</span>
-      <span>✓ Preserves Tab History &amp; Scroll Position</span>
-      <span>•</span>
-      <span>✓ Eliminates Chrome Battery Drain</span>
-    </div>
-  </section>
+    </section>
+  </div>
 
   <!-- ========================================================================= -->
   <!-- SLIDE 4: 6 THEMES & AESTHETICS -->
   <!-- ========================================================================= -->
-  <section id="slide-4" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#141416] via-[#0d0d0f] to-[#050506] border border-white/10 p-12 flex flex-col justify-between">
-    <div class="max-w-2xl">
-      <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-pink-500/10 border border-pink-500/25 text-pink-400 text-xs font-semibold tracking-wide mb-3">
-        <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
-        <span>COLOR PALETTES &amp; APPEARANCE</span>
-      </div>
-      <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
-        Crafted to match your vibe with <br />
-        <span class="bg-gradient-to-r from-pink-400 via-rose-300 to-amber-300 bg-clip-text text-transparent">6 custom Arc-inspired themes</span>
-      </h2>
-      <p class="text-sm text-zinc-400 mt-2 font-medium">
-        Seamless light and dark mode support with vibrant translucent gradients and calm non-colored neutrals.
-      </p>
+  <div class="flex flex-col space-y-2">
+    <div class="no-print w-[1280px] flex items-center justify-between px-1 text-xs font-medium text-zinc-400">
+      <span class="font-semibold text-zinc-300">Slide 4: Color Palettes &amp; Appearance (1280x800)</span>
+      <button onclick="downloadSlide('slide-4', '4-color-themes-1280x800.png', this)" class="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-semibold flex items-center space-x-1.5 transition-all shadow-md">
+        <span>📸</span><span>Download PNG</span>
+      </button>
     </div>
 
-    <!-- 6 Theme Swatch Cards -->
-    <div class="grid grid-cols-6 gap-4 my-auto">
-      <!-- 1. Glacier Blue -->
-      <div class="p-4 rounded-2xl bg-white/5 border border-cyan-500/40 flex flex-col items-center text-center space-y-3">
-        <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#0e1726] via-[#0891b2] to-[#06b6d4] shadow-lg border border-white/10"></div>
-        <div class="text-xs font-bold text-white">Glacier Blue</div>
-        <div class="text-[10px] text-cyan-300 font-mono">Arctic Signature</div>
+    <section id="slide-4" class="slide-frame rounded-2xl shadow-2xl bg-gradient-to-br from-[#141416] via-[#0d0d0f] to-[#050506] border border-white/10 p-12 flex flex-col justify-between">
+      <div class="max-w-2xl">
+        <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-pink-500/10 border border-pink-500/25 text-pink-400 text-xs font-semibold tracking-wide mb-3">
+          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+          <span>COLOR PALETTES &amp; APPEARANCE</span>
+        </div>
+        <h2 class="text-4xl font-extrabold tracking-tight text-white leading-tight">
+          Crafted to match your vibe with <br />
+          <span class="bg-gradient-to-r from-pink-400 via-rose-300 to-amber-300 bg-clip-text text-transparent">6 custom Arc-inspired themes</span>
+        </h2>
+        <p class="text-sm text-zinc-400 mt-2 font-medium">
+          Seamless light and dark mode support with vibrant translucent gradients and calm non-colored neutrals.
+        </p>
       </div>
 
-      <!-- 2. Midnight Amethyst -->
-      <div class="p-4 rounded-2xl bg-white/5 border border-purple-500/40 flex flex-col items-center text-center space-y-3">
-        <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#160c24] via-[#9333ea] to-[#c084fc] shadow-lg border border-white/10"></div>
-        <div class="text-xs font-bold text-white">Amethyst</div>
-        <div class="text-[10px] text-purple-300 font-mono">Moody Violet</div>
+      <!-- 6 Theme Swatch Cards -->
+      <div class="grid grid-cols-6 gap-4 my-auto">
+        <!-- 1. Glacier Blue -->
+        <div class="p-4 rounded-2xl bg-white/5 border border-cyan-500/40 flex flex-col items-center text-center space-y-3">
+          <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#0e1726] via-[#0891b2] to-[#06b6d4] shadow-lg border border-white/10"></div>
+          <div class="text-xs font-bold text-white">Glacier Blue</div>
+          <div class="text-[10px] text-cyan-300 font-mono">Arctic Signature</div>
+        </div>
+
+        <!-- 2. Midnight Amethyst -->
+        <div class="p-4 rounded-2xl bg-white/5 border border-purple-500/40 flex flex-col items-center text-center space-y-3">
+          <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#160c24] via-[#9333ea] to-[#c084fc] shadow-lg border border-white/10"></div>
+          <div class="text-xs font-bold text-white">Amethyst</div>
+          <div class="text-[10px] text-purple-300 font-mono">Moody Violet</div>
+        </div>
+
+        <!-- 3. Forest Sage -->
+        <div class="p-4 rounded-2xl bg-white/5 border border-emerald-500/40 flex flex-col items-center text-center space-y-3">
+          <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#0d1a14] via-[#059669] to-[#f59e0b] shadow-lg border border-white/10"></div>
+          <div class="text-xs font-bold text-white">Forest Sage</div>
+          <div class="text-[10px] text-emerald-300 font-mono">Earthy Olive</div>
+        </div>
+
+        <!-- 4. Warm Terracotta -->
+        <div class="p-4 rounded-2xl bg-white/5 border border-amber-500/40 flex flex-col items-center text-center space-y-3">
+          <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#20110a] via-[#ea580c] to-[#fed7aa] shadow-lg border border-white/10"></div>
+          <div class="text-xs font-bold text-white">Terracotta</div>
+          <div class="text-[10px] text-amber-300 font-mono">Autumn Rust</div>
+        </div>
+
+        <!-- 5. Pure Monochrome -->
+        <div class="p-4 rounded-2xl bg-white/5 border border-zinc-500/40 flex flex-col items-center text-center space-y-3">
+          <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#18181b] via-[#71717a] to-[#f4f4f5] shadow-lg border border-white/10"></div>
+          <div class="text-xs font-bold text-white">Monochrome</div>
+          <div class="text-[10px] text-zinc-400 font-mono">Clean Charcoal</div>
+        </div>
+
+        <!-- 6. Slate Grey -->
+        <div class="p-4 rounded-2xl bg-white/5 border border-slate-500/40 flex flex-col items-center text-center space-y-3">
+          <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#27272a] via-[#52525b] to-[#a1a1aa] shadow-lg border border-white/10"></div>
+          <div class="text-xs font-bold text-white">Slate Grey</div>
+          <div class="text-[10px] text-slate-300 font-mono">Neutral Steel</div>
+        </div>
       </div>
 
-      <!-- 3. Forest Sage -->
-      <div class="p-4 rounded-2xl bg-white/5 border border-emerald-500/40 flex flex-col items-center text-center space-y-3">
-        <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#0d1a14] via-[#059669] to-[#f59e0b] shadow-lg border border-white/10"></div>
-        <div class="text-xs font-bold text-white">Forest Sage</div>
-        <div class="text-[10px] text-emerald-300 font-mono">Earthy Olive</div>
+      <!-- Light vs Dark Pill -->
+      <div class="flex items-center justify-center space-x-3 text-xs text-zinc-400 pt-4 border-t border-white/10">
+        <span class="flex items-center space-x-1"><span>☀️</span><span>Full Light Mode</span></span>
+        <span>•</span>
+        <span class="flex items-center space-x-1"><span>🌙</span><span>Full Dark Mode</span></span>
+        <span>•</span>
+        <span>System Theme Syncing</span>
       </div>
-
-      <!-- 4. Warm Terracotta -->
-      <div class="p-4 rounded-2xl bg-white/5 border border-amber-500/40 flex flex-col items-center text-center space-y-3">
-        <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#20110a] via-[#ea580c] to-[#fed7aa] shadow-lg border border-white/10"></div>
-        <div class="text-xs font-bold text-white">Terracotta</div>
-        <div class="text-[10px] text-amber-300 font-mono">Autumn Rust</div>
-      </div>
-
-      <!-- 5. Pure Monochrome -->
-      <div class="p-4 rounded-2xl bg-white/5 border border-zinc-500/40 flex flex-col items-center text-center space-y-3">
-        <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#18181b] via-[#71717a] to-[#f4f4f5] shadow-lg border border-white/10"></div>
-        <div class="text-xs font-bold text-white">Monochrome</div>
-        <div class="text-[10px] text-zinc-400 font-mono">Clean Charcoal</div>
-      </div>
-
-      <!-- 6. Slate Grey -->
-      <div class="p-4 rounded-2xl bg-white/5 border border-slate-500/40 flex flex-col items-center text-center space-y-3">
-        <div class="w-full h-20 rounded-xl bg-gradient-to-br from-[#27272a] via-[#52525b] to-[#a1a1aa] shadow-lg border border-white/10"></div>
-        <div class="text-xs font-bold text-white">Slate Grey</div>
-        <div class="text-[10px] text-slate-300 font-mono">Neutral Steel</div>
-      </div>
-    </div>
-
-    <!-- Light vs Dark Pill -->
-    <div class="flex items-center justify-center space-x-3 text-xs text-zinc-400 pt-4 border-t border-white/10">
-      <span class="flex items-center space-x-1"><span>☀️</span><span>Full Light Mode</span></span>
-      <span>•</span>
-      <span class="flex items-center space-x-1"><span>🌙</span><span>Full Dark Mode</span></span>
-      <span>•</span>
-      <span>System Theme Syncing</span>
-    </div>
-  </section>
+    </section>
+  </div>
 
 </body>
 </html>
