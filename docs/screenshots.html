@@ -21,15 +21,17 @@
       }
     }
 
-    async function downloadSlide(slideId, filename, buttonEl) {
+    async function downloadSlide(slideId, filename, buttonEl, customWidth, customHeight) {
       const node = document.getElementById(slideId);
       if (!node) return;
       const originalText = buttonEl ? buttonEl.innerHTML : '';
       if (buttonEl) buttonEl.innerHTML = '⏳ Generating PNG...';
       try {
+        const width = customWidth || (node.style.width ? parseInt(node.style.width) : node.offsetWidth) || 1280;
+        const height = customHeight || (node.style.height ? parseInt(node.style.height) : node.offsetHeight) || 800;
         const dataUrl = await htmlToImage.toPng(node, {
-          width: 1280,
-          height: 800,
+          width: width,
+          height: height,
           pixelRatio: 1
         });
         const link = document.createElement('a');
@@ -514,6 +516,179 @@
         <span>System Theme Syncing</span>
       </div>
     </section>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- OPTIONAL PROMOTIONAL TILES -->
+  <!-- ========================================================================= -->
+  <div class="max-w-[1280px] mx-auto mt-20 pt-12 border-t border-zinc-800 space-y-16">
+    <div>
+      <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-300 border border-purple-500/20">
+        <span>OPTIONAL ASSETS</span>
+      </div>
+      <h2 class="text-2xl font-bold text-white mt-2">Promotional Tiles (Chrome Web Store)</h2>
+      <p class="text-sm text-zinc-400 mt-1 max-w-2xl">
+        These tiles are strictly optional for publishing. Google uses them if your extension is selected for category spotlights or featured hero banners in the Chrome Web Store.
+      </p>
+    </div>
+
+    <!-- 1. SMALL PROMO TILE (440x280) -->
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <span class="px-2 py-0.5 rounded text-xs font-mono font-bold bg-zinc-800 text-zinc-300 border border-zinc-700">440 × 280 PX</span>
+          <h3 class="text-base font-semibold text-white">Small Promo Tile</h3>
+          <span class="text-xs text-zinc-500">(Used in store category grids & recommendations)</span>
+        </div>
+        <button onclick="downloadSlide('promo-small', 'promo-small-440x280.png', this, 440, 280)" class="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-cyan-300 border border-cyan-500/30 transition-all flex items-center space-x-1.5 shadow-sm">
+          <span>📸</span>
+          <span>Download Small Promo (440×280)</span>
+        </button>
+      </div>
+
+      <div id="promo-small" style="width: 440px; height: 280px;" class="relative overflow-hidden rounded-2xl shadow-2xl bg-gradient-to-br from-[#0a1120] via-[#0c1933] to-[#0369a1] border border-cyan-500/30 p-8 flex flex-col justify-between select-none">
+        <!-- Aurora background glow -->
+        <div class="absolute -top-12 -right-12 w-48 h-48 bg-cyan-500/20 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute -bottom-12 -left-12 w-48 h-48 bg-blue-600/20 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="flex items-center space-x-3 z-10">
+          <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/30 border border-white/20">
+            <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 6h16M4 12h8m-8 6h16" />
+            </svg>
+          </div>
+          <div>
+            <div class="text-xs font-bold uppercase tracking-wider text-cyan-400">Browser Workspace</div>
+            <div class="text-lg font-extrabold text-white leading-tight">Arctic Sidebar</div>
+          </div>
+        </div>
+
+        <div class="z-10">
+          <p class="text-sm font-semibold text-zinc-200 leading-snug">
+            Vertical Tabs & Spaces for Google Chrome.
+          </p>
+          <div class="flex items-center space-x-2 mt-3">
+            <span class="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/10 text-cyan-300 border border-white/10">Arc-Inspired</span>
+            <span class="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/10 text-zinc-300 border border-white/10">100% Private</span>
+            <span class="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-white/10 text-emerald-300 border border-white/10">Fast</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. MARQUEE PROMO TILE (1400x560) -->
+    <div class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <span class="px-2 py-0.5 rounded text-xs font-mono font-bold bg-zinc-800 text-zinc-300 border border-zinc-700">1400 × 560 PX</span>
+          <h3 class="text-base font-semibold text-white">Marquee Promo Tile</h3>
+          <span class="text-xs text-zinc-500">(Hero banner for Chrome Web Store front page)</span>
+        </div>
+        <button onclick="downloadSlide('promo-marquee', 'promo-marquee-1400x560.png', this, 1400, 560)" class="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-xs font-semibold text-cyan-300 border border-cyan-500/30 transition-all flex items-center space-x-1.5 shadow-sm">
+          <span>📸</span>
+          <span>Download Marquee (1400×560)</span>
+        </button>
+      </div>
+
+      <div id="promo-marquee" style="width: 1400px; height: 560px;" class="relative overflow-hidden rounded-3xl shadow-2xl bg-[#080e1a] border border-cyan-500/30 p-16 flex items-center justify-between select-none">
+        <!-- Aurora mesh gradient effects -->
+        <div class="absolute -top-32 -left-20 w-[500px] h-[500px] bg-cyan-600/20 rounded-full blur-[120px] pointer-events-none"></div>
+        <div class="absolute -bottom-32 right-1/4 w-[500px] h-[500px] bg-blue-600/20 rounded-full blur-[140px] pointer-events-none"></div>
+        <div class="absolute top-1/2 right-12 -translate-y-1/2 w-[400px] h-[400px] bg-purple-600/15 rounded-full blur-[120px] pointer-events-none"></div>
+
+        <!-- Left Column: Typography & Badges -->
+        <div class="max-w-2xl z-10 space-y-6">
+          <div class="inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+            <span>✨ Modern Vertical Workspace</span>
+          </div>
+
+          <div class="space-y-3">
+            <h1 class="text-5xl font-extrabold text-white tracking-tight leading-none">
+              Arctic Sidebar
+            </h1>
+            <p class="text-2xl font-medium text-cyan-200/90 leading-snug">
+              Vertical Tabs, Spaces & Centered Command Bar for Chrome.
+            </p>
+          </div>
+
+          <p class="text-base text-zinc-400 max-w-xl leading-relaxed">
+            The ergonomics of Arc browser seamlessly integrated into Google Chrome. Fast, clean, tab-sleeping memory optimization, and completely tracker-free.
+          </p>
+
+          <div class="grid grid-cols-2 gap-3 pt-4">
+            <div class="flex items-center space-x-2.5 text-sm font-semibold text-zinc-200">
+              <span class="w-6 h-6 rounded-md bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-xs">✓</span>
+              <span>Work & Personal Spaces</span>
+            </div>
+            <div class="flex items-center space-x-2.5 text-sm font-semibold text-zinc-200">
+              <span class="w-6 h-6 rounded-md bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-xs">✓</span>
+              <span>Memory Saver & Tab Sleep</span>
+            </div>
+            <div class="flex items-center space-x-2.5 text-sm font-semibold text-zinc-200">
+              <span class="w-6 h-6 rounded-md bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-xs">✓</span>
+              <span>Instant Centered Tab Search</span>
+            </div>
+            <div class="flex items-center space-x-2.5 text-sm font-semibold text-zinc-200">
+              <span class="w-6 h-6 rounded-md bg-cyan-500/20 text-cyan-300 flex items-center justify-center text-xs">✓</span>
+              <span>100% Private & Open Source</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column: Stylized Mockup Preview -->
+        <div class="w-[460px] h-[440px] z-10 rounded-2xl bg-zinc-900/90 border border-white/10 shadow-2xl p-5 flex flex-col space-y-4 backdrop-blur-xl">
+          <div class="flex items-center justify-between pb-3 border-b border-white/10">
+            <div class="flex items-center space-x-2">
+              <div class="w-7 h-7 rounded-lg bg-cyan-500 flex items-center justify-center text-white font-bold text-xs shadow-md shadow-cyan-500/40">A</div>
+              <span class="text-sm font-bold text-white">Arctic Workspace</span>
+            </div>
+            <div class="flex space-x-1.5">
+              <div class="w-2.5 h-2.5 rounded-full bg-red-500/80"></div>
+              <div class="w-2.5 h-2.5 rounded-full bg-yellow-500/80"></div>
+              <div class="w-2.5 h-2.5 rounded-full bg-green-500/80"></div>
+            </div>
+          </div>
+
+          <!-- Spaces Switcher -->
+          <div class="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-black/40 border border-white/5 text-xs font-semibold">
+            <div class="py-1.5 text-center rounded-lg bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">💼 Work</div>
+            <div class="py-1.5 text-center rounded-lg text-zinc-400">🏠 Personal</div>
+          </div>
+
+          <!-- Mock Pinned Icons -->
+          <div class="grid grid-cols-4 gap-2">
+            <div class="h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-sm">📧</div>
+            <div class="h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-sm">📅</div>
+            <div class="h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-sm">💬</div>
+            <div class="h-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-sm">📝</div>
+          </div>
+
+          <!-- Tab list -->
+          <div class="space-y-2 flex-1">
+            <div class="px-3 py-2.5 rounded-xl bg-cyan-500/15 border border-cyan-500/40 text-xs font-semibold text-white flex items-center justify-between">
+              <div class="flex items-center space-x-2 truncate">
+                <span>⚡</span>
+                <span class="truncate">Q4 Product Roadmap — Linear</span>
+              </div>
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/30 text-cyan-200">Active</span>
+            </div>
+            <div class="px-3 py-2.5 rounded-xl bg-white/5 border border-white/5 text-xs text-zinc-300 flex items-center justify-between">
+              <div class="flex items-center space-x-2 truncate">
+                <span>🌐</span>
+                <span class="truncate">GitHub Repository: arctic-sidebar</span>
+              </div>
+            </div>
+            <div class="px-3 py-2.5 rounded-xl bg-white/5 border border-white/5 text-xs text-zinc-400 flex items-center justify-between">
+              <div class="flex items-center space-x-2 truncate">
+                <span>💤</span>
+                <span class="truncate">Design System Specification</span>
+              </div>
+              <span class="text-[10px] text-amber-400">Sleeping</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
 </body>
