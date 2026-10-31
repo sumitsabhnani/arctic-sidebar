@@ -14,7 +14,9 @@ import {
   Link2,
   Lock,
   Globe,
-  Sparkles
+  Sparkles,
+  Coffee,
+  Heart
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
 import type { ColorThemeId, ThemeMode } from '../utils/theme';
@@ -487,6 +489,33 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             </div>
           )}
+
+          {/* Support Arctic Sidebar / Buy Me a Coffee / GitHub Sponsors */}
+          <div className="pt-2 border-t border-black/[0.06] dark:border-white/[0.06] flex flex-col space-y-1.5">
+            <span className="text-[10px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+              Support Arctic Development
+            </span>
+            <div className="flex items-center space-x-2">
+              <a
+                href="https://buymeacoffee.com/sumitsabhnani"
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 flex items-center justify-center space-x-1.5 py-1 px-2 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[11px] font-medium transition-colors border border-amber-500/20"
+              >
+                <Coffee className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                <span className="truncate">Buy Me a Coffee</span>
+              </a>
+              <a
+                href="https://github.com/sponsors/sumitsabhnani"
+                target="_blank"
+                rel="noreferrer"
+                className="flex-1 flex items-center justify-center space-x-1.5 py-1 px-2 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 text-[11px] font-medium transition-colors border border-rose-500/20"
+              >
+                <Heart className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                <span className="truncate">Sponsor</span>
+              </a>
+            </div>
+          </div>
 
           <p className="text-[11px] text-zinc-500 italic">
             Default folders are stored inside Chrome&apos;s &quot;Other Bookmarks&quot; &gt; &quot;Arctic Sidebar&quot;.
