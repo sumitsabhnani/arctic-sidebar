@@ -66,12 +66,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       }
     };
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) onClose();
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('blur', onClose);
     window.addEventListener('resize', onClose);
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) onClose();
-    });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     const handleTabActivated = () => {
       onClose();
@@ -98,6 +100,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('blur', onClose);
       window.removeEventListener('resize', onClose);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('mousedown', handleClickOutside);
       window.removeEventListener('contextmenu', handleClickOutside);
       if (chrome?.tabs?.onActivated) {
