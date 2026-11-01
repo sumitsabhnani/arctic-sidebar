@@ -55,6 +55,12 @@ Install Arctic Sidebar directly from the official **Chrome Web Store**:
 * **Light & Dark Mode:** Matches your operating system appearance or allows manual override.
 * **Multiple Color Accents:** Choose from *Glacier Blue*, *Midnight Amethyst*, *Forest Sage*, *Warm Terracotta*, and *Pure Monochrome*.
 
+### 🎯 Arc-Style Ergonomics & Hidden Gems
+* **Favicon Click to Reset:** Deep in a website on a pinned tab or bookmark? Clicking its favicon instantly resets the tab back to your original saved root URL (just like Arc!). Double-clicking reloads.
+* **Double-Click to Rename:** Clean up 100-character cluttered web titles. Double-click any tab, bookmark, folder, or space title to give it a clean, custom name.
+* **Move Across Spaces:** Right-click any bookmark or folder and choose **Move to [Space]** to instantly send items between Work, Personal, and Project contexts.
+* **Instant URL Replace:** Click any pinned favorite to bring its active tab into focus or navigate cleanly in place without opening endless duplicate tabs.
+
 ### 🔒 100% Private & Open Source
 * **Zero Tracking:** No analytics, no telemetry, no remote servers, no cookies.
 * **Zero Remote Code:** Fully compliant with Chrome Web Store Manifest V3 security requirements. All data stays strictly in local browser storage.
