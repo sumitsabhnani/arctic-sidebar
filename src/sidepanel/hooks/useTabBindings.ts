@@ -661,6 +661,19 @@ export function useTabBindings() {
     [activeTabId, refreshWindowTabs]
   );
 
+  /**
+   * Navigate active tab backward in history
+   */
+  const goBackActiveTab = useCallback(async () => {
+    if (typeof activeTabId === 'number') {
+      try {
+        await chrome.tabs.goBack(activeTabId);
+      } catch (err) {
+        console.warn('[Arctic] Could not go back in active tab:', err);
+      }
+    }
+  }, [activeTabId]);
+
   // Map of discarded tabs by tabId
   const discardedTabsByTabId = windowTabs.reduce<Record<number, boolean>>((acc, tab) => {
     if (typeof tab.id === 'number' && tab.discarded) {
@@ -971,6 +984,7 @@ export function useTabBindings() {
     activeTabUrl,
     activeTabTitle,
     navigateActiveTab,
+    goBackActiveTab,
     discardTab,
     discardAllBackgroundTabs,
     discardedTabsByTabId,

@@ -8,9 +8,13 @@ import { FolderNode } from './components/FolderNode';
 import { BookmarkRow } from './components/BookmarkRow';
 import { OpenTabsSection } from './components/OpenTabsSection';
 import { SpacesSwitcher } from './components/SpacesSwitcher';
+import { ScratchpadDrawer } from './components/ScratchpadDrawer';
+import { ReminderPopover } from './components/ReminderPopover';
+import { useScratchpad } from './hooks/useScratchpad';
+import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
-import { Loader2, FolderPlus, BookmarkPlus, Folder, Check, X } from 'lucide-react';
+import { Loader2, FolderPlus, BookmarkPlus, Folder, Check, X, Bell } from 'lucide-react';
 
 export const App: React.FC = () => {
   const {
@@ -60,6 +64,7 @@ export const App: React.FC = () => {
     isActiveTabLoading,
     activeTabUrl,
     navigateActiveTab,
+    goBackActiveTab,
     discardTab,
     discardAllBackgroundTabs,
     discardedTabsByTabId,
@@ -70,6 +75,42 @@ export const App: React.FC = () => {
     setAutoArchiveInterval,
     updateBookmarkBindingUrl
   } = useTabBindings();
+
+  // Cross-Device Scratchpad
+  const {
+    text: scratchpadText,
+    setText: setScratchpadText,
+    syncStatus: scratchpadStatus,
+    clearScratchpad,
+    isOpen: isScratchpadOpen,
+    setIsOpen: setIsScratchpadOpen,
+    toggleOpen: toggleScratchpadOpen,
+    maxChars: maxScratchpadChars
+  } = useScratchpad();
+
+  // Tab Reminders
+  const {
+    firedReminders,
+    getReminderForBookmark,
+    getReminderForTab,
+    createOrUpdateReminder,
+    deleteReminder,
+    snoozeReminder,
+    dismissReminder,
+    openAndDismissReminder
+  } = useReminders();
+
+  // Active Reminder Popover Anchor
+  const [activeReminderTarget, setActiveReminderTarget] = useState<{
+    target: {
+      type: 'bookmark' | 'tab';
+      bookmarkId?: string;
+      tabId?: number;
+      url: string;
+      title: string;
+    };
+    anchorRect: DOMRect;
+  } | null>(null);
 
   // Theme State
   const [theme, setTheme] = useState<ThemeMode>('dark');
@@ -87,27 +128,34 @@ export const App: React.FC = () => {
   });
 
   useEffect(() => {
-    chrome.storage.local.get(['theme', 'colorTheme', 'collapsedSections'], (res) => {
-      if (res.theme === 'light' || res.theme === 'dark') {
-        setTheme(res.theme as ThemeMode);
+    chrome.storage.local.get(
+      [
+        'theme',
+        'colorTheme',
+        'collapsedSections'
+      ],
+      (res) => {
+        if (res.theme === 'light' || res.theme === 'dark') {
+          setTheme(res.theme as ThemeMode);
+        }
+        if (
+          typeof res.colorTheme === 'string' &&
+          [
+            'glacier-blue',
+            'midnight-amethyst',
+            'forest-sage',
+            'warm-terracotta',
+            'pure-monochrome',
+            'slate-grey'
+          ].includes(res.colorTheme)
+        ) {
+          setColorTheme(res.colorTheme as ColorThemeId);
+        }
+        if (res.collapsedSections) {
+          setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
+        }
       }
-      if (
-        typeof res.colorTheme === 'string' &&
-        [
-          'glacier-blue',
-          'midnight-amethyst',
-          'forest-sage',
-          'warm-terracotta',
-          'pure-monochrome',
-          'slate-grey'
-        ].includes(res.colorTheme)
-      ) {
-        setColorTheme(res.colorTheme as ColorThemeId);
-      }
-      if (res.collapsedSections) {
-        setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
-      }
-    });
+    );
   }, []);
 
   useEffect(() => {
@@ -461,6 +509,7 @@ export const App: React.FC = () => {
         onSetAutoArchiveInterval={setAutoArchiveInterval}
         onReloadActiveTab={reloadActiveTab}
         onNavigateActiveTab={navigateActiveTab}
+        onGoBackActiveTab={goBackActiveTab}
         onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
         onToggleTheme={toggleTheme}
         onSelectColorTheme={handleSelectColorTheme}
@@ -478,6 +527,64 @@ export const App: React.FC = () => {
           }}
           matchCount={queryLower ? totalMatches : undefined}
         />
+      )}
+
+      {/* Top Overdue Tab Reminders Banner */}
+      {firedReminders.length > 0 && (
+        <div className="mx-2.5 mt-2 flex flex-col space-y-2">
+          {firedReminders.map((reminder) => (
+            <div
+              key={reminder.id}
+              className="p-2.5 rounded-2xl bg-rose-500/10 border border-rose-500/25 text-rose-600 dark:text-rose-300 flex flex-col space-y-1.5 text-xs shadow-sm animate-in fade-in slide-in-from-top-1"
+            >
+              {/* Header: Status, Title, Actions */}
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                  <Bell className="w-3.5 h-3.5 stroke-[2.5] text-rose-500 animate-pulse flex-shrink-0" />
+                  <span className="font-semibold text-xs text-rose-600 dark:text-rose-400 whitespace-nowrap">
+                    Reminder Due
+                  </span>
+                  <span
+                    className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate"
+                    title={reminder.title || reminder.url}
+                  >
+                    • {reminder.title || reminder.url}
+                  </span>
+                </div>
+
+                <div className="flex items-center space-x-1 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => openAndDismissReminder(reminder)}
+                    className="px-2.5 py-1 rounded-xl font-semibold bg-rose-500 hover:bg-rose-600 text-white transition-colors text-[11px] whitespace-nowrap shadow-sm active:scale-95"
+                  >
+                    Open Tab
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => dismissReminder(reminder.id)}
+                    className="px-2 py-1 rounded-xl font-medium text-rose-600 dark:text-rose-300 hover:bg-rose-500/20 transition-colors text-[11px] whitespace-nowrap"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+
+              {/* Multi-line Message with Hover Tooltip & Click-to-Alert */}
+              {reminder.note && (
+                <div
+                  title={`Full Message:\n${reminder.note}\n\n(Click to open in browser alert window)`}
+                  onClick={() => {
+                    window.alert(`🔔 Reminder for "${reminder.title}":\n\n${reminder.note}\n\nURL: ${reminder.url}`);
+                  }}
+                  className="text-xs text-zinc-800 dark:text-zinc-200 bg-white/60 dark:bg-black/30 rounded-xl p-2 break-words select-text font-normal leading-relaxed cursor-pointer hover:bg-white/80 dark:hover:bg-black/40 transition-colors border border-rose-500/10 shadow-xs"
+                >
+                  {reminder.note}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Main Content Area */}
@@ -705,6 +812,10 @@ export const App: React.FC = () => {
                       onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
                       onDropItemToFolder={handleDropItemToFolder}
                       onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
+                      getReminderForBookmark={getReminderForBookmark}
+                      onOpenReminderPopover={(target, rect) =>
+                        setActiveReminderTarget({ target, anchorRect: rect })
+                      }
                     />
                   );
                 }
@@ -740,6 +851,10 @@ export const App: React.FC = () => {
                     onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
                     onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
                     onDropItemToFolder={handleDropItemToFolder}
+                    reminder={getReminderForBookmark(child.id)}
+                    onOpenReminderPopover={(target, rect) =>
+                      setActiveReminderTarget({ target, anchorRect: rect })
+                    }
                   />
                 );
               })
@@ -768,6 +883,10 @@ export const App: React.FC = () => {
           onRenameTab={renameOpenTab}
           onOpenContextMenu={handleOpenContextMenu}
           onMoveOpenTab={moveOpenTab}
+          getReminderForTab={getReminderForTab}
+          onOpenReminderPopover={(target, rect) =>
+            setActiveReminderTarget({ target, anchorRect: rect })
+          }
         />
       </div>
 
@@ -781,7 +900,18 @@ export const App: React.FC = () => {
         />
       )}
 
-      {/* Bottom Multiple Spaces Switcher Dock */}
+      {/* Slide-Up Scratchpad Drawer */}
+      <ScratchpadDrawer
+        isOpen={isScratchpadOpen}
+        onClose={() => setIsScratchpadOpen(false)}
+        text={scratchpadText}
+        onChange={setScratchpadText}
+        syncStatus={scratchpadStatus}
+        onClear={clearScratchpad}
+        maxChars={maxScratchpadChars}
+      />
+
+      {/* Bottom Multiple Spaces Switcher Dock / Footer Bar */}
       <SpacesSwitcher
         spaces={spaces}
         activeSpaceId={activeSpaceId}
@@ -791,7 +921,40 @@ export const App: React.FC = () => {
         onDeleteSpace={deleteSpace}
         onDropItemToSpace={(data, targetFolderId) => handleDropItemToFolder(data, targetFolderId)}
         onOpenContextMenu={handleOpenContextMenu}
+        isScratchpadOpen={isScratchpadOpen}
+        onToggleScratchpad={toggleScratchpadOpen}
+        hasScratchpadText={Boolean(scratchpadText.trim())}
       />
+
+      {/* Floating Active Reminder Popover */}
+      {activeReminderTarget && (
+        <ReminderPopover
+          target={activeReminderTarget.target}
+          activeReminder={
+            activeReminderTarget.target.type === 'bookmark' && activeReminderTarget.target.bookmarkId
+              ? getReminderForBookmark(activeReminderTarget.target.bookmarkId)
+              : activeReminderTarget.target.tabId !== undefined
+              ? getReminderForTab(activeReminderTarget.target.tabId, activeReminderTarget.target.url)
+              : undefined
+          }
+          anchorRect={activeReminderTarget.anchorRect}
+          onSave={(params) => {
+            createOrUpdateReminder({
+              targetType: activeReminderTarget.target.type,
+              bookmarkId: activeReminderTarget.target.bookmarkId,
+              tabId: activeReminderTarget.target.tabId,
+              url: activeReminderTarget.target.url,
+              title: activeReminderTarget.target.title,
+              note: params.note,
+              triggerAt: params.triggerAt,
+              reminderId: params.reminderId
+            });
+          }}
+          onDelete={deleteReminder}
+          onSnooze={snoozeReminder}
+          onClose={() => setActiveReminderTarget(null)}
+        />
+      )}
     </div>
   );
 };

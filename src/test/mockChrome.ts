@@ -12,6 +12,14 @@ export interface MockBookmarkNode {
 export function createMockChrome() {
   let localStorageState: Record<string, unknown> = {};
   let sessionStorageState: Record<string, unknown> = {};
+  let syncStorageState: Record<string, unknown> = {};
+  const alarmsMap = new Map<string, chrome.alarms.Alarm>();
+  const notificationsMap = new Map<string, chrome.notifications.NotificationOptions<true>>();
+  let badgeText = '';
+  let badgeColor = '';
+  const alarmListeners = new Set<(alarm: chrome.alarms.Alarm) => void>();
+  const notifClickedListeners = new Set<(notificationId: string) => void>();
+  const notifButtonClickedListeners = new Set<(notificationId: string, buttonIndex: number) => void>();
 
   let bookmarksTree: MockBookmarkNode[] = [
     {
@@ -114,6 +122,7 @@ export function createMockChrome() {
   const mock = {
     runtime: {
       id: 'mock-extension-id',
+      getURL: vi.fn((path: string) => `chrome-extension://mock-extension-id/${path}`),
       onInstalled: { addListener: vi.fn() },
       onStartup: { addListener: vi.fn() }
     },
@@ -186,6 +195,49 @@ export function createMockChrome() {
         remove: vi.fn((keys: string | string[], cb?: () => void) => {
           const keyArr = Array.isArray(keys) ? keys : [keys];
           for (const k of keyArr) delete sessionStorageState[k];
+          if (cb) cb();
+          return Promise.resolve();
+        })
+      },
+      sync: {
+        get: vi.fn((keys: string | string[] | Record<string, unknown> | null, cb?: (items: Record<string, unknown>) => void) => {
+          const result: Record<string, unknown> = {};
+          if (typeof keys === 'string') {
+            result[keys] = syncStorageState[keys];
+          } else if (Array.isArray(keys)) {
+            for (const k of keys) result[k] = syncStorageState[k];
+          } else if (keys && typeof keys === 'object') {
+            for (const k of Object.keys(keys)) {
+              result[k] = syncStorageState[k] !== undefined ? syncStorageState[k] : keys[k];
+            }
+          } else {
+            Object.assign(result, syncStorageState);
+          }
+          if (cb) cb(result);
+          return Promise.resolve(result);
+        }),
+        set: vi.fn((items: Record<string, unknown>, cb?: () => void) => {
+          const changes: Record<string, chrome.storage.StorageChange> = {};
+          for (const [k, v] of Object.entries(items)) {
+            changes[k] = { oldValue: syncStorageState[k], newValue: v };
+            syncStorageState[k] = v;
+          }
+          for (const listener of storageListeners) {
+            listener(changes, 'sync');
+          }
+          if (cb) cb();
+          return Promise.resolve();
+        }),
+        remove: vi.fn((keys: string | string[], cb?: () => void) => {
+          const keyArr = Array.isArray(keys) ? keys : [keys];
+          const changes: Record<string, chrome.storage.StorageChange> = {};
+          for (const k of keyArr) {
+            changes[k] = { oldValue: syncStorageState[k], newValue: undefined };
+            delete syncStorageState[k];
+          }
+          for (const listener of storageListeners) {
+            listener(changes, 'sync');
+          }
           if (cb) cb();
           return Promise.resolve();
         })
@@ -426,6 +478,7 @@ export function createMockChrome() {
         return undefined;
       }),
       getCurrent: vi.fn(async () => cloneTree(tabsState[0])),
+      goBack: vi.fn(async (_tabId?: number) => Promise.resolve()),
       onActivated: {
         addListener: vi.fn((fn) => tabActivatedListeners.add(fn)),
         removeListener: vi.fn((fn) => tabActivatedListeners.delete(fn))
@@ -516,6 +569,67 @@ export function createMockChrome() {
         return filtered;
       })
     },
+    alarms: {
+      create: vi.fn(async (nameOrAlarmInfo: string | chrome.alarms.AlarmCreateInfo, alarmInfo?: chrome.alarms.AlarmCreateInfo) => {
+        const name = typeof nameOrAlarmInfo === 'string' ? nameOrAlarmInfo : '';
+        const info = (typeof nameOrAlarmInfo === 'object' ? nameOrAlarmInfo : alarmInfo) || {};
+        const alarm: chrome.alarms.Alarm = {
+          name,
+          scheduledTime: info.when || (info.delayInMinutes ? Date.now() + info.delayInMinutes * 60000 : Date.now()),
+          periodInMinutes: info.periodInMinutes
+        };
+        alarmsMap.set(name, alarm);
+        return alarm;
+      }),
+      get: vi.fn(async (name: string) => alarmsMap.get(name)),
+      getAll: vi.fn(async () => Array.from(alarmsMap.values())),
+      clear: vi.fn(async (name: string) => {
+        const existed = alarmsMap.delete(name);
+        return existed;
+      }),
+      clearAll: vi.fn(async () => {
+        alarmsMap.clear();
+        return true;
+      }),
+      onAlarm: {
+        addListener: vi.fn((fn) => alarmListeners.add(fn)),
+        removeListener: vi.fn((fn) => alarmListeners.delete(fn))
+      }
+    },
+    notifications: {
+      create: vi.fn(async (notificationIdOrOptions: string | chrome.notifications.NotificationOptions<true>, options?: chrome.notifications.NotificationOptions<true>) => {
+        const id = typeof notificationIdOrOptions === 'string' ? notificationIdOrOptions : `notif_${Date.now()}`;
+        const opts = typeof notificationIdOrOptions === 'object' ? notificationIdOrOptions : options || ({} as chrome.notifications.NotificationOptions<true>);
+        notificationsMap.set(id, opts);
+        return id;
+      }),
+      clear: vi.fn(async (notificationId: string) => {
+        const existed = notificationsMap.delete(notificationId);
+        return existed;
+      }),
+      getAll: vi.fn(async () => {
+        const res: Record<string, boolean> = {};
+        for (const k of notificationsMap.keys()) res[k] = true;
+        return res;
+      }),
+      onClicked: {
+        addListener: vi.fn((fn) => notifClickedListeners.add(fn)),
+        removeListener: vi.fn((fn) => notifClickedListeners.delete(fn))
+      },
+      onButtonClicked: {
+        addListener: vi.fn((fn) => notifButtonClickedListeners.add(fn)),
+        removeListener: vi.fn((fn) => notifButtonClickedListeners.delete(fn))
+      }
+    },
+    action: {
+      setBadgeText: vi.fn(async (details: { text: string }) => {
+        badgeText = details.text;
+      }),
+      getBadgeText: vi.fn(async () => badgeText),
+      setBadgeBackgroundColor: vi.fn(async (details: { color: string }) => {
+        badgeColor = details.color;
+      })
+    },
 
     // Test helpers to inspect or reset internal states
     __setLocalStorage: (state: Record<string, unknown>) => {
@@ -591,7 +705,33 @@ export function createMockChrome() {
       bookmarkRemovedListeners.clear();
       bookmarkChangedListeners.clear();
       bookmarkMovedListeners.clear();
-    }
+      alarmListeners.clear();
+      notifClickedListeners.clear();
+      notifButtonClickedListeners.clear();
+      syncStorageState = {};
+      alarmsMap.clear();
+      notificationsMap.clear();
+      badgeText = '';
+      badgeColor = '';
+    },
+    __triggerAlarm: async (name: string) => {
+      const alarm: chrome.alarms.Alarm = alarmsMap.get(name) || { name, scheduledTime: Date.now() };
+      for (const listener of alarmListeners) {
+        await listener(alarm);
+      }
+    },
+    __triggerNotifClick: async (notificationId: string) => {
+      for (const listener of notifClickedListeners) {
+        await listener(notificationId);
+      }
+    },
+    __triggerNotifButtonClick: async (notificationId: string, buttonIndex: number) => {
+      for (const listener of notifButtonClickedListeners) {
+        await listener(notificationId, buttonIndex);
+      }
+    },
+    __getBadgeColor: () => badgeColor,
+    __getBadgeText: () => badgeText
   };
 
   return mock;

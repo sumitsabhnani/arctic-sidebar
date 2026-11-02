@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.0-blue.svg" alt="Version 1.2.0" />
+  <img src="https://img.shields.io/badge/version-1.3.0-blue.svg" alt="Version 1.3.0" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT" />
   <img src="https://img.shields.io/badge/manifest-v3-orange.svg" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/tests-57%20passed-brightgreen.svg" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-86%20passed-brightgreen.svg" alt="Tests" />
   <img src="https://img.shields.io/badge/privacy-100%25_local_%26_tracker--free-teal.svg" alt="Privacy" />
 </p>
 
@@ -42,6 +42,17 @@ Install Arctic Sidebar directly from the official **Chrome Web Store**:
 * **Clean New Tab:** A minimalist, focused search hub on every new tab (`Cmd+T`).
 * **Auto-Focus Anywhere:** Just start typing on any new tab—the centered command bar automatically captures your keystrokes.
 * **Instant Navigation:** Search open tabs across all windows, browse matching history suggestions, or search Google instantly.
+
+### ⏰ Tab Reminders & Alerts
+* **Set Tab Reminders:** Never lose track of an article, pull request, or invoice. Schedule reminders on any open tab or bookmark with 1-click presets (*In 15m*, *In 1h*, *In 3h*, *Tomorrow 9 AM*) or a custom date & time picker.
+* **Native Desktop Notifications:** Receive system notifications with one-click **Open Tab** and **Dismiss** actions when reminders are due.
+* **Top Overdue Banner:** Overdue reminders automatically surface at the top of the sidebar with multi-line notes, hover tooltips, and click-to-alert dialogs.
+* **Background Service Worker:** Powered by `chrome.alarms` with automatic startup reconciliation so you never miss a reminder even if Chrome was closed or asleep.
+
+### 📝 Cross-Device Shared Scratchpad
+* **Instant Quick Notes:** Fast, minimalist scratchpad drawer accessible directly from the bottom dock button (Sticky Note icon).
+* **Cross-Device Sync:** Automatically chunks and syncs up to 28,000 characters across all your Chrome browsers using `chrome.storage.sync` with local offline fallback.
+* **Live Sync Indicator:** Subtle visual indicator keeps you informed of live saving and cross-device sync status.
 
 ### 🔇 Audio Controls & Indicators
 * **Visual Speaker Badges:** Instantly identify which tab is playing sound or background video.

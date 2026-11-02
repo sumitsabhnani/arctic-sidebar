@@ -12,7 +12,7 @@ import {
   ArrowRightLeft
 } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
-import type { TabBinding, SpaceItem } from '../../types';
+import type { TabBinding, SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
 
 function getDescendantBookmarkIds(folder: chrome.bookmarks.BookmarkTreeNode): string[] {
@@ -58,6 +58,8 @@ interface FolderNodeProps {
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
+  getReminderForBookmark?: (bookmarkId: string) => TabReminder | undefined;
+  onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
 }
 
 export const FolderNode: React.FC<FolderNodeProps> = ({
@@ -88,7 +90,9 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onDeleteBookmark,
   onMoveToQuickAccess,
   onDropItemToFolder,
-  onMoveBookmarkToIndex
+  onMoveBookmarkToIndex,
+  getReminderForBookmark,
+  onOpenReminderPopover
 }) => {
   const isCollapsed = Boolean(collapsedFolderIds[node.id]);
   const children = node.children || [];
@@ -544,6 +548,8 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onMoveToQuickAccess={onMoveToQuickAccess}
                     onMoveBookmarkToIndex={onMoveBookmarkToIndex}
                     onDropItemToFolder={onDropItemToFolder}
+                    getReminderForBookmark={getReminderForBookmark}
+                    onOpenReminderPopover={onOpenReminderPopover}
                   />
                 );
               }
@@ -579,6 +585,8 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onMoveToQuickAccess={onMoveToQuickAccess}
                   onMoveBookmarkToIndex={onMoveBookmarkToIndex}
                   onDropItemToFolder={onDropItemToFolder}
+                  reminder={getReminderForBookmark?.(child.id)}
+                  onOpenReminderPopover={onOpenReminderPopover}
                 />
               );
             })

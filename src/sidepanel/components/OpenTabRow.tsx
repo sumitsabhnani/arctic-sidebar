@@ -13,9 +13,10 @@ import {
   Moon,
   Edit2,
   ArrowRightLeft,
-  Folder
+  Folder,
+  Bell
 } from 'lucide-react';
-import type { SpaceItem } from '../../types';
+import type { SpaceItem, TabReminder } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -35,6 +36,8 @@ interface OpenTabRowProps {
   onRenameTab?: (tabId: number, title: string) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
+  reminder?: TabReminder;
+  onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
 }
 
 export const OpenTabRow: React.FC<OpenTabRowProps> = ({
@@ -52,7 +55,9 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onToggleMute,
   onRenameTab,
   onOpenContextMenu,
-  onMoveOpenTab
+  onMoveOpenTab,
+  reminder,
+  onOpenReminderPopover
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -365,6 +370,42 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         {/* Active tab indicator dot */}
         {isActive && (
           <div className="w-1.5 h-1.5 rounded-full theme-active-indicator group-hover:hidden transition-opacity flex-shrink-0" />
+        )}
+
+        {/* Tab Reminder Bell Icon */}
+        {onOpenReminderPopover && typeof tabId === 'number' && !isNewTab && (
+          <button
+            type="button"
+            data-tooltip={
+              reminder
+                ? reminder.status === 'fired' || reminder.triggerAt <= Date.now()
+                  ? `Overdue Reminder: ${reminder.note || 'Check tab'}`
+                  : `Reminder at ${new Date(reminder.triggerAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${reminder.note || 'Check tab'}`
+                : 'Set reminder'
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              const rect = e.currentTarget.getBoundingClientRect();
+              onOpenReminderPopover(
+                {
+                  type: 'tab',
+                  tabId,
+                  url: tab.url || '',
+                  title: tab.title || ''
+                },
+                rect
+              );
+            }}
+            className={`items-center justify-center w-5 h-5 rounded-full transition-all duration-100 ${
+              reminder
+                ? reminder.status === 'fired' || reminder.triggerAt <= Date.now()
+                  ? 'flex text-rose-500 bg-rose-500/15 animate-pulse'
+                  : 'flex text-amber-500 dark:text-amber-400 bg-amber-500/10'
+                : 'hidden group-hover:flex text-zinc-400 hover:text-amber-500 hover:bg-amber-500/10'
+            }`}
+          >
+            <Bell className="w-3 h-3 stroke-[2.5]" />
+          </button>
         )}
 
         {/* Close Button on hover */}

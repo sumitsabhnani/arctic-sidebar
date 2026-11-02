@@ -52,3 +52,5 @@ export interface BookmarkFolderOption {
   title: string;
   path: string;
 }
+
+export * from './reminder';

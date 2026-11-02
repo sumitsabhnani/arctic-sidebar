@@ -16,7 +16,8 @@ import {
   Globe,
   Sparkles,
   Coffee,
-  Heart
+  Heart,
+  ArrowLeft
 } from 'lucide-react';
 import type { BookmarkFolderOption } from '../../types';
 import type { ColorThemeId, ThemeMode } from '../utils/theme';
@@ -44,6 +45,7 @@ interface HeaderProps {
   onSetAutoArchiveInterval: (val: 'never' | '12h' | '24h' | '7d') => void;
   onReloadActiveTab: () => void;
   onNavigateActiveTab?: (input: string) => void;
+  onGoBackActiveTab?: () => void;
   onToggleSearch: () => void;
   onToggleTheme: () => void;
   onSelectColorTheme: (themeId: ColorThemeId) => void;
@@ -92,6 +94,7 @@ export const Header: React.FC<HeaderProps> = ({
   onSetAutoArchiveInterval,
   onReloadActiveTab,
   onNavigateActiveTab,
+  onGoBackActiveTab,
   onToggleSearch,
   onToggleTheme,
   onSelectColorTheme,
@@ -187,6 +190,21 @@ export const Header: React.FC<HeaderProps> = ({
               : 'bg-black/[0.04] dark:bg-white/[0.05] hover:bg-black/[0.06] dark:hover:bg-white/[0.08] border-black/[0.06] dark:border-white/[0.07]'
           }`}
         >
+          {/* Small Backward Button */}
+          <button
+            type="button"
+            data-tooltip="Back"
+            data-tooltip-pos="bottom-left"
+            onClick={(e) => {
+              e.stopPropagation();
+              onGoBackActiveTab?.();
+            }}
+            className="flex-shrink-0 -ml-0.5 mr-1.5 p-1 rounded-md text-zinc-400 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            title="Back"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+          </button>
+
           {/* Protocol / Security Icon */}
           <span className="flex-shrink-0 mr-2 text-zinc-400 dark:text-zinc-500">
             {isInternal ? (
@@ -489,6 +507,7 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             </div>
           )}
+
 
           {/* Support Arctic Sidebar / Buy Me a Coffee / GitHub Sponsors */}
           <div className="pt-2 border-t border-black/[0.06] dark:border-white/[0.06] flex flex-col space-y-1.5">

@@ -28,6 +28,7 @@ describe('Header component', () => {
     onSetAutoArchiveInterval: vi.fn(),
     onReloadActiveTab: vi.fn(),
     onNavigateActiveTab: vi.fn(),
+    onGoBackActiveTab: vi.fn(),
     onToggleSearch: vi.fn(),
     onToggleTheme: vi.fn(),
     onSelectColorTheme: vi.fn(),
@@ -127,5 +128,15 @@ describe('Header component', () => {
     const midnightBtn = screen.getByText('Midnight Amethyst');
     fireEvent.click(midnightBtn);
     expect(defaultProps.onSelectColorTheme).toHaveBeenCalledWith('midnight-amethyst');
+  });
+
+  it('renders small backward button in the url bar and triggers onGoBackActiveTab', () => {
+    const { container } = render(<Header {...defaultProps} />);
+
+    const backBtn = container.querySelector('[data-tooltip="Back"]') as HTMLElement;
+    expect(backBtn).toBeInTheDocument();
+    fireEvent.click(backBtn);
+
+    expect(defaultProps.onGoBackActiveTab).toHaveBeenCalledTimes(1);
   });
 });

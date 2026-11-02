@@ -11,7 +11,8 @@ import {
   Check,
   X,
   Edit2,
-  Trash2
+  Trash2,
+  StickyNote
 } from 'lucide-react';
 import type { SpaceItem } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
@@ -25,6 +26,9 @@ interface SpacesSwitcherProps {
   onDeleteSpace: (spaceId: string) => void;
   onDropItemToSpace?: (data: { type: string; [key: string]: unknown }, targetFolderId: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
+  isScratchpadOpen?: boolean;
+  onToggleScratchpad?: () => void;
+  hasScratchpadText?: boolean;
 }
 
 const SPACE_ICONS: { id: string; label: string }[] = [
@@ -63,7 +67,10 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
   onRenameSpace,
   onDeleteSpace,
   onDropItemToSpace,
-  onOpenContextMenu
+  onOpenContextMenu,
+  isScratchpadOpen,
+  onToggleScratchpad,
+  hasScratchpadText
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
@@ -185,8 +192,31 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
         </form>
       )}
 
-      {/* Bottom Spaces Dock */}
+      {/* Bottom Spaces Dock / Footer Bar */}
       <div className="flex items-center justify-between px-2 py-1.5 gap-1">
+        {/* Left Footer Utilities: Scratchpad Button */}
+        {onToggleScratchpad && (
+          <div className="flex items-center pl-0.5 pr-1 flex-shrink-0">
+            <button
+              type="button"
+              data-tooltip="Scratchpad (Quick notes synced across devices)"
+              title="Scratchpad (Quick notes synced across devices)"
+              onClick={onToggleScratchpad}
+              className={`relative p-1.5 rounded-xl transition-all ${
+                isScratchpadOpen
+                  ? 'theme-accent-text theme-accent-tint shadow-sm'
+                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10'
+              }`}
+            >
+              <StickyNote className="w-3.5 h-3.5" />
+              {hasScratchpadText && (
+                <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full theme-active-indicator" />
+              )}
+            </button>
+            <div className="w-px h-3.5 bg-black/10 dark:bg-white/10 ml-1 mr-0.5" />
+          </div>
+        )}
+
         <div className="flex items-center gap-1 flex-1 overflow-x-auto no-scrollbar">
           {spaces.map((space) => {
             const isActive = space.id === activeSpaceId;

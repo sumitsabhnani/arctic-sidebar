@@ -1,7 +1,7 @@
 import React from 'react';
 import { Layers, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
-import type { SpaceItem } from '../../types';
+import type { SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
 
 interface OpenTabsSectionProps {
@@ -24,6 +24,8 @@ interface OpenTabsSectionProps {
   onRenameTab?: (tabId: number, title: string) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
+  getReminderForTab?: (tabId: number, url?: string) => TabReminder | undefined;
+  onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
 }
 
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
@@ -45,7 +47,9 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onToggleMuteTab,
   onRenameTab,
   onOpenContextMenu,
-  onMoveOpenTab
+  onMoveOpenTab,
+  getReminderForTab,
+  onOpenReminderPopover
 }) => {
   return (
     <div className="flex flex-col space-y-1 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
@@ -133,6 +137,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   onRenameTab={onRenameTab}
                   onOpenContextMenu={onOpenContextMenu}
                   onMoveOpenTab={onMoveOpenTab}
+                  reminder={typeof tab.id === 'number' ? getReminderForTab?.(tab.id, tab.url) : undefined}
+                  onOpenReminderPopover={onOpenReminderPopover}
                 />
               );
             })

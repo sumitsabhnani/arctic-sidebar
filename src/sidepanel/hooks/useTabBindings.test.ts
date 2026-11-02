@@ -234,4 +234,17 @@ describe('useTabBindings hook', () => {
     const backgroundTabs = allTabs.filter((t) => !t.active);
     expect(backgroundTabs.every((t) => t.discarded)).toBe(true);
   });
+
+  it('navigates active tab back in history via goBackActiveTab', async () => {
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.goBackActiveTab();
+    });
+
+    expect(mockChrome.tabs.goBack).toHaveBeenCalledWith(1);
+  });
 });

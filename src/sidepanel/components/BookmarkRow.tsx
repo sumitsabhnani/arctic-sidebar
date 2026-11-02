@@ -15,9 +15,10 @@ import {
   Volume2,
   VolumeX,
   ArrowRightLeft,
-  Folder
+  Folder,
+  Bell
 } from 'lucide-react';
-import type { TabBinding, SpaceItem } from '../../types';
+import type { TabBinding, SpaceItem, TabReminder } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -45,6 +46,8 @@ interface BookmarkRowProps {
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
   onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
+  reminder?: TabReminder;
+  onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
 }
 
 export const BookmarkRow: React.FC<BookmarkRowProps> = ({
@@ -70,7 +73,9 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onDeleteBookmark,
   onMoveToQuickAccess,
   onMoveBookmarkToIndex,
-  onDropItemToFolder
+  onDropItemToFolder,
+  reminder,
+  onOpenReminderPopover
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
@@ -471,6 +476,42 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             ) : (
               <Volume2 className="w-3 h-3 stroke-[2.5] animate-pulse" />
             )}
+          </button>
+        )}
+
+        {/* Tab Reminder Bell Icon */}
+        {onOpenReminderPopover && bookmark.url && (
+          <button
+            type="button"
+            data-tooltip={
+              reminder
+                ? reminder.status === 'fired' || reminder.triggerAt <= Date.now()
+                  ? `Overdue Reminder: ${reminder.note || 'Check tab'}`
+                  : `Reminder at ${new Date(reminder.triggerAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — ${reminder.note || 'Check tab'}`
+                : 'Set reminder'
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              const rect = e.currentTarget.getBoundingClientRect();
+              onOpenReminderPopover(
+                {
+                  type: 'bookmark',
+                  bookmarkId: bookmark.id,
+                  url: bookmark.url || '',
+                  title: bookmark.title || ''
+                },
+                rect
+              );
+            }}
+            className={`items-center justify-center w-5 h-5 rounded-full transition-all duration-100 ${
+              reminder
+                ? reminder.status === 'fired' || reminder.triggerAt <= Date.now()
+                  ? 'flex text-rose-500 bg-rose-500/15 animate-pulse'
+                  : 'flex text-amber-500 dark:text-amber-400 bg-amber-500/10'
+                : 'hidden group-hover:flex text-zinc-400 hover:text-amber-500 hover:bg-amber-500/10'
+            }`}
+          >
+            <Bell className="w-3 h-3 stroke-[2.5]" />
           </button>
         )}
 
