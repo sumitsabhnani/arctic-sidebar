@@ -1,5 +1,5 @@
 import React from 'react';
-import { Layers, Plus, Trash2, ChevronDown } from 'lucide-react';
+import { Layers, Trash2, ChevronDown, X } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
 import type { SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
@@ -13,7 +13,8 @@ interface OpenTabsSectionProps {
   onFocusTab: (tabId: number) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onCloseAll: () => void;
-  onNewTab: () => void;
+  onCloseAllWindowTabs?: () => void;
+  onNewTab?: () => void;
   onPinToQuickAccess: (tab: chrome.tabs.Tab) => void;
   onPinToWorkspace: (tab: chrome.tabs.Tab) => void;
   onPinToSpace?: (tab: chrome.tabs.Tab, targetSpaceFolderId: string) => void;
@@ -26,6 +27,7 @@ interface OpenTabsSectionProps {
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
   getReminderForTab?: (tabId: number, url?: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
+  densityMode?: 'relaxed' | 'compact';
 }
 
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
@@ -37,6 +39,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onFocusTab,
   onCloseTab,
   onCloseAll,
+  onCloseAllWindowTabs,
   onNewTab,
   onPinToQuickAccess,
   onPinToWorkspace,
@@ -49,7 +52,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onOpenContextMenu,
   onMoveOpenTab,
   getReminderForTab,
-  onOpenReminderPopover
+  onOpenReminderPopover,
+  densityMode = 'relaxed'
 }) => {
   return (
     <div className="flex flex-col space-y-1 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
@@ -71,17 +75,17 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
             <Layers className="w-2.5 h-2.5 theme-accent-text" />
             Today&apos;s Tabs
           </span>
-          <span className="text-[10px] text-zinc-400 dark:text-zinc-600 font-mono">
-            {unpinnedTabs.length}
+          <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
+            ({unpinnedTabs.length} ACTIVE)
           </span>
         </button>
 
-        {/* Action Buttons: Clear & New Tab */}
+        {/* Action Buttons: Clear & Clear All */}
         <div className="flex items-center space-x-1">
           {unpinnedTabs.length > 0 && (
             <button
               type="button"
-              title="Clear / Close all unpinned tabs"
+              title="Close temporary Today's tabs"
               onClick={onCloseAll}
               className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
             >
@@ -89,16 +93,17 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
               <span>Clear</span>
             </button>
           )}
-
-          <button
-            type="button"
-            title="New Tab (Ctrl+T / Cmd+T)"
-            onClick={onNewTab}
-            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-500 dark:text-zinc-400 hover:theme-accent-text hover:bg-black/5 dark:hover:bg-white/10 transition-colors font-medium"
-          >
-            <Plus className="w-3 h-3 theme-accent-text" />
-            <span>New Tab</span>
-          </button>
+          {onCloseAllWindowTabs && (
+            <button
+              type="button"
+              title="Close all tabs in current window"
+              onClick={onCloseAllWindowTabs}
+              className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+            >
+              <X className="w-2.5 h-2.5" />
+              <span>Clear All</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -139,6 +144,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   onMoveOpenTab={onMoveOpenTab}
                   reminder={typeof tab.id === 'number' ? getReminderForTab?.(tab.id, tab.url) : undefined}
                   onOpenReminderPopover={onOpenReminderPopover}
+                  densityMode={densityMode}
                 />
               );
             })

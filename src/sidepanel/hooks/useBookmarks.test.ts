@@ -128,6 +128,9 @@ describe('useBookmarks hook', () => {
 
     expect(result.current.activeSpaceId).toBe(workSpace!.id);
     expect(result.current.activeFolderIds.workspaceId).toBe(workSpace!.folderId);
+    expect(result.current.activeFolderIds.quickAccessId).toBe(workSpace!.quickAccessFolderId);
+    const homeSpace = result.current.spaces.find((s) => s.id === 'home');
+    expect(result.current.activeFolderIds.quickAccessId).not.toBe(homeSpace?.quickAccessFolderId);
   });
 
   it('supports moving bookmarks or folders to another space root (moveNodeToSpace)', async () => {

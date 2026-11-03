@@ -247,4 +247,24 @@ describe('useTabBindings hook', () => {
 
     expect(mockChrome.tabs.goBack).toHaveBeenCalledWith(1);
   });
+
+  it('closes all window tabs while keeping the browser window open with a new blank tab', async () => {
+    await mockChrome.tabs.create({ url: 'https://site1.com', active: false });
+    await mockChrome.tabs.create({ url: 'https://site2.com', active: false });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockChrome.__getTabs().length).toBe(3);
+
+    await act(async () => {
+      await result.current.closeAllWindowTabs();
+    });
+
+    const remainingTabs = mockChrome.__getTabs();
+    expect(remainingTabs.length).toBe(1);
+    expect(remainingTabs[0].active).toBe(true);
+  });
 });

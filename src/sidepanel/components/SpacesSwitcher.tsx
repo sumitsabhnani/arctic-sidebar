@@ -12,7 +12,8 @@ import {
   X,
   Edit2,
   Trash2,
-  StickyNote
+  StickyNote,
+  Settings
 } from 'lucide-react';
 import type { SpaceItem } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
@@ -29,6 +30,9 @@ interface SpacesSwitcherProps {
   isScratchpadOpen?: boolean;
   onToggleScratchpad?: () => void;
   hasScratchpadText?: boolean;
+  onOpenSettings?: () => void;
+  showMemorySaverBar?: boolean;
+  discardedTabsCount?: number;
 }
 
 const SPACE_ICONS: { id: string; label: string }[] = [
@@ -70,7 +74,10 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
   onOpenContextMenu,
   isScratchpadOpen,
   onToggleScratchpad,
-  hasScratchpadText
+  hasScratchpadText,
+  onOpenSettings,
+  showMemorySaverBar = true,
+  discardedTabsCount = 0
 }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
@@ -192,6 +199,31 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
         </form>
       )}
 
+      {/* Memory Saver Feed Information Strip */}
+      {showMemorySaverBar && (
+        <div className="flex items-center px-3 py-1 border-b border-black/[0.05] dark:border-white/[0.06] text-[10.5px] text-zinc-500 dark:text-zinc-400 font-medium select-none">
+          <div
+            title={
+              discardedTabsCount > 0
+                ? `${discardedTabsCount} sleeping ${
+                    discardedTabsCount === 1 ? 'tab' : 'tabs'
+                  } freeing ~${discardedTabsCount * 75} MB of RAM. Click any sleeping tab to wake it up.`
+                : 'Memory Saver is active (0 MB currently freed). Idle background tabs will sleep automatically or via Settings > Hibernate Tabs.'
+            }
+            className="flex items-center space-x-1.5 min-w-0"
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full flex-shrink-0 bg-emerald-500 ${
+                discardedTabsCount > 0 ? 'animate-pulse' : ''
+              }`}
+            />
+            <span className="truncate">
+              Memory Saver Active: ~{discardedTabsCount * 75} MB freed
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Bottom Spaces Dock / Footer Bar */}
       <div className="flex items-center justify-between px-2 py-1.5 gap-1">
         {/* Left Footer Utilities: Scratchpad Button */}
@@ -281,6 +313,20 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
+
+        {/* Settings Button */}
+        {onOpenSettings && (
+          <button
+            type="button"
+            title="Settings & Appearance"
+            data-tooltip="Settings & Appearance"
+            data-tooltip-pos="bottom-right"
+            onClick={onOpenSettings}
+            className="p-1.5 rounded-xl flex-shrink-0 text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
     </div>
   );

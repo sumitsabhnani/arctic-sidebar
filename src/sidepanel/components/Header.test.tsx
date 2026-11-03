@@ -88,46 +88,25 @@ describe('Header component', () => {
   it('uses bottom-left and bottom-right tooltip alignments to avoid screen edge clipping', () => {
     const { container } = render(<Header {...defaultProps} />);
 
-    // Search button is on the left edge -> must use data-tooltip-pos="bottom-left"
-    const searchBtn = container.querySelector('[data-tooltip="Search (Cmd+K)"]');
-    expect(searchBtn).toHaveAttribute('data-tooltip-pos', 'bottom-left');
+    // Backward button on the left edge -> must use data-tooltip-pos="bottom-left"
+    const backBtn = container.querySelector('[data-tooltip="Back"]');
+    expect(backBtn).toHaveAttribute('data-tooltip-pos', 'bottom-left');
 
     // Reload button on the right edge -> must use data-tooltip-pos="bottom-right"
     const reloadBtn = container.querySelector('[data-tooltip="Reload (Cmd+R)"]');
     expect(reloadBtn).toHaveAttribute('data-tooltip-pos', 'bottom-right');
 
-    // Settings button on the right edge -> must use data-tooltip-pos="bottom-right"
-    const settingsBtn = container.querySelector('[data-tooltip*="Settings"]');
-    expect(settingsBtn).toHaveAttribute('data-tooltip-pos', 'bottom-right');
+    // Copy URL button on the right edge -> must use data-tooltip-pos="bottom-right"
+    const copyBtn = container.querySelector('[data-tooltip="Copy URL"]');
+    expect(copyBtn).toHaveAttribute('data-tooltip-pos', 'bottom-right');
   });
 
-  it('toggles settings panel and includes Theme & Appearance with Dark/Light toggle and color themes', () => {
+  it('does NOT render sub-action bar buttons (search, collapse folders, settings)', () => {
     const { container } = render(<Header {...defaultProps} />);
 
-    // Settings is initially closed
-    expect(screen.queryByText('Folder Mapping')).not.toBeInTheDocument();
-
-    // Open settings
-    const settingsBtn = container.querySelector('[data-tooltip*="Settings"]') as HTMLElement;
-    fireEvent.click(settingsBtn);
-
-    expect(screen.getByText('Folder Mapping')).toBeInTheDocument();
-    expect(screen.getByText('Theme & Appearance')).toBeInTheDocument();
-
-    // Dark/Light buttons are present together in settings
-    const lightBtn = screen.getByRole('button', { name: /Light/i });
-    const darkBtn = screen.getByRole('button', { name: /Dark/i });
-    expect(lightBtn).toBeInTheDocument();
-    expect(darkBtn).toBeInTheDocument();
-
-    // Toggle theme
-    fireEvent.click(lightBtn);
-    expect(defaultProps.onToggleTheme).toHaveBeenCalled();
-
-    // Select color theme
-    const midnightBtn = screen.getByText('Midnight Amethyst');
-    fireEvent.click(midnightBtn);
-    expect(defaultProps.onSelectColorTheme).toHaveBeenCalledWith('midnight-amethyst');
+    expect(container.querySelector('[data-tooltip*="Search"]')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-tooltip*="Collapse"]')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-tooltip*="Settings"]')).not.toBeInTheDocument();
   });
 
   it('renders small backward button in the url bar and triggers onGoBackActiveTab', () => {

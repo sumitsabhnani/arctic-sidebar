@@ -515,6 +515,28 @@ export function useTabBindings() {
   }, [unpinnedTabs, windowTabs.length, refreshWindowTabs]);
 
   /**
+   * Close all active tabs in the current window (Clear All action).
+   * Creates a fresh tab first to keep the browser window & sidebar alive, then removes all existing tabs and clears session bindings.
+   */
+  const closeAllWindowTabs = useCallback(async () => {
+    const tabIdsToClose = windowTabs
+      .map((t) => t.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    if (tabIdsToClose.length === 0) return;
+
+    try {
+      await chrome.tabs.create({ active: true });
+      await chrome.tabs.remove(tabIdsToClose);
+    } catch (err) {
+      console.warn('[Arctic] Could not close all window tabs:', err);
+    }
+
+    await persistSession({}, {});
+    await refreshWindowTabs();
+  }, [windowTabs, persistSession, refreshWindowTabs]);
+
+  /**
    * Pin an unpinned tab to a bookmark folder (Quick Access or Home/Space)
    */
   const pinTab = useCallback(
@@ -627,19 +649,24 @@ export function useTabBindings() {
    */
   const discardAllBackgroundTabs = useCallback(async () => {
     let count = 0;
-    for (const tab of windowTabs) {
-      if (typeof tab.id === 'number' && !tab.active && !tab.discarded) {
-        try {
-          await chrome.tabs.discard(tab.id);
-          count++;
-        } catch {
-          // ignore tabs that cannot be discarded
+    try {
+      const currentTabs = await chrome.tabs.query({ currentWindow: true });
+      for (const tab of currentTabs) {
+        if (typeof tab.id === 'number' && !tab.active && !tab.discarded) {
+          try {
+            await chrome.tabs.discard(tab.id);
+            count++;
+          } catch {
+            // ignore tabs that cannot be discarded
+          }
         }
       }
+    } catch (err) {
+      console.warn('[Arctic] Could not query tabs to discard:', err);
     }
     await refreshWindowTabs();
     return count;
-  }, [windowTabs, refreshWindowTabs]);
+  }, [refreshWindowTabs]);
 
   const activeTab = windowTabs.find((t) => t.id === activeTabId);
   const isActiveTabLoading = activeTab?.status === 'loading';
@@ -992,6 +1019,7 @@ export function useTabBindings() {
     handleQuickAccessClick,
     handleCloseTab,
     closeAllUnpinnedTabs,
+    closeAllWindowTabs,
     pinTab,
     duplicateTab,
     reloadTab,

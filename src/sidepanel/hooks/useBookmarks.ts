@@ -94,7 +94,9 @@ export function useBookmarks() {
     quickAccessId: string;
     workspaceId: string;
     workId: string;
+    workQuickAccessId: string;
     personalId: string;
+    personalQuickAccessId: string;
   }> => {
     const tree = await chrome.bookmarks.getTree();
     const rootNode = tree[0];
@@ -209,6 +211,16 @@ export function useBookmarks() {
       });
     }
 
+    let workQuickAccess = arcticSidebarSubtree.children?.find(
+      (c) => !c.url && c.title.toLowerCase() === 'quick access (work)'
+    );
+    if (!workQuickAccess) {
+      workQuickAccess = await chrome.bookmarks.create({
+        parentId: arcticSidebar.id,
+        title: 'Quick Access (Work)'
+      });
+    }
+
     // Find or create 'Personal' space folder
     let personalFolder = arcticSidebarSubtree.children?.find(
       (c) => !c.url && c.title.toLowerCase() === 'personal'
@@ -220,12 +232,24 @@ export function useBookmarks() {
       });
     }
 
+    let personalQuickAccess = arcticSidebarSubtree.children?.find(
+      (c) => !c.url && c.title.toLowerCase() === 'quick access (personal)'
+    );
+    if (!personalQuickAccess) {
+      personalQuickAccess = await chrome.bookmarks.create({
+        parentId: arcticSidebar.id,
+        title: 'Quick Access (Personal)'
+      });
+    }
+
     return {
       rootId: arcticSidebar.id,
       quickAccessId: quickAccess.id,
       workspaceId: homeFolder.id,
       workId: workFolder.id,
-      personalId: personalFolder.id
+      workQuickAccessId: workQuickAccess.id,
+      personalId: personalFolder.id,
+      personalQuickAccessId: personalQuickAccess.id
     };
   };
 
@@ -244,25 +268,62 @@ export function useBookmarks() {
         'activeSpaceId'
       ])) as LocalSettings;
 
-      const quickAccessId = settings.quickAccessFolderId || defaultIds.quickAccessId;
       const homeFolderId = settings.workspaceFolderId || defaultIds.workspaceId;
 
       // Build or validate spaces list
       let currentSpaces: SpaceItem[] = settings.spaces || [];
       if (currentSpaces.length === 0) {
         currentSpaces = [
-          { id: 'home', name: 'Home', folderId: homeFolderId, icon: 'home' },
-          { id: 'work', name: 'Work', folderId: defaultIds.workId, icon: 'briefcase' },
-          { id: 'personal', name: 'Personal', folderId: defaultIds.personalId, icon: 'user' }
+          { id: 'home', name: 'Home', folderId: homeFolderId, icon: 'home', quickAccessFolderId: defaultIds.quickAccessId },
+          { id: 'work', name: 'Work', folderId: defaultIds.workId, icon: 'briefcase', quickAccessFolderId: defaultIds.workQuickAccessId },
+          { id: 'personal', name: 'Personal', folderId: defaultIds.personalId, icon: 'user', quickAccessFolderId: defaultIds.personalQuickAccessId }
         ];
         await chrome.storage.local.set({ spaces: currentSpaces, activeSpaceId: 'home' });
       } else {
-        // Ensure home space tracks workspaceFolderId if changed
-        currentSpaces = currentSpaces.map((s) =>
-          s.id === 'home' && s.name.toLowerCase() === 'workspace'
-            ? { ...s, name: 'Home', folderId: homeFolderId }
-            : s
-        );
+        // Ensure every space has quickAccessFolderId assigned
+        let spacesUpdated = false;
+        const ensuredSpaces: SpaceItem[] = [];
+
+        for (const s of currentSpaces) {
+          let updated = { ...s };
+          if (s.id === 'home') {
+            if (s.name.toLowerCase() === 'workspace') {
+              updated = { ...updated, name: 'Home', folderId: homeFolderId };
+              spacesUpdated = true;
+            }
+            if (!updated.quickAccessFolderId) {
+              updated = { ...updated, quickAccessFolderId: defaultIds.quickAccessId };
+              spacesUpdated = true;
+            }
+          } else if (!updated.quickAccessFolderId) {
+            // Find or create Quick Access for this space
+            try {
+              const [rootSub] = await chrome.bookmarks.getSubTree(defaultIds.rootId);
+              const targetTitle = `Quick Access (${s.name})`.toLowerCase();
+              const existingQA = rootSub.children?.find(
+                (c) => !c.url && c.title.toLowerCase() === targetTitle
+              );
+              if (existingQA) {
+                updated = { ...updated, quickAccessFolderId: existingQA.id };
+              } else {
+                const createdQA = await chrome.bookmarks.create({
+                  parentId: defaultIds.rootId,
+                  title: `Quick Access (${s.name})`
+                });
+                updated = { ...updated, quickAccessFolderId: createdQA.id };
+              }
+              spacesUpdated = true;
+            } catch {
+              updated = { ...updated, quickAccessFolderId: defaultIds.quickAccessId };
+            }
+          }
+          ensuredSpaces.push(updated);
+        }
+
+        currentSpaces = ensuredSpaces;
+        if (spacesUpdated) {
+          await chrome.storage.local.set({ spaces: currentSpaces });
+        }
       }
 
       const currentActiveSpaceId =
@@ -274,11 +335,15 @@ export function useBookmarks() {
         currentSpaces.find((s) => s.id === currentActiveSpaceId) || currentSpaces[0];
 
       const workspaceId = activeSpace.folderId || homeFolderId;
+      const activeQaId =
+        activeSpace.id === 'home' && settings.quickAccessFolderId
+          ? settings.quickAccessFolderId
+          : activeSpace.quickAccessFolderId || defaultIds.quickAccessId;
 
       setSpaces(currentSpaces);
       setActiveSpaceId(currentActiveSpaceId);
       setActiveFolderIds({
-        quickAccessId,
+        quickAccessId: activeQaId,
         workspaceId,
         defaultRootId: defaultIds.rootId
       });
@@ -289,13 +354,15 @@ export function useBookmarks() {
 
       // Load Quick Access sub-tree
       try {
-        const [qa] = await chrome.bookmarks.getSubTree(quickAccessId);
+        const [qa] = await chrome.bookmarks.getSubTree(activeQaId);
         setQuickAccessNode(qa);
       } catch (err) {
         console.warn('[Arctic] Quick Access folder not found, falling back to default:', err);
         const [qa] = await chrome.bookmarks.getSubTree(defaultIds.quickAccessId);
         setQuickAccessNode(qa);
-        await chrome.storage.local.remove('quickAccessFolderId');
+        if (activeSpace.id === 'home') {
+          await chrome.storage.local.remove('quickAccessFolderId');
+        }
       }
 
       // Load active Space / Home sub-tree
@@ -329,9 +396,9 @@ export function useBookmarks() {
     async (name: string, icon: string = 'folder', existingFolderId?: string) => {
       const trimmed = name.trim();
       if (!trimmed) return;
+      const parentId = activeFolderIds.defaultRootId || '2';
       let folderId = existingFolderId;
       if (!folderId) {
-        const parentId = activeFolderIds.defaultRootId || '2';
         const newFolder = await chrome.bookmarks.create({
           parentId,
           title: trimmed
@@ -339,11 +406,24 @@ export function useBookmarks() {
         folderId = newFolder.id;
       }
 
+      // Create space-specific Quick Access folder under Arctic root
+      let qaFolderId: string;
+      try {
+        const qaFolder = await chrome.bookmarks.create({
+          parentId,
+          title: `Quick Access (${trimmed})`
+        });
+        qaFolderId = qaFolder.id;
+      } catch {
+        qaFolderId = activeFolderIds.quickAccessId || parentId;
+      }
+
       const newSpace: SpaceItem = {
         id: `space-${Date.now()}`,
         name: trimmed,
         folderId,
-        icon
+        icon,
+        quickAccessFolderId: qaFolderId
       };
 
       const updatedSpaces = [...spaces, newSpace];
@@ -353,7 +433,7 @@ export function useBookmarks() {
       });
       await loadBookmarks();
     },
-    [activeFolderIds.defaultRootId, spaces, loadBookmarks]
+    [activeFolderIds.defaultRootId, activeFolderIds.quickAccessId, spaces, loadBookmarks]
   );
 
   // Rename a Space
@@ -368,6 +448,15 @@ export function useBookmarks() {
         } catch {
           // ignore if bookmark folder cannot be updated
         }
+        if (target.quickAccessFolderId) {
+          try {
+            await chrome.bookmarks.update(target.quickAccessFolderId, {
+              title: `Quick Access (${trimmed})`
+            });
+          } catch {
+            // ignore
+          }
+        }
       }
       const updated = spaces.map((s) => (s.id === spaceId ? { ...s, name: trimmed } : s));
       await chrome.storage.local.set({ spaces: updated });
@@ -380,6 +469,16 @@ export function useBookmarks() {
   const deleteSpace = useCallback(
     async (spaceId: string) => {
       if (spaces.length <= 1) return;
+      const target = spaces.find((s) => s.id === spaceId);
+      if (target && target.quickAccessFolderId) {
+        if (target.id !== 'home') {
+          try {
+            await chrome.bookmarks.removeTree(target.quickAccessFolderId);
+          } catch {
+            // ignore
+          }
+        }
+      }
       const updated = spaces.filter((s) => s.id !== spaceId);
       const nextActive = activeSpaceId === spaceId ? updated[0].id : activeSpaceId;
       await chrome.storage.local.set({
@@ -393,7 +492,13 @@ export function useBookmarks() {
 
   // Set custom folder IDs
   const setQuickAccessFolderId = async (id: string) => {
-    await chrome.storage.local.set({ quickAccessFolderId: id });
+    const updatedSpaces = spaces.map((s) =>
+      s.id === activeSpaceId ? { ...s, quickAccessFolderId: id } : s
+    );
+    await chrome.storage.local.set({
+      quickAccessFolderId: id,
+      spaces: updatedSpaces
+    });
     loadBookmarks();
   };
 

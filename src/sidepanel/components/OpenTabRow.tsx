@@ -14,16 +14,30 @@ import {
   Edit2,
   ArrowRightLeft,
   Folder,
-  Bell
+  Bell,
+  Pin
 } from 'lucide-react';
 import type { SpaceItem, TabReminder } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
+function formatSubdomain(rawUrl?: string): string {
+  if (!rawUrl || rawUrl === 'about:blank' || rawUrl.startsWith('chrome://')) return '';
+  try {
+    const u = new URL(rawUrl);
+    let host = u.hostname.replace(/^www\./, '');
+    const path = u.pathname === '/' ? '' : u.pathname;
+    return `${host}${path}`;
+  } catch {
+    return rawUrl;
+  }
+}
+
 interface OpenTabRowProps {
   tab: chrome.tabs.Tab;
   isActive: boolean;
   spaces?: SpaceItem[];
+  densityMode?: 'relaxed' | 'compact';
   onFocus: (tabId: number) => void;
   onClose: (tabId: number, e: React.MouseEvent) => void;
   onPinToQuickAccess: (tab: chrome.tabs.Tab) => void;
@@ -44,6 +58,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   tab,
   isActive,
   spaces = [],
+  densityMode = 'relaxed',
   onFocus,
   onClose,
   onPinToQuickAccess,
@@ -290,7 +305,11 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           onFocus(tabId);
         }
       }}
-      className={`group relative flex items-center justify-between h-[34px] px-2.5 my-[1px] rounded-lg cursor-pointer select-none transition-all duration-150 outline-none ${
+      className={`group relative flex items-center justify-between ${
+        densityMode === 'relaxed'
+          ? 'min-h-[46px] py-1.5 px-2.5 my-1 rounded-xl border transition-all duration-150'
+          : 'h-[34px] px-2.5 my-[1px] rounded-lg'
+      } cursor-pointer select-none outline-none ${
         isDragging ? 'opacity-40 scale-98' : ''
       } ${
         dropPosition === 'top'
@@ -300,7 +319,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           : ''
       } ${
         isActive
-          ? 'theme-active-card text-zinc-900 dark:text-white font-medium'
+          ? densityMode === 'relaxed'
+            ? 'theme-active-card border-cyan-500/50 dark:border-cyan-400/50 shadow-xs text-zinc-900 dark:text-white font-medium'
+            : 'theme-active-card text-zinc-900 dark:text-white font-medium'
+          : densityMode === 'relaxed'
+          ? isDiscarded
+            ? 'bg-white/40 dark:bg-white/[0.02] border-black/[0.04] dark:border-white/[0.04] text-zinc-400 dark:text-zinc-500 hover:bg-black/5 dark:hover:bg-white/5'
+            : 'bg-white/70 dark:bg-zinc-900/40 border-black/[0.06] dark:border-white/[0.06] hover:border-black/15 dark:hover:border-white/12 text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white'
           : isDiscarded
           ? 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/5'
           : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5'
@@ -328,26 +353,41 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           )}
         </div>
 
-        <span
-          title={titleText}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            setEditTitle(tab.title || '');
-            setIsEditing(true);
-          }}
-          className={`truncate text-[13px] leading-tight transition-colors duration-150 cursor-text select-text ${
-            isActive
-              ? 'text-zinc-900 dark:text-white'
-              : isDiscarded
-              ? 'text-zinc-400 italic'
-              : 'text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white'
-          }`}
-        >
-          {titleText}
-        </span>
+        {/* Title + Subdomain details */}
+        <div className="flex flex-col min-w-0 flex-1 justify-center py-0.5">
+          <div className="flex items-center space-x-1.5 min-w-0">
+            <span
+              title={titleText}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setEditTitle(tab.title || '');
+                setIsEditing(true);
+              }}
+              className={`truncate text-[12.5px] leading-tight transition-colors duration-150 cursor-text select-text ${
+                isActive
+                  ? 'font-semibold text-zinc-900 dark:text-white'
+                  : isDiscarded
+                  ? 'text-zinc-400 italic'
+                  : 'text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white'
+              }`}
+            >
+              {titleText}
+            </span>
+            {isActive && densityMode === 'relaxed' && (
+              <span className="px-1.5 py-0.2 rounded text-[9.5px] font-semibold bg-cyan-500/15 text-cyan-600 dark:text-cyan-400 flex-shrink-0">
+                Active
+              </span>
+            )}
+          </div>
+          {densityMode === 'relaxed' && tab.url && !isNewTab && (
+            <span className="truncate text-[10px] text-zinc-400 dark:text-zinc-500 leading-none select-none pt-0.5 font-mono">
+              {formatSubdomain(tab.url)}
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Right: Audio Indicator, Split View, Copy Link, Reload on active hover, & Close Button */}
+      {/* Right: Audio Indicator, Pin Button, Reminder, & Close Button */}
       <div className="flex items-center space-x-1 flex-shrink-0">
         {/* Audio status */}
         {(isAudible || isMuted) && (
@@ -372,9 +412,22 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           </button>
         )}
 
-        {/* Active tab indicator dot */}
-        {isActive && (
-          <div className="w-1.5 h-1.5 rounded-full theme-active-indicator group-hover:hidden transition-opacity flex-shrink-0" />
+        {/* Quick Pin to Bookmarks Button */}
+        {!isNewTab && (
+          <button
+            type="button"
+            data-tooltip="Pin to Bookmarks"
+            data-tooltip-pos="bottom-right"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPinToWorkspace(tab);
+            }}
+            className={`items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100 ${
+              isActive ? 'flex' : 'hidden group-hover:flex'
+            }`}
+          >
+            <Pin className="w-3 h-3 stroke-[2.2]" />
+          </button>
         )}
 
         {/* Tab Reminder Bell Icon */}

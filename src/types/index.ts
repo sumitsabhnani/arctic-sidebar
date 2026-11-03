@@ -27,6 +27,7 @@ export interface SpaceItem {
   name: string;
   folderId: string;
   icon?: string;
+  quickAccessFolderId?: string;
 }
 
 export interface LocalSettings {
@@ -39,6 +40,10 @@ export interface LocalSettings {
   tabOpenedAt?: Record<number, number>;
   theme?: ThemeMode;
   colorTheme?: ColorThemeId;
+  quickAccessDensity?: 'relaxed' | 'compact';
+  tabsDensity?: 'relaxed' | 'compact';
+  densityMode?: 'relaxed' | 'compact';
+  showMemorySaverBar?: boolean;
   isSidebarCollapsed?: boolean;
   collapsedSections?: {
     quickAccess?: boolean;

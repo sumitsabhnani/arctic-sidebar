@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useBookmarks } from './hooks/useBookmarks';
 import { useTabBindings } from './hooks/useTabBindings';
 import { Header } from './components/Header';
-import { SearchBar } from './components/SearchBar';
+import { SettingsModal } from './components/SettingsModal';
 import { QuickAccessGrid } from './components/QuickAccessGrid';
 import { FolderNode } from './components/FolderNode';
 import { BookmarkRow } from './components/BookmarkRow';
@@ -14,7 +14,7 @@ import { useScratchpad } from './hooks/useScratchpad';
 import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
-import { Loader2, FolderPlus, BookmarkPlus, Folder, Check, X, Bell } from 'lucide-react';
+import { Loader2, FolderPlus, Folder, Check, X, Bell } from 'lucide-react';
 
 export const App: React.FC = () => {
   const {
@@ -23,7 +23,6 @@ export const App: React.FC = () => {
     allFolders,
     collapsedFolderIds,
     toggleFolderCollapse,
-    setAllFoldersCollapsed,
     spaces,
     activeSpaceId,
     selectSpace,
@@ -35,7 +34,6 @@ export const App: React.FC = () => {
     setQuickAccessFolderId,
     setWorkspaceFolderId,
     resetToDefaultFolders,
-    createBookmark,
     createFolder,
     renameBookmarkOrFolder,
     updateBookmarkUrl,
@@ -57,6 +55,7 @@ export const App: React.FC = () => {
     handleQuickAccessClick,
     handleCloseTab,
     closeAllUnpinnedTabs,
+    closeAllWindowTabs,
     pinTab,
     duplicateTab,
     reloadTab,
@@ -115,6 +114,10 @@ export const App: React.FC = () => {
   // Theme State
   const [theme, setTheme] = useState<ThemeMode>('dark');
   const [colorTheme, setColorTheme] = useState<ColorThemeId>('glacier-blue');
+  const [quickAccessDensity, setQuickAccessDensity] = useState<'relaxed' | 'compact'>('relaxed');
+  const [tabsDensity, setTabsDensity] = useState<'relaxed' | 'compact'>('relaxed');
+  const [showMemorySaverBar, setShowMemorySaverBar] = useState<boolean>(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Section Collapsed States
   const [collapsedSections, setCollapsedSections] = useState<{
@@ -132,7 +135,11 @@ export const App: React.FC = () => {
       [
         'theme',
         'colorTheme',
-        'collapsedSections'
+        'collapsedSections',
+        'quickAccessDensity',
+        'tabsDensity',
+        'densityMode',
+        'showMemorySaverBar'
       ],
       (res) => {
         if (res.theme === 'light' || res.theme === 'dark') {
@@ -150,6 +157,17 @@ export const App: React.FC = () => {
           ].includes(res.colorTheme)
         ) {
           setColorTheme(res.colorTheme as ColorThemeId);
+        }
+        const qaDensity = res.quickAccessDensity || res.densityMode;
+        if (qaDensity === 'relaxed' || qaDensity === 'compact') {
+          setQuickAccessDensity(qaDensity);
+        }
+        const tDensity = res.tabsDensity || res.densityMode;
+        if (tDensity === 'relaxed' || tDensity === 'compact') {
+          setTabsDensity(tDensity);
+        }
+        if (typeof res.showMemorySaverBar === 'boolean') {
+          setShowMemorySaverBar(res.showMemorySaverBar);
         }
         if (res.collapsedSections) {
           setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
@@ -178,6 +196,15 @@ export const App: React.FC = () => {
           ].includes(changes.colorTheme.newValue)
         ) {
           setColorTheme(changes.colorTheme.newValue as ColorThemeId);
+        }
+        if (changes.quickAccessDensity && (changes.quickAccessDensity.newValue === 'relaxed' || changes.quickAccessDensity.newValue === 'compact')) {
+          setQuickAccessDensity(changes.quickAccessDensity.newValue);
+        }
+        if (changes.tabsDensity && (changes.tabsDensity.newValue === 'relaxed' || changes.tabsDensity.newValue === 'compact')) {
+          setTabsDensity(changes.tabsDensity.newValue);
+        }
+        if (changes.showMemorySaverBar && typeof changes.showMemorySaverBar.newValue === 'boolean') {
+          setShowMemorySaverBar(changes.showMemorySaverBar.newValue);
         }
         if (changes.collapsedSections && changes.collapsedSections.newValue) {
           setCollapsedSections(
@@ -236,9 +263,20 @@ export const App: React.FC = () => {
     });
   }, []);
 
-  // Search State
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const handleToggleQuickAccessDensity = useCallback((mode: 'relaxed' | 'compact') => {
+    setQuickAccessDensity(mode);
+    chrome.storage.local.set({ quickAccessDensity: mode } as LocalSettings);
+  }, []);
+
+  const handleToggleTabsDensity = useCallback((mode: 'relaxed' | 'compact') => {
+    setTabsDensity(mode);
+    chrome.storage.local.set({ tabsDensity: mode } as LocalSettings);
+  }, []);
+
+  const handleToggleMemorySaverBar = useCallback((show: boolean) => {
+    setShowMemorySaverBar(show);
+    chrome.storage.local.set({ showMemorySaverBar: show } as LocalSettings);
+  }, []);
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
@@ -261,7 +299,6 @@ export const App: React.FC = () => {
   // Global keyboard shortcuts:
   // - Ctrl+T / Cmd+T: New Tab
   // - Ctrl+R / Cmd+R: Reload active web page
-  // - Ctrl+K / Cmd+K: Toggle Search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 't') {
@@ -270,9 +307,6 @@ export const App: React.FC = () => {
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
         e.preventDefault();
         reloadActiveTab();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        setIsSearchOpen((prev) => !prev);
       }
     };
 
@@ -452,66 +486,91 @@ export const App: React.FC = () => {
     []
   );
 
-  // Filter bookmarks & tabs based on searchQuery
-  const queryLower = searchQuery.trim().toLowerCase();
-
-  const filterBookmarkTree = useCallback(
-    (nodes: chrome.bookmarks.BookmarkTreeNode[]): chrome.bookmarks.BookmarkTreeNode[] => {
-      if (!queryLower) return nodes;
-
-      const result: chrome.bookmarks.BookmarkTreeNode[] = [];
-      for (const node of nodes) {
-        if (node.url) {
-          const matchTitle = node.title?.toLowerCase().includes(queryLower);
-          const matchUrl = node.url?.toLowerCase().includes(queryLower);
-          if (matchTitle || matchUrl) {
-            result.push(node);
-          }
-        } else {
-          // Folder: check children
-          const filteredChildren = filterBookmarkTree(node.children || []);
-          const matchFolderName = node.title?.toLowerCase().includes(queryLower);
-          if (filteredChildren.length > 0 || matchFolderName) {
-            result.push({
-              ...node,
-              children: filteredChildren.length > 0 ? filteredChildren : node.children
-            });
-          }
+  /**
+   * Quick Unpin Bookmark:
+   * Moves the tab to unpinned Today's Tabs (opens if not already open) and deletes the bookmark.
+   */
+  const handleUnpinBookmarkToTodayTabs = useCallback(
+    async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
+      try {
+        const binding = bindingsByBookmarkId[bookmark.id];
+        if (binding) {
+          const updatedBindings = { ...bindingsByBookmarkId };
+          delete updatedBindings[bookmark.id];
+          const updatedTabIdMap = { ...bookmarkIdByTabId };
+          delete updatedTabIdMap[binding.tabId];
+          await chrome.storage.session.set({
+            bindingsByBookmarkId: updatedBindings,
+            bookmarkIdByTabId: updatedTabIdMap
+          });
+        } else if (bookmark.url) {
+          await chrome.tabs.create({ url: bookmark.url, active: true });
         }
+        await removeBookmarkOrFolder(bookmark.id);
+      } catch (err) {
+        console.warn('[Arctic] Could not unpin bookmark:', err);
       }
-      return result;
     },
-    [queryLower]
+    [bindingsByBookmarkId, bookmarkIdByTabId, removeBookmarkOrFolder]
   );
 
-  const filteredQuickAccess = useMemo(() => {
-    const original = quickAccessNode?.children || [];
-    if (!queryLower) return original;
-    return original.filter(
-      (b) =>
-        b.title?.toLowerCase().includes(queryLower) ||
-        b.url?.toLowerCase().includes(queryLower)
-    );
-  }, [quickAccessNode?.children, queryLower]);
+  /**
+   * Delete bookmark or folder and close any open running tabs bound to it or its children.
+   */
+  const handleDeleteBookmark = useCallback(
+    async (id: string) => {
+      try {
+        const bookmarkIdsToClose: string[] = [id];
+        try {
+          const [subtree] = await chrome.bookmarks.getSubTree(id);
+          const collectDescendants = (node: chrome.bookmarks.BookmarkTreeNode) => {
+            if (node.id) bookmarkIdsToClose.push(node.id);
+            if (node.children) {
+              for (const child of node.children) {
+                collectDescendants(child);
+              }
+            }
+          };
+          if (subtree.children) {
+            for (const child of subtree.children) {
+              collectDescendants(child);
+            }
+          }
+        } catch {
+          // ignore if subtree cannot be queried
+        }
 
-  const filteredWorkspace = useMemo(() => {
-    const original = workspaceNode?.children || [];
-    return filterBookmarkTree(original);
-  }, [workspaceNode?.children, filterBookmarkTree]);
+        for (const bId of bookmarkIdsToClose) {
+          const binding = bindingsByBookmarkId[bId];
+          if (binding && typeof binding.tabId === 'number') {
+            await handleCloseTab(binding.tabId);
+          }
+        }
 
-  const filteredUnpinnedTabs = useMemo(() => {
-    if (!queryLower) return unpinnedTabs;
-    return unpinnedTabs.filter(
-      (t) =>
-        t.title?.toLowerCase().includes(queryLower) ||
-        t.url?.toLowerCase().includes(queryLower)
-    );
-  }, [unpinnedTabs, queryLower]);
+        await removeBookmarkOrFolder(id);
+      } catch (err) {
+        console.warn('[Arctic] Error deleting bookmark and closing tabs:', err);
+        await removeBookmarkOrFolder(id);
+      }
+    },
+    [bindingsByBookmarkId, handleCloseTab, removeBookmarkOrFolder]
+  );
 
-  const totalMatches =
-    filteredQuickAccess.length +
-    filteredWorkspace.length +
-    filteredUnpinnedTabs.length;
+  const discardedTabsCount = useMemo(() => {
+    let count = 0;
+    for (const tabIdStr of Object.keys(discardedTabsByTabId)) {
+      if (discardedTabsByTabId[Number(tabIdStr)]) count++;
+    }
+    for (const tab of unpinnedTabs) {
+      if (tab.discarded && !discardedTabsByTabId[tab.id!]) {
+        count++;
+      }
+    }
+    return count;
+  }, [discardedTabsByTabId, unpinnedTabs]);
+
+  const quickAccessBookmarks = quickAccessNode?.children || [];
+  const workspaceBookmarks = workspaceNode?.children || [];
 
   const activeSpaceObj = spaces.find((s) => s.id === activeSpaceId);
   const spaceDisplayTitle =
@@ -533,44 +592,14 @@ export const App: React.FC = () => {
       style={{ background: 'var(--theme-bg-gradient)' }}
       className="flex flex-col h-screen w-full text-zinc-800 dark:text-zinc-100 select-none overflow-hidden font-sans transition-colors duration-200"
     >
-      {/* Header with Settings, Actions, Search, Split View, New Tab & Theme */}
+      {/* Header with Address Bar */}
       <Header
-        allFolders={allFolders}
-        activeFolderIds={activeFolderIds}
-        autoArchiveInterval={autoArchiveInterval}
         activeTabUrl={activeTabUrl}
         isActiveTabLoading={isActiveTabLoading}
-        isSearchOpen={isSearchOpen}
-        theme={theme}
-        colorTheme={colorTheme}
-        onSelectQuickAccessFolder={setQuickAccessFolderId}
-        onSelectWorkspaceFolder={setWorkspaceFolderId}
-        onResetFolders={resetToDefaultFolders}
-        onToggleAllCollapsed={setAllFoldersCollapsed}
-        onCreateFolder={createFolder}
-        onCreateBookmark={createBookmark}
-        onSetAutoArchiveInterval={setAutoArchiveInterval}
         onReloadActiveTab={reloadActiveTab}
         onNavigateActiveTab={navigateActiveTab}
         onGoBackActiveTab={goBackActiveTab}
-        onToggleSearch={() => setIsSearchOpen((prev) => !prev)}
-        onToggleTheme={toggleTheme}
-        onSelectColorTheme={handleSelectColorTheme}
-        onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
-
-      {/* Expandable Search / Filter Bar */}
-      {isSearchOpen && (
-        <SearchBar
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          onClose={() => {
-            setIsSearchOpen(false);
-            setSearchQuery('');
-          }}
-          matchCount={queryLower ? totalMatches : undefined}
-        />
-      )}
 
       {/* Top Overdue Tab Reminders Banner */}
       {firedReminders.length > 0 && (
@@ -633,13 +662,14 @@ export const App: React.FC = () => {
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 space-y-4">
         {/* Section 1: Quick Access Favorites */}
-        {(!queryLower || filteredQuickAccess.length > 0) && (
+        {quickAccessBookmarks.length > 0 && (
           <div className="flex flex-col">
             <QuickAccessGrid
-              bookmarks={filteredQuickAccess}
+              bookmarks={quickAccessBookmarks}
               bindingsByBookmarkId={bindingsByBookmarkId}
               tabsByTabId={tabsByTabId}
               activeTabId={activeTabId}
+              densityMode={quickAccessDensity}
               onTileClick={handleQuickAccessClick}
               onTileDoubleClick={handleFaviconDoubleClick}
               onOpenContextMenu={handleOpenContextMenu}
@@ -648,7 +678,7 @@ export const App: React.FC = () => {
               onMoveToWorkspace={handleMoveBookmarkToWorkspace}
               onReplaceUrl={handleReplaceBookmarkUrl}
               onRenameBookmark={renameBookmarkOrFolder}
-              onRemoveBookmark={removeBookmarkOrFolder}
+              onRemoveBookmark={handleDeleteBookmark}
               onReorderQuickAccess={handleReorderQuickAccess}
             />
           </div>
@@ -725,23 +755,8 @@ export const App: React.FC = () => {
               </span>
             )}
 
-            {/* Folder creation and Quick Bookmark action */}
+            {/* Folder creation action */}
             <div className="flex items-center space-x-1">
-              {/* Quick Bookmark Current Page in Space Root */}
-              {activeFolderIds.workspaceId && (
-                <button
-                  type="button"
-                  title={`Bookmark current page in ${spaceDisplayTitle}`}
-                  onClick={() =>
-                    activeFolderIds.workspaceId &&
-                    handleBookmarkCurrentPage(activeFolderIds.workspaceId)
-                  }
-                  className="p-1 rounded-md text-zinc-500 dark:text-zinc-400 hover:text-cyan-600 dark:hover:text-cyan-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-                >
-                  <BookmarkPlus className="w-3.5 h-3.5" />
-                </button>
-              )}
-
               {/* New Folder Button */}
               <button
                 type="button"
@@ -752,20 +767,16 @@ export const App: React.FC = () => {
                 <FolderPlus className="w-3 h-3 text-amber-500 dark:text-amber-400" />
                 <span>New Folder</span>
               </button>
-
-              <span className="text-[10.5px] text-zinc-400 dark:text-zinc-500 font-mono pl-0.5">
-                {filteredWorkspace.length}
-              </span>
             </div>
           </div>
 
-          {/* Render Vertical Tree */}
-          <div className="flex flex-col -mx-1 animate-in fade-in duration-100">
+          {/* Render Vertical Tree in Grouped Card (5a) */}
+          <div className="flex flex-col rounded-2xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 backdrop-blur-sm divide-y divide-black/5 dark:divide-white/5 overflow-hidden shadow-xs animate-in fade-in duration-100">
             {/* Inline New Folder Input Row */}
             {isCreatingRootFolder && (
               <form
                 onSubmit={handleConfirmCreateRootFolder}
-                className="flex items-center h-[32px] px-2 my-1 space-x-1.5 bg-black/[0.03] dark:bg-white/[0.04] rounded-lg border border-cyan-500/40 animate-in fade-in slide-in-from-top-1 duration-100"
+                className="flex items-center h-[34px] px-2.5 my-0.5 space-x-1.5 bg-black/[0.03] dark:bg-white/[0.04] animate-in fade-in slide-in-from-top-1 duration-100"
               >
                 <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
                 <input
@@ -803,26 +814,22 @@ export const App: React.FC = () => {
               </form>
             )}
 
-            {filteredWorkspace.length === 0 && !isCreatingRootFolder ? (
-              <div className="px-3 py-4 text-center text-zinc-500 rounded-xl border border-dashed border-black/10 dark:border-white/5 bg-black/[0.01] dark:bg-white/[0.01]">
+            {workspaceBookmarks.length === 0 && !isCreatingRootFolder ? (
+              <div className="px-3 py-6 text-center text-zinc-500">
                 <p className="text-xs">
-                  {queryLower
-                    ? 'No matching bookmarks found.'
-                    : `No tabs or folders in ${spaceDisplayTitle} yet.`}
+                  {`No tabs or folders in ${spaceDisplayTitle} yet.`}
                 </p>
-                {!queryLower && (
-                  <button
-                    type="button"
-                    onClick={() => setIsCreatingRootFolder(true)}
-                    className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs text-amber-600 dark:text-amber-300 font-medium transition-colors"
-                  >
-                    <FolderPlus className="w-3 h-3" />
-                    <span>+ Create a Folder</span>
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setIsCreatingRootFolder(true)}
+                  className="mt-2 inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-xs text-amber-600 dark:text-amber-300 font-medium transition-colors"
+                >
+                  <FolderPlus className="w-3 h-3" />
+                  <span>+ Create a Folder</span>
+                </button>
               </div>
             ) : (
-              filteredWorkspace.map((child) => {
+              workspaceBookmarks.map((child) => {
                 if (!child.url) {
                   return (
                     <FolderNode
@@ -851,7 +858,8 @@ export const App: React.FC = () => {
                       onRenameFolder={renameBookmarkOrFolder}
                       onRenameBookmark={renameBookmarkOrFolder}
                       onOpenContextMenu={handleOpenContextMenu}
-                      onDeleteBookmark={removeBookmarkOrFolder}
+                      onDeleteBookmark={handleDeleteBookmark}
+                      onUnpinBookmark={handleUnpinBookmarkToTodayTabs}
                       onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
                       onDropItemToFolder={handleDropItemToFolder}
                       onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
@@ -859,6 +867,7 @@ export const App: React.FC = () => {
                       onOpenReminderPopover={(target, rect) =>
                         setActiveReminderTarget({ target, anchorRect: rect })
                       }
+                      densityMode={tabsDensity}
                     />
                   );
                 }
@@ -890,7 +899,8 @@ export const App: React.FC = () => {
                     onReplaceUrl={handleReplaceBookmarkUrl}
                     onRenameBookmark={renameBookmarkOrFolder}
                     onOpenContextMenu={handleOpenContextMenu}
-                    onDeleteBookmark={removeBookmarkOrFolder}
+                    onDeleteBookmark={handleDeleteBookmark}
+                    onUnpinBookmark={handleUnpinBookmarkToTodayTabs}
                     onMoveToQuickAccess={handleMoveBookmarkToQuickAccess}
                     onMoveBookmarkToIndex={handleMoveBookmarkToIndex}
                     onDropItemToFolder={handleDropItemToFolder}
@@ -898,6 +908,7 @@ export const App: React.FC = () => {
                     onOpenReminderPopover={(target, rect) =>
                       setActiveReminderTarget({ target, anchorRect: rect })
                     }
+                    densityMode={tabsDensity}
                   />
                 );
               })
@@ -907,14 +918,16 @@ export const App: React.FC = () => {
 
         {/* Section 3: Today's Tabs / Open Tabs (Ephemeral Unpinned Tabs) */}
         <OpenTabsSection
-          unpinnedTabs={filteredUnpinnedTabs}
+          unpinnedTabs={unpinnedTabs}
           activeTabId={activeTabId}
           spaces={spaces}
           isCollapsed={collapsedSections.todayTabs}
+          densityMode={tabsDensity}
           onToggleCollapse={() => toggleSectionCollapse('todayTabs')}
           onFocusTab={focusTab}
           onCloseTab={handleCloseTab}
           onCloseAll={closeAllUnpinnedTabs}
+          onCloseAllWindowTabs={closeAllWindowTabs}
           onNewTab={() => createNewTab()}
           onPinToQuickAccess={handlePinTabToQuickAccess}
           onPinToWorkspace={handlePinTabToWorkspace}
@@ -967,6 +980,33 @@ export const App: React.FC = () => {
         isScratchpadOpen={isScratchpadOpen}
         onToggleScratchpad={toggleScratchpadOpen}
         hasScratchpadText={Boolean(scratchpadText.trim())}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        showMemorySaverBar={showMemorySaverBar}
+        discardedTabsCount={discardedTabsCount}
+      />
+
+      {/* Settings & Appearance Modal */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        theme={theme}
+        colorTheme={colorTheme}
+        quickAccessDensity={quickAccessDensity}
+        tabsDensity={tabsDensity}
+        showMemorySaverBar={showMemorySaverBar}
+        allFolders={allFolders}
+        activeFolderIds={activeFolderIds}
+        autoArchiveInterval={autoArchiveInterval}
+        onToggleTheme={toggleTheme}
+        onSelectColorTheme={handleSelectColorTheme}
+        onToggleQuickAccessDensity={handleToggleQuickAccessDensity}
+        onToggleTabsDensity={handleToggleTabsDensity}
+        onToggleMemorySaverBar={handleToggleMemorySaverBar}
+        onSelectQuickAccessFolder={setQuickAccessFolderId}
+        onSelectWorkspaceFolder={setWorkspaceFolderId}
+        onResetFolders={resetToDefaultFolders}
+        onSetAutoArchiveInterval={setAutoArchiveInterval}
+        onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
 
       {/* Floating Active Reminder Popover */}

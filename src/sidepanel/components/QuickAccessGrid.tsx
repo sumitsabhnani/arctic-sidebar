@@ -21,6 +21,7 @@ interface QuickAccessGridProps {
   bindingsByBookmarkId: Record<string, TabBinding>;
   tabsByTabId: Record<number, chrome.tabs.Tab>;
   activeTabId: number | null;
+  densityMode?: 'relaxed' | 'compact';
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onTileDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
@@ -33,11 +34,38 @@ interface QuickAccessGridProps {
   onReorderQuickAccess?: (draggedId: string, targetIndex: number) => void;
 }
 
+function getShortTitle(rawTitle?: string, rawUrl?: string): string {
+  if (rawTitle && rawTitle.trim()) {
+    let t = rawTitle.trim();
+    if (t.includes(' · ')) t = t.split(' · ')[0];
+    if (t.includes(' - ')) t = t.split(' - ')[0];
+    if (t.includes(' | ')) t = t.split(' | ')[0];
+    if (t.includes(': ')) t = t.split(': ')[0];
+    if (t.length > 12) return t.slice(0, 11) + '…';
+    return t;
+  }
+  if (rawUrl) {
+    try {
+      const u = new URL(rawUrl);
+      let host = u.hostname.replace(/^www\./, '');
+      const parts = host.split('.');
+      if (parts.length > 1) {
+        return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+      }
+      return host;
+    } catch {
+      return rawUrl.slice(0, 10);
+    }
+  }
+  return 'Tab';
+}
+
 export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   bookmarks,
   bindingsByBookmarkId,
   tabsByTabId,
   activeTabId,
+  densityMode = 'relaxed',
   onTileClick,
   onTileDoubleClick,
   onOpenContextMenu,
@@ -74,6 +102,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
             binding={binding}
             boundTab={boundTab}
             activeTabId={activeTabId}
+            densityMode={densityMode}
             onTileClick={onTileClick}
             onTileDoubleClick={onTileDoubleClick}
             onOpenContextMenu={onOpenContextMenu}
@@ -96,6 +125,7 @@ interface QuickAccessTileProps {
   binding?: TabBinding;
   boundTab?: chrome.tabs.Tab;
   activeTabId: number | null;
+  densityMode?: 'relaxed' | 'compact';
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onTileDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
@@ -113,6 +143,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   binding,
   boundTab,
   activeTabId,
+  densityMode = 'relaxed',
   onTileClick,
   onTileDoubleClick,
   onOpenContextMenu,
@@ -134,6 +165,8 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isAudible = Boolean(boundTab?.audible);
   const isMuted = Boolean(boundTab?.mutedInfo?.muted);
+  const isRelaxed = densityMode === 'relaxed';
+  const shortTitle = getShortTitle(bookmark.title, bookmark.url);
 
   const titleText = bookmark.title || bookmark.url || 'Favorite';
   const faviconSrc = bookmark.url ? getFaviconUrl(bookmark.url, 48) : '';
@@ -310,7 +343,9 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       onContextMenu={handleContextMenu}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`group relative flex flex-col items-center justify-center h-12 rounded-xl transition-all duration-150 select-none outline-none ${
+      className={`group relative flex flex-col items-center justify-center rounded-xl transition-all duration-150 select-none outline-none ${
+        isRelaxed ? 'min-h-[58px] py-2 px-1.5 gap-1.5' : 'h-12'
+      } ${
         isDragging ? 'opacity-30 scale-95' : ''
       } ${
         dropPosition === 'left' ? 'border-l-2 theme-accent-border theme-accent-tint' : ''
@@ -318,7 +353,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         dropPosition === 'right' ? 'border-r-2 theme-accent-border theme-accent-tint' : ''
       } ${
         isActive
-          ? 'theme-active-card text-zinc-900 dark:text-white font-medium'
+          ? 'theme-active-card text-zinc-900 dark:text-white font-medium shadow-xs'
           : isRunningInBackground
           ? 'bg-black/[0.04] dark:bg-white/[0.07] border border-black/10 dark:border-white/10 hover:bg-black/[0.08] dark:hover:bg-white/12 text-zinc-700 dark:text-zinc-200'
           : 'bg-black/[0.02] dark:bg-white/[0.03] border border-black/5 dark:border-white/5 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] hover:border-black/10 dark:hover:border-white/10 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -376,6 +411,19 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-white dark:ring-[#1c1c1f]" />
         )}
       </div>
+
+      {/* Short Name Label in Relaxed Mode */}
+      {isRelaxed && (
+        <span
+          className={`text-[10.5px] leading-tight truncate max-w-full px-0.5 pointer-events-none ${
+            isActive
+              ? 'font-semibold text-zinc-900 dark:text-white'
+              : 'font-medium text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-white'
+          }`}
+        >
+          {shortTitle}
+        </span>
+      )}
 
       {/* Background Tab Running Dot (bottom center) */}
       {isRunningInBackground && (

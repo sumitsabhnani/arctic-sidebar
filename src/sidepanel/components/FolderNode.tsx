@@ -9,7 +9,8 @@ import {
   Trash2,
   Check,
   X,
-  ArrowRightLeft
+  ArrowRightLeft,
+  ChevronRight
 } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
@@ -55,11 +56,13 @@ interface FolderNodeProps {
   onRenameBookmark?: (id: string, title: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
+  onUnpinBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
   getReminderForBookmark?: (bookmarkId: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
+  densityMode?: 'relaxed' | 'compact';
 }
 
 export const FolderNode: React.FC<FolderNodeProps> = ({
@@ -88,11 +91,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onRenameBookmark,
   onOpenContextMenu,
   onDeleteBookmark,
+  onUnpinBookmark,
   onMoveToQuickAccess,
   onDropItemToFolder,
   onMoveBookmarkToIndex,
   getReminderForBookmark,
-  onOpenReminderPopover
+  onOpenReminderPopover,
+  densityMode = 'relaxed'
 }) => {
   const isCollapsed = Boolean(collapsedFolderIds[node.id]);
   const children = node.children || [];
@@ -458,9 +463,16 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               <FolderPlus className="w-3.5 h-3.5" />
             </button>
 
-            <span className="text-[11px] text-zinc-400 dark:text-zinc-600 group-hover:text-zinc-600 dark:group-hover:text-zinc-500 font-mono">
-              {itemCount}
-            </span>
+            <div className="flex items-center space-x-1.5 pl-1">
+              <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400 font-mono">
+                {itemCount}
+              </span>
+              <ChevronRight
+                className={`w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-transform duration-150 ${
+                  !isCollapsed ? 'rotate-90 text-amber-500' : ''
+                }`}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -545,11 +557,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onRenameBookmark={onRenameBookmark}
                     onOpenContextMenu={onOpenContextMenu}
                     onDeleteBookmark={onDeleteBookmark}
+                    onUnpinBookmark={onUnpinBookmark}
                     onMoveToQuickAccess={onMoveToQuickAccess}
                     onMoveBookmarkToIndex={onMoveBookmarkToIndex}
                     onDropItemToFolder={onDropItemToFolder}
                     getReminderForBookmark={getReminderForBookmark}
                     onOpenReminderPopover={onOpenReminderPopover}
+                    densityMode={densityMode}
                   />
                 );
               }
@@ -582,11 +596,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onRenameBookmark={onRenameBookmark}
                   onOpenContextMenu={onOpenContextMenu}
                   onDeleteBookmark={onDeleteBookmark}
+                  onUnpinBookmark={onUnpinBookmark}
                   onMoveToQuickAccess={onMoveToQuickAccess}
                   onMoveBookmarkToIndex={onMoveBookmarkToIndex}
                   onDropItemToFolder={onDropItemToFolder}
                   reminder={getReminderForBookmark?.(child.id)}
                   onOpenReminderPopover={onOpenReminderPopover}
+                  densityMode={densityMode}
                 />
               );
             })

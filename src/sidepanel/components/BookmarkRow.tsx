@@ -16,11 +16,24 @@ import {
   VolumeX,
   ArrowRightLeft,
   Folder,
-  Bell
+  Bell,
+  PinOff
 } from 'lucide-react';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
 import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
+
+function formatSubdomain(rawUrl?: string): string {
+  if (!rawUrl) return '';
+  try {
+    const u = new URL(rawUrl);
+    let host = u.hostname.replace(/^www\./, '');
+    const path = u.pathname === '/' ? '' : u.pathname;
+    return `${host}${path}`;
+  } catch {
+    return rawUrl;
+  }
+}
 
 interface BookmarkRowProps {
   bookmark: chrome.bookmarks.BookmarkTreeNode;
@@ -31,6 +44,7 @@ interface BookmarkRowProps {
   isDiscarded?: boolean;
   spaces?: SpaceItem[];
   activeSpaceId?: string;
+  densityMode?: 'relaxed' | 'compact';
   onRowClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onFaviconClick: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onFaviconDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
@@ -43,6 +57,7 @@ interface BookmarkRowProps {
   onReplaceUrl?: (bookmarkId: string) => void;
   onOpenContextMenu?: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onDeleteBookmark?: (id: string) => void;
+  onUnpinBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onMoveToQuickAccess?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
   onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
@@ -71,11 +86,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onReplaceUrl,
   onOpenContextMenu,
   onDeleteBookmark,
+  onUnpinBookmark,
   onMoveToQuickAccess,
   onMoveBookmarkToIndex,
   onDropItemToFolder,
   reminder,
-  onOpenReminderPopover
+  onOpenReminderPopover,
+  densityMode = 'relaxed'
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
@@ -165,6 +182,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               label: 'Pin to Quick Access',
               icon: <Sparkles className="w-3.5 h-3.5 text-cyan-400" />,
               action: () => onMoveToQuickAccess(bookmark)
+            }
+          ]
+        : []),
+      ...(onUnpinBookmark
+        ? [
+            {
+              label: "Unpin to Today's Tabs",
+              icon: <PinOff className="w-3.5 h-3.5 text-amber-500" />,
+              action: () => onUnpinBookmark(bookmark)
             }
           ]
         : []),
@@ -358,7 +384,9 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         }
       }}
       style={{ paddingLeft: `${12 + depth * 14}px` }}
-      className={`group relative flex items-center justify-between h-[34px] pr-2.5 my-[1px] rounded-lg cursor-pointer select-none transition-all duration-150 outline-none ${
+      className={`group relative flex items-center justify-between ${
+        densityMode === 'relaxed' ? 'min-h-[38px] py-1.5' : 'h-[34px]'
+      } pr-2.5 my-0 cursor-pointer select-none transition-all duration-150 outline-none ${
         isDragging ? 'opacity-40 scale-98' : ''
       } ${
         dropPosition === 'top'
@@ -432,26 +460,33 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           )}
         </div>
 
-        {/* Title / Description (Double-click to rename) */}
-        <span
-          title={tooltip}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            setEditTitle(bookmark.title || '');
-            setIsEditing(true);
-          }}
-          className={`truncate text-[13px] leading-tight transition-colors duration-150 cursor-text select-text ${
-            isNavAway
-              ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'
-              : isActive
-              ? 'text-zinc-900 dark:text-white'
-              : isRunning
-              ? 'text-zinc-800 dark:text-zinc-200'
-              : 'text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-zinc-200'
-          }`}
-        >
-          {titleText}
-        </span>
+        {/* Title / Description (Double-click to rename) & Subdomain Subtitle */}
+        <div className="flex flex-col min-w-0 flex-1 justify-center py-0.5">
+          <span
+            title={tooltip}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setEditTitle(bookmark.title || '');
+              setIsEditing(true);
+            }}
+            className={`truncate text-[12.5px] leading-tight transition-colors duration-150 cursor-text select-text ${
+              isNavAway
+                ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'
+                : isActive
+                ? 'font-semibold text-zinc-900 dark:text-white'
+                : isRunning
+                ? 'font-medium text-zinc-800 dark:text-zinc-200'
+                : 'text-zinc-700 dark:text-zinc-300 group-hover:text-zinc-900 dark:group-hover:text-zinc-100'
+            }`}
+          >
+            {titleText}
+          </span>
+          {densityMode === 'relaxed' && bookmark.url && (
+            <span className="truncate text-[10px] text-zinc-400 dark:text-zinc-500 leading-none select-none pt-0.5 font-mono">
+              {formatSubdomain(bookmark.url)}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Right: Audio Mute Indicator, Split View, Copy Link, Reload, & Status */}
@@ -512,6 +547,22 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             }`}
           >
             <Bell className="w-3 h-3 stroke-[2.5]" />
+          </button>
+        )}
+
+        {/* Unpin Bookmark to Today's Tabs Button (on hover) */}
+        {onUnpinBookmark && (
+          <button
+            type="button"
+            data-tooltip="Unpin to Today's Tabs (Removes bookmark)"
+            data-tooltip-pos="bottom-right"
+            onClick={(e) => {
+              e.stopPropagation();
+              onUnpinBookmark(bookmark);
+            }}
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100"
+          >
+            <PinOff className="w-3 h-3 stroke-[2.2]" />
           </button>
         )}
 

@@ -84,4 +84,45 @@ describe('SpacesSwitcher component', () => {
       '12'
     );
   });
+
+  it('renders settings button and triggers onOpenSettings on click', () => {
+    const onOpenSettings = vi.fn();
+    render(<SpacesSwitcher {...defaultProps} onOpenSettings={onOpenSettings} />);
+    const settingsBtn = screen.getByTitle('Settings & Appearance');
+    expect(settingsBtn).toBeInTheDocument();
+    fireEvent.click(settingsBtn);
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders memory saver feed information bar when showMemorySaverBar is true', () => {
+    render(
+      <SpacesSwitcher
+        {...defaultProps}
+        showMemorySaverBar={true}
+        discardedTabsCount={4}
+      />
+    );
+    expect(screen.getByText(/Memory Saver Active: ~300 MB freed/i)).toBeInTheDocument();
+  });
+
+  it('renders memory saver active with 0 MB freed when no tabs are sleeping', () => {
+    render(
+      <SpacesSwitcher
+        {...defaultProps}
+        showMemorySaverBar={true}
+        discardedTabsCount={0}
+      />
+    );
+    expect(screen.getByText('Memory Saver Active: ~0 MB freed')).toBeInTheDocument();
+  });
+
+  it('does not render memory saver strip when showMemorySaverBar is false', () => {
+    render(
+      <SpacesSwitcher
+        {...defaultProps}
+        showMemorySaverBar={false}
+      />
+    );
+    expect(screen.queryByText(/Memory Saver Active/i)).not.toBeInTheDocument();
+  });
 });
