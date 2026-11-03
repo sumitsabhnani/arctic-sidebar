@@ -156,6 +156,49 @@ export const App: React.FC = () => {
         }
       }
     );
+
+    const handleStorageChange = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      areaName: string
+    ) => {
+      if (areaName === 'local') {
+        if (changes.theme && (changes.theme.newValue === 'light' || changes.theme.newValue === 'dark')) {
+          setTheme(changes.theme.newValue as ThemeMode);
+        }
+        if (
+          changes.colorTheme &&
+          typeof changes.colorTheme.newValue === 'string' &&
+          [
+            'glacier-blue',
+            'midnight-amethyst',
+            'forest-sage',
+            'warm-terracotta',
+            'pure-monochrome',
+            'slate-grey'
+          ].includes(changes.colorTheme.newValue)
+        ) {
+          setColorTheme(changes.colorTheme.newValue as ColorThemeId);
+        }
+        if (changes.collapsedSections && changes.collapsedSections.newValue) {
+          setCollapsedSections(
+            changes.collapsedSections.newValue as {
+              quickAccess: boolean;
+              workspace: boolean;
+              todayTabs: boolean;
+            }
+          );
+        }
+      }
+    };
+
+    if (chrome.storage?.onChanged) {
+      chrome.storage.onChanged.addListener(handleStorageChange);
+    }
+    return () => {
+      if (chrome.storage?.onChanged) {
+        chrome.storage.onChanged.removeListener(handleStorageChange);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -480,7 +523,7 @@ export const App: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-[#f8f9fa] dark:bg-[#121214] text-zinc-500 dark:text-zinc-400">
         <Loader2 className="w-6 h-6 animate-spin text-cyan-500 dark:text-cyan-400 mb-2" />
-        <span className="text-xs font-medium">Initializing Arctic Sidebar...</span>
+        <span className="text-xs font-medium">Initializing Arctic...</span>
       </div>
     );
   }

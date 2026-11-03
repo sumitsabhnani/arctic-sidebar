@@ -112,21 +112,21 @@ export function useBookmarks() {
 
     const otherId = otherBookmarksNode ? otherBookmarksNode.id : '1';
 
-    // Check if 'Arctic Sidebar' exists inside Other Bookmarks
+    // Check if 'Arctic' or 'Arctic Sidebar' exists inside Other Bookmarks
     const legacyPrefix = 'Ar' + 'c Sidebar';
     let arcticSidebar = otherBookmarksNode?.children?.find(
-      (c) => !c.url && (c.title === 'Arctic Sidebar' || c.title === legacyPrefix)
+      (c) => !c.url && (c.title === 'Arctic' || c.title === 'Arctic Sidebar' || c.title === legacyPrefix)
     );
 
     let isNewSidebar = false;
     if (!arcticSidebar) {
       arcticSidebar = await chrome.bookmarks.create({
         parentId: otherId,
-        title: 'Arctic Sidebar'
+        title: 'Arctic'
       });
       isNewSidebar = true;
     } else if (arcticSidebar.title === legacyPrefix) {
-      await chrome.bookmarks.update(arcticSidebar.id, { title: 'Arctic Sidebar' });
+      await chrome.bookmarks.update(arcticSidebar.id, { title: 'Arctic' });
     }
 
     // Refresh sub-tree of Arctic Sidebar to inspect children
@@ -499,12 +499,28 @@ export function useBookmarks() {
     chrome.bookmarks.onMoved.addListener(handleBookmarkChange);
     chrome.bookmarks.onChildrenReordered.addListener(handleBookmarkChange);
 
+    const handleStorageChange = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      areaName: string
+    ) => {
+      if (areaName === 'local' && (changes.activeSpaceId || changes.spaces || changes.workspaceFolderId)) {
+        loadBookmarks();
+      }
+    };
+
+    if (chrome.storage?.onChanged) {
+      chrome.storage.onChanged.addListener(handleStorageChange);
+    }
+
     return () => {
       chrome.bookmarks.onCreated.removeListener(handleBookmarkChange);
       chrome.bookmarks.onRemoved.removeListener(handleBookmarkChange);
       chrome.bookmarks.onChanged.removeListener(handleBookmarkChange);
       chrome.bookmarks.onMoved.removeListener(handleBookmarkChange);
       chrome.bookmarks.onChildrenReordered.removeListener(handleBookmarkChange);
+      if (chrome.storage?.onChanged) {
+        chrome.storage.onChanged.removeListener(handleStorageChange);
+      }
     };
   }, [loadBookmarks]);
 

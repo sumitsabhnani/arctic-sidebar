@@ -21,6 +21,12 @@ function copyExtensionAssets() {
         fs.copyFileSync(manifestPath, resolve(distDir, 'manifest.json'));
       }
 
+      // Copy lightweight newtab.html launcher
+      const newtabPath = resolve(rootDir, 'newtab.html');
+      if (fs.existsSync(newtabPath)) {
+        fs.copyFileSync(newtabPath, resolve(distDir, 'newtab.html'));
+      }
+
       // Copy icons
       const iconsDir = resolve(rootDir, 'icons');
       const distIconsDir = resolve(distDir, 'icons');
@@ -43,7 +49,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         sidepanel: resolve(rootDir, 'sidepanel.html'),
-        newtab: resolve(rootDir, 'newtab.html'),
+        command: resolve(rootDir, 'command.html'),
         background: resolve(rootDir, 'src/background/index.ts')
       },
       output: {

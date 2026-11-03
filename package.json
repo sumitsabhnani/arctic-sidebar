@@ -1,14 +1,14 @@
 {
   "name": "arctic-sidebar",
-  "version": "1.3.0",
-  "description": "Arctic Sidebar Chrome Extension",
+  "version": "1.4.0",
+  "description": "Arctic: Sidebar & Commands Chrome Extension",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "zip": "npm run test && npm run build && cd dist && zip -r ../arctic-sidebar.zip .",
+    "zip": "npm run test && npm run build && rm -f arctic-sidebar.zip && cd dist && zip -r ../arctic-sidebar.zip .",
     "preview": "vite preview"
   },
   "dependencies": {

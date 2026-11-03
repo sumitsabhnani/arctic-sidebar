@@ -1,7 +1,7 @@
-# 🧊 Arctic Sidebar
+# 🧊 Arctic: Sidebar & Commands
 
 <p align="center">
-  <strong>Arc-inspired vertical tabs, spaces, audio controls, and centered command bar for Google Chrome.</strong>
+  <strong>Arc-inspired vertical tabs, spaces, audio controls, and lightning-fast command bar for Google Chrome.</strong>
 </p>
 
 <p align="center">
@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.3.0-blue.svg" alt="Version 1.3.0" />
+  <img src="https://img.shields.io/badge/version-1.4.0-blue.svg" alt="Version 1.4.0" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT" />
   <img src="https://img.shields.io/badge/manifest-v3-orange.svg" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/tests-86%20passed-brightgreen.svg" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-91%20passed-brightgreen.svg" alt="Tests" />
   <img src="https://img.shields.io/badge/privacy-100%25_local_%26_tracker--free-teal.svg" alt="Privacy" />
 </p>
 
@@ -25,7 +25,7 @@
 
 ## 🚀 Quick Install
 
-Install Arctic Sidebar directly from the official **Chrome Web Store**:
+Install Arctic directly from the official **Chrome Web Store**:
 
 👉 **[Add to Chrome (Free)](https://chromewebstore.google.com/detail/arctic-sidebar/jopfeopcjimbpofmnchbohkelodgfocd)**
 
@@ -38,10 +38,18 @@ Install Arctic Sidebar directly from the official **Chrome Web Store**:
 * **Instant Switching:** Cycle spaces seamlessly with a click or keyboard shortcut.
 * **Pinned Favorites:** Keep daily essentials (Email, Calendar, Slack, Notion) in a compact Quick Access grid pinned at the top.
 
-### ⚡ Arc-Inspired Centered Command Bar
-* **Clean New Tab:** A minimalist, focused search hub on every new tab (`Cmd+T`).
-* **Auto-Focus Anywhere:** Just start typing on any new tab—the centered command bar automatically captures your keystrokes.
-* **Instant Navigation:** Search open tabs across all windows, browse matching history suggestions, or search Google instantly.
+### ⚡ Arctic Command: Fast Keyboard-First Launcher & Actions
+* **Clean New Tab (`Cmd+T`):** Minimalist, distraction-free floating command palette.
+* **Auto-Focused on Open:** Press `Cmd+T` and start typing immediately without clicking into the page.
+* **Action Commands (`>`):** Type `>` to reveal all built-in actions, or type keywords like `dark`, `theme`, `sleep`, `space`, `history`:
+  * `> Switch to Light/Dark Mode`
+  * `> Palette: Glacier Blue / Midnight Amethyst / Forest Sage / Warm Terracotta / Slate Grey`
+  * `> Sleep Inactive Background Tabs` (Memory Saver)
+  * `> Close Duplicate Tabs`
+  * `> Reopen Last Closed Tab`
+  * `> Switch Space: [Space Name]`
+  * `> Open Chrome Bookmarks / History / Extensions / Downloads`
+* **Instant Navigation:** Jump directly to URLs (e.g., `github.com` or `localhost:3000`), search your bookmarks and browsing history, or fall back to Google Search with Enter.
 
 ### ⏰ Tab Reminders & Alerts
 * **Set Tab Reminders:** Never lose track of an article, pull request, or invoice. Schedule reminders on any open tab or bookmark with 1-click presets (*In 15m*, *In 1h*, *In 3h*, *Tomorrow 9 AM*) or a custom date & time picker.

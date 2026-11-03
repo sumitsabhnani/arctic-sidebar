@@ -66,7 +66,12 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const [editTitle, setEditTitle] = useState(tab.title || '');
 
   const tabId = tab.id;
-  const isNewTab = !tab.url || tab.url.startsWith('chrome://newtab') || tab.url === 'about:blank';
+  const isNewTab =
+    !tab.url ||
+    tab.url.startsWith('chrome://newtab') ||
+    tab.url === 'about:blank' ||
+    tab.url.includes('/newtab.html') ||
+    tab.url.includes('/command.html');
   const titleText = tab.title || (isNewTab ? 'New Tab' : tab.url || 'Untitled Tab');
   const faviconSrc = tab.favIconUrl || (tab.url ? getFaviconUrl(tab.url, 32) : '');
 

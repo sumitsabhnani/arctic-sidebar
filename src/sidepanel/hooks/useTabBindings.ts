@@ -382,6 +382,15 @@ export function useTabBindings() {
       chrome.bookmarks.onChanged.addListener(handleBookmarkChanged);
     }
 
+    const handleRuntimeMessage = (msg: { type?: string }) => {
+      if (msg && (msg.type === 'REFRESH_TABS' || msg.type === 'TABS_DISCARDED')) {
+        refreshWindowTabs();
+      }
+    };
+    if (chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener(handleRuntimeMessage);
+    }
+
     const cleanupInterval = setInterval(() => {
       loadSessionState();
     }, 5 * 60 * 1000);
@@ -399,6 +408,9 @@ export function useTabBindings() {
       chrome.storage.onChanged.removeListener(handleStorageChange);
       if (chrome?.bookmarks?.onChanged) {
         chrome.bookmarks.onChanged.removeListener(handleBookmarkChanged);
+      }
+      if (chrome.runtime?.onMessage) {
+        chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
       }
     };
   }, [loadSessionState, refreshWindowTabs]);
@@ -439,8 +451,12 @@ export function useTabBindings() {
    * Focus a tab
    */
   const focusTab = useCallback(async (tabId: number) => {
-    await chrome.tabs.update(tabId, { active: true });
     setActiveTabId(tabId);
+    try {
+      await chrome.tabs.update(tabId, { active: true });
+    } catch (err) {
+      console.warn('[Arctic] Could not activate tab:', err);
+    }
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }

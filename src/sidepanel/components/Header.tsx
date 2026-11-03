@@ -53,7 +53,13 @@ interface HeaderProps {
 }
 
 function formatDisplayUrl(rawUrl?: string): { display: string; isSecure: boolean; isInternal: boolean } {
-  if (!rawUrl || rawUrl === 'about:blank' || rawUrl.startsWith('chrome://newtab') || rawUrl.includes('/newtab.html')) {
+  if (
+    !rawUrl ||
+    rawUrl === 'about:blank' ||
+    rawUrl.startsWith('chrome://newtab') ||
+    rawUrl.includes('/newtab.html') ||
+    rawUrl.includes('/command.html')
+  ) {
     return { display: 'Search or enter URL...', isSecure: false, isInternal: true };
   }
   if (rawUrl.startsWith('chrome://') || rawUrl.startsWith('chrome-extension://')) {
@@ -170,7 +176,8 @@ export const Header: React.FC<HeaderProps> = ({
     activeTabUrl &&
       activeTabUrl !== 'about:blank' &&
       !activeTabUrl.startsWith('chrome://newtab') &&
-      !activeTabUrl.includes('/newtab.html')
+      !activeTabUrl.includes('/newtab.html') &&
+      !activeTabUrl.includes('/command.html')
   );
 
   return (
@@ -427,7 +434,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={onResetFolders}
-              title="Reset to default 'Arctic Sidebar' folder"
+              title="Reset to default 'Arctic' folder"
               className="flex items-center gap-1 text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 transition-colors"
             >
               <RotateCcw className="w-3 h-3" />
@@ -537,7 +544,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           <p className="text-[11px] text-zinc-500 italic">
-            Default folders are stored inside Chrome&apos;s &quot;Other Bookmarks&quot; &gt; &quot;Arctic Sidebar&quot;.
+            Default folders are stored inside Chrome&apos;s &quot;Other Bookmarks&quot; &gt; &quot;Arctic&quot;.
           </p>
         </div>
       )}

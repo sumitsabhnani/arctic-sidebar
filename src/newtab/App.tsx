@@ -6,17 +6,53 @@ import {
   History,
   CornerDownLeft,
   X,
-  Sparkles
+  Sparkles,
+  Moon,
+  Sun,
+  Palette,
+  PanelLeft,
+  Layers,
+  RotateCcw,
+  Trash2,
+  Settings,
+  Command,
+  Zap,
+  ExternalLink,
+  Check
 } from 'lucide-react';
-import type { ColorThemeId, ThemeMode } from '../sidepanel/utils/theme';
-import { getFaviconUrl, getDomainFromUrl } from '../sidepanel/utils/url';
+import type { ColorThemeId, ThemeMode, SpaceItem, TabBinding } from '../types';
+import { getFaviconUrl, getDomainFromUrl, normalizeUrl } from '../sidepanel/utils/url';
 
-interface SuggestionItem {
+export interface SuggestionItem {
   id: string;
-  type: 'search' | 'bookmark' | 'history' | 'url';
+  type: 'search' | 'bookmark' | 'history' | 'url' | 'command';
+  title: string;
+  url?: string;
+  domain?: string;
+  description?: string;
+  commandCategory?: string;
+  icon?: React.ReactNode;
+  action?: () => void | Promise<void>;
+  bookmarkId?: string;
+  spaceId?: string | null;
+  spaceName?: string;
+  isQuickAccess?: boolean;
+  isArctic?: boolean;
+}
+
+interface SpaceOption {
+  id: string;
+  name: string;
+  folderId?: string;
+}
+
+export interface ArcticBookmarkItem {
+  id: string;
   title: string;
   url: string;
-  domain?: string;
+  spaceName: string;
+  spaceId?: string | null;
+  isQuickAccess?: boolean;
 }
 
 export function isLikelyUrl(input: string): boolean {
@@ -40,17 +76,158 @@ export function formatNavigationUrl(input: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
+// Fetch all bookmarks saved within Arctic (Quick Access and Spaces)
+export async function getArcticBookmarks(): Promise<ArcticBookmarkItem[]> {
+  if (!chrome?.bookmarks?.getTree) return [];
+  try {
+    const tree = await chrome.bookmarks.getTree();
+    const root = tree[0];
+    const otherBookmarks =
+      root?.children?.find(
+        (c) => c.id === '2' || c.title.toLowerCase().includes('other')
+      ) || root?.children?.[1];
+
+    const arcticRoot = otherBookmarks?.children?.find(
+      (c) =>
+        !c.url &&
+        (c.title === 'Arctic' ||
+          c.title === 'Arctic Sidebar' ||
+          c.title.includes('Sidebar'))
+    );
+
+    let storedSpaces: SpaceItem[] = [];
+    let quickAccessFolderId: string | null = null;
+    try {
+      const stored = await chrome.storage.local.get([
+        'spaces',
+        'quickAccessFolderId'
+      ]);
+      if (Array.isArray(stored.spaces)) {
+        storedSpaces = stored.spaces;
+      }
+      quickAccessFolderId = (stored.quickAccessFolderId as string) || null;
+    } catch {
+      // ignore
+    }
+
+    const results: ArcticBookmarkItem[] = [];
+    const visitedFolderIds = new Set<string>();
+
+    const walk = (
+      node: chrome.bookmarks.BookmarkTreeNode,
+      spaceId: string | null,
+      spaceName: string,
+      isQuickAccess: boolean
+    ) => {
+      if (node.url) {
+        results.push({
+          id: node.id,
+          title: node.title || node.url,
+          url: node.url,
+          spaceId,
+          spaceName,
+          isQuickAccess
+        });
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          walk(child, spaceId, spaceName, isQuickAccess);
+        }
+      }
+    };
+
+    if (arcticRoot?.id) {
+      const [arcticSubtree] = await chrome.bookmarks.getSubTree(arcticRoot.id);
+      visitedFolderIds.add(arcticRoot.id);
+
+      if (arcticSubtree?.children) {
+        for (const section of arcticSubtree.children) {
+          visitedFolderIds.add(section.id);
+          const isQA =
+            section.id === quickAccessFolderId ||
+            section.title.toLowerCase() === 'quick access';
+
+          if (isQA) {
+            walk(section, null, 'Quick Access', true);
+          } else {
+            const matchedSpace = storedSpaces.find(
+              (s) =>
+                s.folderId === section.id ||
+                s.name.toLowerCase() === section.title.toLowerCase() ||
+                s.id.toLowerCase() === section.title.toLowerCase()
+            );
+            const spaceId =
+              matchedSpace?.id ||
+              (section.title.toLowerCase() === 'home' || section.title.toLowerCase() === 'workspace'
+                ? 'home'
+                : section.title.toLowerCase());
+            const spaceName = matchedSpace?.name || section.title;
+            walk(section, spaceId, spaceName, false);
+          }
+        }
+      }
+    }
+
+    // Also check any configured space or quick access folders that might be outside arcticRoot
+    if (quickAccessFolderId && !visitedFolderIds.has(quickAccessFolderId)) {
+      try {
+        const [qaNode] = await chrome.bookmarks.getSubTree(quickAccessFolderId);
+        if (qaNode) {
+          visitedFolderIds.add(quickAccessFolderId);
+          walk(qaNode, null, 'Quick Access', true);
+        }
+      } catch {}
+    }
+
+    for (const sp of storedSpaces) {
+      if (sp.folderId && !visitedFolderIds.has(sp.folderId)) {
+        try {
+          const [spNode] = await chrome.bookmarks.getSubTree(sp.folderId);
+          if (spNode) {
+            visitedFolderIds.add(sp.folderId);
+            walk(spNode, sp.id, sp.name, false);
+          }
+        } catch {}
+      }
+    }
+
+    return results;
+  } catch (err) {
+    console.warn('[Arctic] Error searching Arctic bookmarks:', err);
+    return [];
+  }
+}
+
 export const App: React.FC = () => {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [theme, setTheme] = useState<ThemeMode>('dark');
   const [colorTheme, setColorTheme] = useState<ColorThemeId>('glacier-blue');
+  const [spaces, setSpaces] = useState<SpaceOption[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const arcticBookmarksRef = useRef<ArcticBookmarkItem[]>([]);
 
-  // Sync theme with Arctic Sidebar
+  // Pre-load Arctic bookmarks for fast lookup and URL matching
+  useEffect(() => {
+    getArcticBookmarks().then((items) => {
+      arcticBookmarksRef.current = items;
+    });
+  }, []);
+
+  const showToast = useCallback((msg: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToastMessage(msg);
+    toastTimerRef.current = setTimeout(() => {
+      setToastMessage(null);
+    }, 2400);
+  }, []);
+
+  // Sync theme and palettes with Arctic storage
   useEffect(() => {
     chrome.storage.local.get(['theme', 'colorTheme'], (res) => {
       if (res.theme === 'light' || res.theme === 'dark') {
@@ -91,6 +268,48 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // Fetch available spaces from storage
+  useEffect(() => {
+    const loadSpaces = () => {
+      chrome.storage.local.get(['spaces'], (res) => {
+        if (Array.isArray(res.spaces) && res.spaces.length > 0) {
+          setSpaces(
+            res.spaces.map((s: SpaceItem) => ({
+              id: s.id,
+              name: s.name,
+              folderId: s.folderId
+            }))
+          );
+        } else {
+          setSpaces([
+            { id: 'home', name: 'Home' },
+            { id: 'work', name: 'Work' },
+            { id: 'personal', name: 'Personal' }
+          ]);
+        }
+      });
+    };
+
+    loadSpaces();
+
+    const handleStorageChange = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      areaName: string
+    ) => {
+      if (areaName === 'local' && changes.spaces) {
+        loadSpaces();
+      }
+    };
+    if (chrome.storage?.onChanged) {
+      chrome.storage.onChanged.addListener(handleStorageChange);
+    }
+    return () => {
+      if (chrome.storage?.onChanged) {
+        chrome.storage.onChanged.removeListener(handleStorageChange);
+      }
+    };
+  }, []);
+
   // Apply theme & color palette classes
   useEffect(() => {
     if (theme === 'dark') {
@@ -103,61 +322,28 @@ export const App: React.FC = () => {
     document.documentElement.setAttribute('data-color-theme', colorTheme);
   }, [theme, colorTheme]);
 
-  // Keep input focused automatically on mount, tab switch, and window focus
+  // Keep input focused automatically
   useEffect(() => {
     const focusInput = () => {
-      window.focus();
       if (inputRef.current) {
         inputRef.current.focus();
         inputRef.current.select();
       }
     };
 
-    // Staged focus attempts
     focusInput();
     const t1 = setTimeout(focusInput, 50);
     const t2 = setTimeout(focusInput, 150);
-    const t3 = setTimeout(focusInput, 300);
 
     window.addEventListener('focus', focusInput);
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        focusInput();
-        setTimeout(focusInput, 50);
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    // Listen to tab activation directly in extension context
-    const handleTabActivated = async (activeInfo: { tabId: number; windowId: number }) => {
-      try {
-        const currentTab = await chrome.tabs.getCurrent();
-        if (currentTab && currentTab.id === activeInfo.tabId) {
-          focusInput();
-          setTimeout(focusInput, 50);
-        }
-      } catch {
-        // ignore
-      }
-    };
-    if (chrome?.tabs?.onActivated) {
-      chrome.tabs.onActivated.addListener(handleTabActivated);
-    }
-
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
-      clearTimeout(t3);
       window.removeEventListener('focus', focusInput);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      if (chrome?.tabs?.onActivated) {
-        chrome.tabs.onActivated.removeListener(handleTabActivated);
-      }
     };
   }, []);
 
-  // Capture any keyboard typing on the page and direct into search input
+  // Capture keyboard typing outside input and direct into search input
   useEffect(() => {
     const handleWindowKeyDown = (e: KeyboardEvent) => {
       if (
@@ -175,20 +361,321 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleWindowKeyDown);
   }, []);
 
-  // Load suggestions from history, bookmarks, and search query
+  // Action commands registry
+  const getActionCommands = useCallback((): SuggestionItem[] => {
+    const cmds: SuggestionItem[] = [
+      // 1. Theme Toggle
+      {
+        id: 'cmd-toggle-theme',
+        type: 'command',
+        title: theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+        description: `Toggle theme (currently ${theme} mode)`,
+        commandCategory: 'Theme',
+        icon:
+          theme === 'dark' ? (
+            <Sun className="w-4 h-4 text-amber-400" />
+          ) : (
+            <Moon className="w-4 h-4 text-indigo-400" />
+          ),
+        action: async () => {
+          const nextTheme: ThemeMode = theme === 'dark' ? 'light' : 'dark';
+          setTheme(nextTheme);
+          await chrome?.storage?.local?.set({ theme: nextTheme });
+          showToast(`Theme switched to ${nextTheme} mode`);
+        }
+      },
+      // 2. Color Palettes
+      {
+        id: 'cmd-palette-glacier',
+        type: 'command',
+        title: 'Palette: Glacier Blue',
+        description: 'Cyan glacier accent color',
+        commandCategory: 'Palette',
+        icon: <Palette className="w-4 h-4 text-cyan-400" />,
+        action: async () => {
+          setColorTheme('glacier-blue');
+          await chrome?.storage?.local?.set({ colorTheme: 'glacier-blue' });
+          showToast('Color palette set to Glacier Blue');
+        }
+      },
+      {
+        id: 'cmd-palette-amethyst',
+        type: 'command',
+        title: 'Palette: Midnight Amethyst',
+        description: 'Deep violet amethyst accent color',
+        commandCategory: 'Palette',
+        icon: <Palette className="w-4 h-4 text-purple-400" />,
+        action: async () => {
+          setColorTheme('midnight-amethyst');
+          await chrome?.storage?.local?.set({ colorTheme: 'midnight-amethyst' });
+          showToast('Color palette set to Midnight Amethyst');
+        }
+      },
+      {
+        id: 'cmd-palette-sage',
+        type: 'command',
+        title: 'Palette: Forest Sage',
+        description: 'Lush natural emerald sage accent color',
+        commandCategory: 'Palette',
+        icon: <Palette className="w-4 h-4 text-emerald-400" />,
+        action: async () => {
+          setColorTheme('forest-sage');
+          await chrome?.storage?.local?.set({ colorTheme: 'forest-sage' });
+          showToast('Color palette set to Forest Sage');
+        }
+      },
+      {
+        id: 'cmd-palette-terracotta',
+        type: 'command',
+        title: 'Palette: Warm Terracotta',
+        description: 'Earthy warm terracotta orange accent',
+        commandCategory: 'Palette',
+        icon: <Palette className="w-4 h-4 text-orange-400" />,
+        action: async () => {
+          setColorTheme('warm-terracotta');
+          await chrome?.storage?.local?.set({ colorTheme: 'warm-terracotta' });
+          showToast('Color palette set to Warm Terracotta');
+        }
+      },
+      {
+        id: 'cmd-palette-mono',
+        type: 'command',
+        title: 'Palette: Pure Monochrome',
+        description: 'Clean zinc monochrome palette',
+        commandCategory: 'Palette',
+        icon: <Palette className="w-4 h-4 text-zinc-400" />,
+        action: async () => {
+          setColorTheme('pure-monochrome');
+          await chrome?.storage?.local?.set({ colorTheme: 'pure-monochrome' });
+          showToast('Color palette set to Pure Monochrome');
+        }
+      },
+      {
+        id: 'cmd-palette-slate',
+        type: 'command',
+        title: 'Palette: Slate Grey',
+        description: 'Subtle slate steel accent',
+        commandCategory: 'Palette',
+        icon: <Palette className="w-4 h-4 text-slate-400" />,
+        action: async () => {
+          setColorTheme('slate-grey');
+          await chrome?.storage?.local?.set({ colorTheme: 'slate-grey' });
+          showToast('Color palette set to Slate Grey');
+        }
+      },
+      // 3. Side Panel
+      {
+        id: 'cmd-open-sidebar',
+        type: 'command',
+        title: 'Open Arctic Sidebar',
+        description: 'Open the vertical bookmarks and tabs panel',
+        commandCategory: 'Navigation',
+        icon: <PanelLeft className="w-4 h-4 text-cyan-400" />,
+        action: async () => {
+          try {
+            const win = await chrome?.windows?.getCurrent();
+            if (win?.id && chrome?.sidePanel?.open) {
+              await chrome.sidePanel.open({ windowId: win.id });
+              showToast('Arctic Sidebar opened');
+            } else {
+              showToast('Click the Arctic icon in Chrome toolbar to open sidebar');
+            }
+          } catch {
+            showToast('Click the Arctic icon in Chrome toolbar to open sidebar');
+          }
+        }
+      },
+      // 4. Tab Memory Saver (Sleep tabs in parallel with instant update)
+      {
+        id: 'cmd-sleep-tabs',
+        type: 'command',
+        title: 'Sleep Inactive Background Tabs',
+        description: 'Free up memory by discarding idle tabs',
+        commandCategory: 'Tabs',
+        icon: <Zap className="w-4 h-4 text-amber-400" />,
+        action: async () => {
+          if (!chrome?.tabs?.query) return;
+          const tabs = await chrome.tabs.query({ currentWindow: true });
+          const toDiscard = tabs.filter(
+            (t) => !t.active && !t.discarded && typeof t.id === 'number'
+          );
+
+          if (toDiscard.length === 0) {
+            showToast('All background tabs are already asleep');
+            return;
+          }
+
+          // Discard all background tabs simultaneously in parallel
+          const results = await Promise.allSettled(
+            toDiscard.map((t) => chrome.tabs.discard(t.id as number))
+          );
+          const count = results.filter((r) => r.status === 'fulfilled').length;
+
+          // Notify sidebar to refresh tab state instantly
+          try {
+            chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+          } catch {
+            // ignore
+          }
+
+          showToast(
+            count > 0
+              ? `Slept ${count} background tab${count === 1 ? '' : 's'}`
+              : 'All background tabs are already asleep'
+          );
+        }
+      },
+      // 5. Close Duplicate Tabs
+      {
+        id: 'cmd-close-duplicates',
+        type: 'command',
+        title: 'Close Duplicate Tabs',
+        description: 'Find and close repeated open URLs',
+        commandCategory: 'Tabs',
+        icon: <Trash2 className="w-4 h-4 text-rose-400" />,
+        action: async () => {
+          if (!chrome?.tabs?.query) return;
+          const tabs = await chrome.tabs.query({ currentWindow: true });
+          const seen = new Set<string>();
+          const duplicateIds: number[] = [];
+          for (const t of tabs) {
+            if (t.url && !t.pinned && typeof t.id === 'number') {
+              const cleanUrl = t.url.replace(/#.*$/, '').replace(/\/$/, '');
+              if (seen.has(cleanUrl)) {
+                duplicateIds.push(t.id);
+              } else {
+                seen.add(cleanUrl);
+              }
+            }
+          }
+          if (duplicateIds.length > 0) {
+            await Promise.allSettled(duplicateIds.map((id) => chrome.tabs.remove(id)));
+            try {
+              chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+            } catch {
+              // ignore
+            }
+          }
+          showToast(
+            duplicateIds.length > 0
+              ? `Closed ${duplicateIds.length} duplicate tab${duplicateIds.length === 1 ? '' : 's'}`
+              : 'No duplicate tabs found'
+          );
+        }
+      },
+      // 6. Restore Tab
+      {
+        id: 'cmd-restore-tab',
+        type: 'command',
+        title: 'Reopen Last Closed Tab',
+        description: 'Restore the most recently closed tab',
+        commandCategory: 'Tabs',
+        icon: <RotateCcw className="w-4 h-4 text-indigo-400" />,
+        action: async () => {
+          if (chrome?.sessions?.restore) {
+            await chrome.sessions.restore();
+            window.close();
+          } else {
+            showToast('Session restore not available');
+          }
+        }
+      },
+      // 7. Chrome Internal URLs
+      {
+        id: 'cmd-open-bookmarks',
+        type: 'command',
+        title: 'Open Chrome Bookmarks Manager',
+        description: 'chrome://bookmarks',
+        commandCategory: 'System',
+        icon: <Bookmark className="w-4 h-4 text-amber-400" />,
+        url: 'chrome://bookmarks'
+      },
+      {
+        id: 'cmd-open-history',
+        type: 'command',
+        title: 'Open Chrome History',
+        description: 'chrome://history',
+        commandCategory: 'System',
+        icon: <History className="w-4 h-4 text-zinc-400" />,
+        url: 'chrome://history'
+      },
+      {
+        id: 'cmd-open-extensions',
+        type: 'command',
+        title: 'Open Chrome Extensions',
+        description: 'chrome://extensions',
+        commandCategory: 'System',
+        icon: <Settings className="w-4 h-4 text-cyan-400" />,
+        url: 'chrome://extensions'
+      },
+      {
+        id: 'cmd-open-downloads',
+        type: 'command',
+        title: 'Open Chrome Downloads',
+        description: 'chrome://downloads',
+        commandCategory: 'System',
+        icon: <ExternalLink className="w-4 h-4 text-indigo-400" />,
+        url: 'chrome://downloads'
+      }
+    ];
+
+    // Dynamic Spaces Commands (mapped to actual sidebar space switching)
+    for (const sp of spaces) {
+      cmds.push({
+        id: `cmd-space-${sp.id}`,
+        type: 'command',
+        title: `Switch Space: ${sp.name}`,
+        description: 'Switch active space in Arctic Sidebar',
+        commandCategory: 'Spaces',
+        icon: <Layers className="w-4 h-4 text-amber-400" />,
+        action: async () => {
+          await chrome?.storage?.local?.set({ activeSpaceId: sp.id });
+          showToast(`Switched active space to "${sp.name}"`);
+        }
+      });
+    }
+
+    return cmds;
+  }, [theme, spaces, showToast]);
+
+  // Load suggestions from commands, history, bookmarks, and search
   useEffect(() => {
     let isCancelled = false;
     const trimmed = query.trim();
 
+    // EXPLICIT COMMAND MODE (starts with '>')
+    if (trimmed.startsWith('>')) {
+      const allCmds = getActionCommands();
+      const filterTerm = trimmed.slice(1).trim().toLowerCase();
+
+      const matchedCmds = filterTerm
+        ? allCmds.filter(
+            (c) =>
+              c.title.toLowerCase().includes(filterTerm) ||
+              c.description?.toLowerCase().includes(filterTerm) ||
+              c.commandCategory?.toLowerCase().includes(filterTerm)
+          )
+        : allCmds;
+
+      setSuggestions(matchedCmds);
+      setSelectedIndex(matchedCmds.length > 0 ? 0 : -1);
+      return;
+    }
+
+    // EMPTY QUERY: fetch top 6 most visited / recent history items
     if (!trimmed) {
-      // Empty query: fetch top 6 most visited / recent history items
       if (chrome?.history?.search) {
         chrome.history.search(
           { text: '', maxResults: 6, startTime: 0 },
           (historyItems) => {
             if (isCancelled) return;
             const items: SuggestionItem[] = (historyItems || [])
-              .filter((h) => h.url && !h.url.startsWith('chrome://') && !h.url.startsWith('chrome-extension://'))
+              .filter(
+                (h) =>
+                  h.url &&
+                  !h.url.startsWith('chrome://') &&
+                  !h.url.startsWith('chrome-extension://')
+              )
               .map((h) => ({
                 id: `hist-${h.id}`,
                 type: 'history',
@@ -209,39 +696,80 @@ export const App: React.FC = () => {
       };
     }
 
-    // Non-empty query: search history + bookmarks + add search action
+    // NON-EMPTY QUERY: search commands + bookmarks + direct URL + history + web search
     const fetchResults = async () => {
       const results: SuggestionItem[] = [];
       const seenUrls = new Set<string>();
 
-      // 1. If it looks like a direct domain or URL, offer direct visit as top suggestion
-      if (isLikelyUrl(trimmed)) {
-        const directUrl = formatNavigationUrl(trimmed);
-        results.push({
-          id: 'direct-url',
-          type: 'url',
-          title: `Open ${trimmed}`,
-          url: directUrl,
-          domain: getDomainFromUrl(directUrl)
-        });
-        seenUrls.add(directUrl.toLowerCase());
-      }
+      // 1. Matching Action Commands
+      const allCmds = getActionCommands();
+      const lowerQuery = trimmed.toLowerCase();
+      const matchedCmds = allCmds
+        .filter(
+          (c) =>
+            c.title.toLowerCase().includes(lowerQuery) ||
+            c.description?.toLowerCase().includes(lowerQuery) ||
+            c.commandCategory?.toLowerCase().includes(lowerQuery)
+        )
+        .slice(0, 3);
 
-      // 2. Query Bookmarks
+      results.push(...matchedCmds);
+
+      // 2. Bookmarks Search (Prioritizes Arctic Bookmarks)
       try {
-        if (chrome?.bookmarks?.search) {
-          const bookmarkNodes = await chrome.bookmarks.search(trimmed);
-          for (const bm of bookmarkNodes) {
-            if (bm.url && !seenUrls.has(bm.url.toLowerCase())) {
-              seenUrls.add(bm.url.toLowerCase());
-              results.push({
-                id: `bm-${bm.id}`,
-                type: 'bookmark',
-                title: bm.title || bm.url,
-                url: bm.url,
-                domain: getDomainFromUrl(bm.url)
-              });
-              if (results.length >= 4) break;
+        const arcticBm = await getArcticBookmarks();
+        arcticBookmarksRef.current = arcticBm;
+        const lowerTrimmed = trimmed.toLowerCase();
+        const matchingArctic = arcticBm.filter(
+          (bm) =>
+            bm.title.toLowerCase().includes(lowerTrimmed) ||
+            bm.url.toLowerCase().includes(lowerTrimmed)
+        );
+
+        for (const bm of matchingArctic) {
+          const norm = normalizeUrl(bm.url).toLowerCase();
+          if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
+            seenUrls.add(bm.url.toLowerCase());
+            seenUrls.add(norm);
+            results.push({
+              id: `arctic-bm-${bm.id}`,
+              type: 'bookmark',
+              title: bm.title,
+              url: bm.url,
+              bookmarkId: bm.id,
+              spaceId: bm.spaceId,
+              spaceName: bm.spaceName,
+              isQuickAccess: bm.isQuickAccess,
+              isArctic: true,
+              domain:
+                bm.spaceName.toLowerCase() === 'quick access'
+                  ? 'Quick Access'
+                  : `Space: ${bm.spaceName}`
+            });
+            if (results.length >= 8) break;
+          }
+        }
+
+        // General Chrome Bookmarks fallback
+        if (matchingArctic.length === 0 && chrome?.bookmarks?.search) {
+          const generalNodes = await chrome.bookmarks.search(trimmed);
+          for (const bm of generalNodes) {
+            if (bm.url) {
+              const norm = normalizeUrl(bm.url).toLowerCase();
+              if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
+                seenUrls.add(bm.url.toLowerCase());
+                seenUrls.add(norm);
+                results.push({
+                  id: `chrome-bm-${bm.id}`,
+                  type: 'bookmark',
+                  title: bm.title || bm.url,
+                  url: bm.url,
+                  bookmarkId: bm.id,
+                  isArctic: false,
+                  domain: getDomainFromUrl(bm.url)
+                });
+                if (results.length >= 8) break;
+              }
             }
           }
         }
@@ -249,30 +777,50 @@ export const App: React.FC = () => {
         // ignore
       }
 
-      // 3. Query History
+      // 3. Direct URL suggestion (if likely URL and not already shown as bookmark)
+      if (isLikelyUrl(trimmed)) {
+        const directUrl = formatNavigationUrl(trimmed);
+        const norm = normalizeUrl(directUrl).toLowerCase();
+        if (!seenUrls.has(directUrl.toLowerCase()) && !seenUrls.has(norm)) {
+          results.push({
+            id: 'direct-url',
+            type: 'url',
+            title: `Open ${trimmed}`,
+            url: directUrl,
+            domain: getDomainFromUrl(directUrl)
+          });
+          seenUrls.add(directUrl.toLowerCase());
+          seenUrls.add(norm);
+        }
+      }
+
+      // 4. History
       try {
         if (chrome?.history?.search) {
           const historyItems = await chrome.history.search({
             text: trimmed,
-            maxResults: 10,
+            maxResults: 8,
             startTime: 0
           });
           for (const item of historyItems) {
             if (
               item.url &&
               !item.url.startsWith('chrome://') &&
-              !item.url.startsWith('chrome-extension://') &&
-              !seenUrls.has(item.url.toLowerCase())
+              !item.url.startsWith('chrome-extension://')
             ) {
-              seenUrls.add(item.url.toLowerCase());
-              results.push({
-                id: `hist-${item.id}`,
-                type: 'history',
-                title: item.title || item.url,
-                url: item.url,
-                domain: getDomainFromUrl(item.url)
-              });
-              if (results.length >= 7) break;
+              const norm = normalizeUrl(item.url).toLowerCase();
+              if (!seenUrls.has(item.url.toLowerCase()) && !seenUrls.has(norm)) {
+                seenUrls.add(item.url.toLowerCase());
+                seenUrls.add(norm);
+                results.push({
+                  id: `hist-${item.id}`,
+                  type: 'history',
+                  title: item.title || item.url,
+                  url: item.url,
+                  domain: getDomainFromUrl(item.url)
+                });
+                if (results.length >= 9) break;
+              }
             }
           }
         }
@@ -280,7 +828,7 @@ export const App: React.FC = () => {
         // ignore
       }
 
-      // 4. Always add Google Search suggestion at the bottom
+      // 5. Google Search Fallback
       const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
       results.push({
         id: 'google-search',
@@ -291,7 +839,6 @@ export const App: React.FC = () => {
 
       if (!isCancelled) {
         setSuggestions(results);
-        // Default to first suggestion when typing
         setSelectedIndex(0);
       }
     };
@@ -301,13 +848,239 @@ export const App: React.FC = () => {
     return () => {
       isCancelled = true;
     };
-  }, [query]);
+  }, [query, getActionCommands]);
 
-  // Navigate to destination
-  const handleNavigate = useCallback((destinationUrl: string) => {
-    if (!destinationUrl) return;
-    window.location.href = destinationUrl;
-  }, []);
+  // Navigate to destination (handling bookmark bindings and space switching)
+  const openBookmarkOrUrl = useCallback(
+    async (
+      targetUrl: string,
+      bookmarkInfo?: {
+        id?: string;
+        title?: string;
+        spaceId?: string | null;
+        spaceName?: string;
+        isQuickAccess?: boolean;
+        isArctic?: boolean;
+      }
+    ) => {
+      if (!targetUrl) return;
+
+      const targetNormalized = normalizeUrl(targetUrl);
+
+      // If bookmark info wasn't explicitly passed, check if targetUrl matches any known Arctic bookmark
+      if (!bookmarkInfo?.id && arcticBookmarksRef.current.length > 0) {
+        const matchedBm = arcticBookmarksRef.current.find(
+          (bm) => normalizeUrl(bm.url) === targetNormalized
+        );
+        if (matchedBm) {
+          bookmarkInfo = {
+            id: matchedBm.id,
+            title: matchedBm.title,
+            spaceId: matchedBm.spaceId,
+            spaceName: matchedBm.spaceName,
+            isQuickAccess: matchedBm.isQuickAccess,
+            isArctic: true
+          };
+        }
+      }
+
+      const bookmarkId = bookmarkInfo?.id;
+      const isArctic = Boolean(bookmarkInfo?.isArctic);
+
+      // 1. Read existing tab session bindings
+      let bindings: Record<string, TabBinding> = {};
+      let byTab: Record<number, string> = {};
+      try {
+        if (chrome?.storage?.session?.get) {
+          const session = await chrome.storage.session.get([
+            'bindingsByBookmarkId',
+            'bookmarkIdByTabId'
+          ]);
+          bindings =
+            (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+          byTab = (session.bookmarkIdByTabId as Record<number, string>) || {};
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2. Identify the current tab running Arctic Command
+      let currentTab: chrome.tabs.Tab | undefined;
+      try {
+        if (chrome?.tabs?.getCurrent) {
+          const t = await chrome.tabs.getCurrent();
+          if (t) currentTab = t;
+        }
+      } catch {
+        // ignore
+      }
+      if (!currentTab && chrome?.tabs?.query) {
+        try {
+          const [activeTab] = await chrome.tabs.query({
+            active: true,
+            currentWindow: true
+          });
+          currentTab = activeTab;
+        } catch {
+          // ignore
+        }
+      }
+
+      // 3. Case A: Arctic Bookmark is ALREADY open in another tab
+      if (isArctic && bookmarkId && bindings[bookmarkId]) {
+        const boundTabId = bindings[bookmarkId].tabId;
+        try {
+          const boundTab = await chrome.tabs.get(boundTabId);
+          if (boundTab) {
+            // Switch sidebar space if bookmark belongs to a space
+            if (bookmarkInfo?.spaceId) {
+              await chrome?.storage?.local?.set({
+                activeSpaceId: bookmarkInfo.spaceId
+              });
+            }
+            // Activate the existing tab
+            await chrome.tabs.update(boundTabId, { active: true });
+            if (boundTab.windowId) {
+              try {
+                await chrome.windows.update(boundTab.windowId, { focused: true });
+              } catch {}
+            }
+            // Notify sidebar
+            try {
+              chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+            } catch {}
+            // Close the temporary launcher tab
+            if (currentTab?.id && currentTab.id !== boundTabId) {
+              await chrome.tabs.remove(currentTab.id);
+            } else {
+              window.close();
+            }
+            return;
+          }
+        } catch {
+          // Tab was closed, fall through to re-bind
+        }
+      }
+
+      // 4. Case B: An existing tab in current window already matches target URL
+      if (chrome?.tabs?.query) {
+        try {
+          const currentTabs = await chrome.tabs.query({ currentWindow: true });
+          const otherMatch = currentTabs.find(
+            (t) =>
+              typeof t.id === 'number' &&
+              t.id !== currentTab?.id &&
+              t.url &&
+              normalizeUrl(t.url) === targetNormalized
+          );
+          if (otherMatch && typeof otherMatch.id === 'number') {
+            const matchedTabId = otherMatch.id;
+            if (isArctic && bookmarkId && chrome?.storage?.session?.set) {
+              const newBinding: TabBinding = {
+                bookmarkId,
+                tabId: matchedTabId,
+                windowId: otherMatch.windowId,
+                originalUrl: targetUrl,
+                currentUrl: otherMatch.url || targetUrl,
+                currentTitle: otherMatch.title || bookmarkInfo?.title || '',
+                isNavigatedAway: false
+              };
+              const nextBindings = { ...bindings, [bookmarkId]: newBinding };
+              const nextByTab = { ...byTab, [matchedTabId]: bookmarkId };
+              await chrome.storage.session.set({
+                bindingsByBookmarkId: nextBindings,
+                bookmarkIdByTabId: nextByTab
+              });
+              if (bookmarkInfo?.spaceId) {
+                await chrome?.storage?.local?.set({
+                  activeSpaceId: bookmarkInfo.spaceId
+                });
+              }
+            }
+            await chrome.tabs.update(matchedTabId, { active: true });
+            try {
+              chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+            } catch {}
+            if (currentTab?.id && currentTab.id !== matchedTabId) {
+              await chrome.tabs.remove(currentTab.id);
+            }
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // 5. Case C: Open in currentTab (or fallback to window.location.href)
+      if (isArctic && bookmarkId && currentTab?.id && chrome?.storage?.session?.set) {
+        const newBinding: TabBinding = {
+          bookmarkId,
+          tabId: currentTab.id,
+          windowId: currentTab.windowId,
+          originalUrl: targetUrl,
+          currentUrl: targetUrl,
+          currentTitle: bookmarkInfo?.title || targetUrl,
+          isNavigatedAway: false
+        };
+        const nextBindings = { ...bindings, [bookmarkId]: newBinding };
+        const nextByTab = { ...byTab, [currentTab.id]: bookmarkId };
+        await chrome.storage.session.set({
+          bindingsByBookmarkId: nextBindings,
+          bookmarkIdByTabId: nextByTab
+        });
+        if (bookmarkInfo?.spaceId) {
+          await chrome?.storage?.local?.set({
+            activeSpaceId: bookmarkInfo.spaceId
+          });
+        }
+      }
+
+      if (currentTab?.id && chrome?.tabs?.update) {
+        try {
+          await chrome.tabs.update(currentTab.id, {
+            url: targetUrl,
+            active: true
+          });
+        } catch {
+          window.location.href = targetUrl;
+        }
+      } else {
+        window.location.href = targetUrl;
+      }
+
+      try {
+        chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+      } catch {}
+    },
+    []
+  );
+
+  // Handle selection (URL navigation, Bookmark activation, or Command action)
+  const handleSelect = useCallback(
+    async (item: SuggestionItem) => {
+      if (item.type === 'command') {
+        if (item.action) {
+          await item.action();
+        } else if (item.url) {
+          openBookmarkOrUrl(item.url);
+        }
+        return;
+      }
+      if (item.url) {
+        openBookmarkOrUrl(item.url, {
+          id: item.bookmarkId,
+          title: item.title,
+          spaceId: item.spaceId,
+          spaceName: item.spaceName,
+          isQuickAccess: item.isQuickAccess,
+          isArctic: item.isArctic
+        });
+      } else {
+        openBookmarkOrUrl(formatNavigationUrl(item.title));
+      }
+    },
+    [openBookmarkOrUrl]
+  );
 
   // Handle keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -322,9 +1095,9 @@ export const App: React.FC = () => {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (selectedIndex >= 0 && selectedIndex < suggestions.length) {
-        handleNavigate(suggestions[selectedIndex].url);
-      } else if (query.trim()) {
-        handleNavigate(formatNavigationUrl(query));
+        handleSelect(suggestions[selectedIndex]);
+      } else if (query.trim() && !query.trim().startsWith('>')) {
+        openBookmarkOrUrl(formatNavigationUrl(query));
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -366,14 +1139,18 @@ export const App: React.FC = () => {
         >
           {/* Top Search Input Box */}
           <div className="flex items-center px-4 py-3.5 space-x-3 border-b border-zinc-200/80 dark:border-white/10">
-            <Search className="w-5 h-5 text-zinc-400 flex-shrink-0" />
+            {query.trim().startsWith('>') ? (
+              <Command className="w-5 h-5 theme-accent-text flex-shrink-0 animate-in fade-in duration-100" />
+            ) : (
+              <Search className="w-5 h-5 text-zinc-400 flex-shrink-0" />
+            )}
             <input
               ref={inputRef}
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Search Google or enter URL..."
+              placeholder="Search Google, enter URL, or type > for commands..."
               autoFocus
               className="flex-1 bg-transparent text-[16px] leading-normal text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 outline-none font-normal"
             />
@@ -408,16 +1185,26 @@ export const App: React.FC = () => {
                 </div>
               )}
 
+              {query.trim().startsWith('>') && (
+                <div className="px-3 py-1.5 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider flex items-center justify-between">
+                  <span>Action Commands</span>
+                  <span className="text-[10px] text-zinc-400 font-normal">
+                    {suggestions.length} available
+                  </span>
+                </div>
+              )}
+
               {suggestions.map((item, index) => {
                 const isSelected = index === selectedIndex;
-                const faviconSrc = item.url ? getFaviconUrl(item.url, 32) : '';
+                const faviconSrc =
+                  item.type !== 'command' && item.url ? getFaviconUrl(item.url, 32) : '';
 
                 return (
                   <div
                     key={item.id}
                     role="button"
                     tabIndex={0}
-                    onClick={() => handleNavigate(item.url)}
+                    onClick={() => handleSelect(item)}
                     onMouseEnter={() => setSelectedIndex(index)}
                     className={`flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-100 outline-none ${
                       isSelected
@@ -425,10 +1212,12 @@ export const App: React.FC = () => {
                         : 'text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/5'
                     }`}
                   >
-                    {/* Left: Favicon & Title/URL */}
+                    {/* Left: Icon & Title/Description */}
                     <div className="flex items-center space-x-3 min-w-0 flex-1 mr-3">
                       <div className="w-5 h-5 flex-shrink-0 flex items-center justify-center rounded">
-                        {item.type === 'search' ? (
+                        {item.type === 'command' ? (
+                          item.icon || <Command className="w-4 h-4 text-purple-400" />
+                        ) : item.type === 'search' ? (
                           <Search className="w-4 h-4 text-cyan-500 dark:text-cyan-400" />
                         ) : item.type === 'url' ? (
                           <Globe className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
@@ -452,19 +1241,28 @@ export const App: React.FC = () => {
                         <span className="truncate text-[13.5px] font-medium">
                           {item.title}
                         </span>
-                        {item.domain && (
+                        {item.description ? (
+                          <span className="truncate text-[11.5px] text-zinc-400 dark:text-zinc-500 mt-0.5">
+                            {item.description}
+                          </span>
+                        ) : item.domain ? (
                           <span className="truncate text-[11.5px] text-zinc-400 dark:text-zinc-500 mt-0.5">
                             {item.domain}
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </div>
 
                     {/* Right: Badge & Enter prompt */}
                     <div className="flex items-center space-x-2 flex-shrink-0">
+                      {item.type === 'command' && (
+                        <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-purple-500/10 text-purple-600 dark:text-purple-300 border border-purple-500/20">
+                          {item.commandCategory || 'Command'}
+                        </span>
+                      )}
                       {item.type === 'bookmark' && (
                         <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-300 border border-amber-500/20">
-                          Bookmark
+                          {item.domain?.startsWith('Space:') ? 'Space Bookmark' : 'Bookmark'}
                         </span>
                       )}
                       {item.type === 'history' && (
@@ -488,32 +1286,15 @@ export const App: React.FC = () => {
           )}
         </div>
 
-        {/* Footer Keyboard Hints */}
-        <div className="flex items-center justify-center space-x-4 text-xs text-zinc-400 dark:text-zinc-500 pt-1">
-          <span className="flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/10 text-[10px] font-mono">
-              ↑
-            </kbd>
-            <kbd className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/10 text-[10px] font-mono">
-              ↓
-            </kbd>
-            <span className="ml-1">to navigate</span>
-          </span>
-          <span>•</span>
-          <span className="flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/10 text-[10px] font-mono">
-              ↵
-            </kbd>
-            <span className="ml-1">to open</span>
-          </span>
-          <span>•</span>
-          <span className="flex items-center space-x-1">
-            <kbd className="px-1.5 py-0.5 rounded bg-black/5 dark:bg-white/10 border border-black/10 dark:border-white/10 text-[10px] font-mono">
-              esc
-            </kbd>
-            <span className="ml-1">to clear</span>
-          </span>
-        </div>
+        {/* Action Toast Feedback */}
+        {toastMessage && (
+          <div className="flex items-center justify-center animate-in fade-in slide-in-from-bottom-2 duration-150">
+            <div className="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-zinc-900/90 dark:bg-white/95 text-white dark:text-zinc-950 text-xs font-medium shadow-xl backdrop-blur-md">
+              <Check className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-600 flex-shrink-0" />
+              <span>{toastMessage}</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
