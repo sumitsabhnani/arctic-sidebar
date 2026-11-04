@@ -8,7 +8,7 @@ describe('useBookmarks hook', () => {
     mockChrome.__resetAll();
   });
 
-  it('initializes default folder hierarchy and spaces if none exist (positive)', async () => {
+  it('initializes default folder hierarchy and keeps only 1 default space (Home) on fresh install', async () => {
     const { result } = renderHook(() => useBookmarks());
 
     // Wait until loading completes
@@ -17,8 +17,8 @@ describe('useBookmarks hook', () => {
     });
 
     expect(result.current.loading).toBe(false);
-    expect(result.current.spaces.length).toBe(3);
-    expect(result.current.spaces.map((s) => s.name)).toEqual(['Home', 'Work', 'Personal']);
+    expect(result.current.spaces.length).toBe(1);
+    expect(result.current.spaces.map((s) => s.name)).toEqual(['Home']);
     expect(result.current.activeSpaceId).toBe('home');
     expect(result.current.quickAccessNode).toBeDefined();
     expect(result.current.workspaceNode).toBeDefined();
@@ -119,6 +119,11 @@ describe('useBookmarks hook', () => {
       await Promise.resolve();
     });
 
+    // Create Work space
+    await act(async () => {
+      await result.current.createSpace('Work', 'briefcase');
+    });
+
     const workSpace = result.current.spaces.find((s) => s.name === 'Work');
     expect(workSpace).toBeDefined();
 
@@ -137,6 +142,11 @@ describe('useBookmarks hook', () => {
     const { result } = renderHook(() => useBookmarks());
     await act(async () => {
       await Promise.resolve();
+    });
+
+    // Create Work space
+    await act(async () => {
+      await result.current.createSpace('Work', 'briefcase');
     });
 
     const homeFolderId = result.current.activeFolderIds.workspaceId!;
@@ -159,6 +169,54 @@ describe('useBookmarks hook', () => {
 
     const moved = await mockChrome.bookmarks.getSubTree(bookmarkId);
     expect(moved[0].parentId).toBe(workSpace.folderId);
+  });
+
+  it('retains all previously created spaces when user uninstalls and reinstalls extension', async () => {
+    // Seed existing Arctic folder with spaces the user created previously
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  { id: '11', title: 'Quick Access', children: [] },
+                  { id: '12', title: 'Home', children: [] },
+                  { id: '20', title: 'Work', children: [] },
+                  { id: '21', title: 'Quick Access (Work)', children: [] },
+                  { id: '30', title: 'Personal', children: [] },
+                  { id: '40', title: 'Finance', children: [] },
+                  { id: '41', title: 'Quick Access (Finance)', children: [] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    // Ensure storage.local is completely empty as happens after uninstalling an extension
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setSyncStorage({});
+
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // All previously created spaces should be retained!
+    expect(result.current.spaces.length).toBe(4);
+    const names = result.current.spaces.map((s) => s.name);
+    expect(names).toContain('Home');
+    expect(names).toContain('Work');
+    expect(names).toContain('Personal');
+    expect(names).toContain('Finance');
   });
 
   it('toggles folder collapse and persists in storage.local', async () => {

@@ -63,6 +63,12 @@ interface BookmarkRowProps {
   onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
   reminder?: TabReminder;
   onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
+  isEditing?: boolean;
+  editTitle?: string;
+  onStartRename?: () => void;
+  onChangeEditTitle?: (newTitle: string) => void;
+  onSaveRename?: () => void;
+  onCancelRename?: () => void;
 }
 
 export const BookmarkRow: React.FC<BookmarkRowProps> = ({
@@ -92,14 +98,24 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onDropItemToFolder,
   reminder,
   onOpenReminderPopover,
-  densityMode = 'relaxed'
+  densityMode = 'relaxed',
+  isEditing: controlledIsEditing,
+  editTitle: controlledEditTitle,
+  onStartRename,
+  onChangeEditTitle,
+  onSaveRename,
+  onCancelRename
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState(bookmark.title || '');
+  const [localIsEditing, setLocalIsEditing] = useState(false);
+  const [localEditTitle, setLocalEditTitle] = useState(bookmark.title || '');
+
+  const isControlled = typeof onStartRename === 'function';
+  const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
+  const effectiveEditTitle = isControlled && typeof controlledEditTitle === 'string' ? controlledEditTitle : localEditTitle;
 
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
@@ -170,8 +186,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               label: 'Rename Tab',
               icon: <Edit2 className="w-3.5 h-3.5" />,
               action: () => {
-                setEditTitle(bookmark.title || '');
-                setIsEditing(true);
+                if (onStartRename) {
+                  onStartRename();
+                } else {
+                  setLocalEditTitle(bookmark.title || '');
+                  setLocalIsEditing(true);
+                }
               }
             }
           ]
@@ -314,28 +334,42 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     }
   };
 
-  if (isEditing) {
+  if (effectiveIsEditing) {
     return (
       <form
         onSubmit={async (e) => {
           e.preventDefault();
-          const trimmed = editTitle.trim();
-          if (trimmed && onRenameBookmark) {
-            await onRenameBookmark(bookmark.id, trimmed);
+          if (onSaveRename) {
+            onSaveRename();
+          } else {
+            const trimmed = effectiveEditTitle.trim();
+            if (trimmed && onRenameBookmark) {
+              await onRenameBookmark(bookmark.id, trimmed);
+            }
+            setLocalIsEditing(false);
           }
-          setIsEditing(false);
         }}
         style={{ paddingLeft: `${12 + depth * 14}px` }}
         className="flex items-center h-[34px] pr-2 my-[1px] space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-lg border border-cyan-500/60"
       >
         <input
           type="text"
-          value={editTitle}
-          onChange={(e) => setEditTitle(e.target.value)}
+          value={effectiveEditTitle}
+          onChange={(e) => {
+            if (onChangeEditTitle) {
+              onChangeEditTitle(e.target.value);
+            } else {
+              setLocalEditTitle(e.target.value);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
-              setIsEditing(false);
-              setEditTitle(bookmark.title || '');
+              if (onCancelRename) {
+                onCancelRename();
+              } else {
+                setLocalIsEditing(false);
+                setLocalEditTitle(bookmark.title || '');
+              }
             }
           }}
           autoFocus
@@ -345,6 +379,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         <button
           type="submit"
           title="Save Title"
+          onMouseDown={(e) => e.preventDefault()}
           className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
         >
           <Check className="w-3.5 h-3.5" />
@@ -352,9 +387,14 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         <button
           type="button"
           title="Cancel"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
-            setIsEditing(false);
-            setEditTitle(bookmark.title || '');
+            if (onCancelRename) {
+              onCancelRename();
+            } else {
+              setLocalIsEditing(false);
+              setLocalEditTitle(bookmark.title || '');
+            }
           }}
           className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
         >
@@ -461,14 +501,20 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         </div>
 
         {/* Title / Description (Double-click to rename) & Subdomain Subtitle */}
-        <div className="flex flex-col min-w-0 flex-1 justify-center py-0.5">
+        <div
+          className="flex flex-col min-w-0 flex-1 justify-center py-0.5"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            if (onStartRename) {
+              onStartRename();
+            } else {
+              setLocalEditTitle(bookmark.title || '');
+              setLocalIsEditing(true);
+            }
+          }}
+        >
           <span
             title={tooltip}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              setEditTitle(bookmark.title || '');
-              setIsEditing(true);
-            }}
             className={`truncate text-[12.5px] leading-tight transition-colors duration-150 select-none ${
               isNavAway
                 ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'

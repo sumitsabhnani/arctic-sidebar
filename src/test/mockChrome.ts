@@ -638,8 +638,12 @@ export function createMockChrome() {
     __setSessionStorage: (state: Record<string, unknown>) => {
       sessionStorageState = { ...state };
     },
+    __setSyncStorage: (state: Record<string, unknown>) => {
+      syncStorageState = { ...state };
+    },
     __getLocalStorage: () => localStorageState,
     __getSessionStorage: () => sessionStorageState,
+    __getSyncStorage: () => syncStorageState,
     __setTabs: (tabs: chrome.tabs.Tab[]) => {
       tabsState = [...tabs];
     },

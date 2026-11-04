@@ -52,6 +52,12 @@ interface OpenTabRowProps {
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
   reminder?: TabReminder;
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
+  isEditing?: boolean;
+  editTitle?: string;
+  onStartRename?: () => void;
+  onChangeEditTitle?: (newTitle: string) => void;
+  onSaveRename?: () => void;
+  onCancelRename?: () => void;
 }
 
 export const OpenTabRow: React.FC<OpenTabRowProps> = ({
@@ -72,13 +78,23 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onOpenContextMenu,
   onMoveOpenTab,
   reminder,
-  onOpenReminderPopover
+  onOpenReminderPopover,
+  isEditing: controlledIsEditing,
+  editTitle: controlledEditTitle,
+  onStartRename,
+  onChangeEditTitle,
+  onSaveRename,
+  onCancelRename
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState(tab.title || '');
+  const [localIsEditing, setLocalIsEditing] = useState(false);
+  const [localEditTitle, setLocalEditTitle] = useState(tab.title || '');
+
+  const isControlled = typeof onStartRename === 'function';
+  const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
+  const effectiveEditTitle = isControlled && typeof controlledEditTitle === 'string' ? controlledEditTitle : localEditTitle;
 
   const tabId = tab.id;
   const isNewTab =
@@ -163,8 +179,12 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               label: 'Rename Tab',
               icon: <Edit2 className="w-3.5 h-3.5" />,
               action: () => {
-                setEditTitle(tab.title || '');
-                setIsEditing(true);
+                if (onStartRename) {
+                  onStartRename();
+                } else {
+                  setLocalEditTitle(tab.title || '');
+                  setLocalIsEditing(true);
+                }
               }
             }
           ]
@@ -237,27 +257,41 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     }
   };
 
-  if (isEditing) {
+  if (effectiveIsEditing) {
     return (
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          const trimmed = editTitle.trim();
-          if (trimmed && onRenameTab && typeof tabId === 'number') {
-            onRenameTab(tabId, trimmed);
+          if (onSaveRename) {
+            onSaveRename();
+          } else {
+            const trimmed = effectiveEditTitle.trim();
+            if (trimmed && onRenameTab && typeof tabId === 'number') {
+              onRenameTab(tabId, trimmed);
+            }
+            setLocalIsEditing(false);
           }
-          setIsEditing(false);
         }}
         className="flex items-center h-[34px] px-2.5 my-[1px] space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-lg border border-cyan-500/60"
       >
         <input
           type="text"
-          value={editTitle}
-          onChange={(e) => setEditTitle(e.target.value)}
+          value={effectiveEditTitle}
+          onChange={(e) => {
+            if (onChangeEditTitle) {
+              onChangeEditTitle(e.target.value);
+            } else {
+              setLocalEditTitle(e.target.value);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
-              setIsEditing(false);
-              setEditTitle(tab.title || '');
+              if (onCancelRename) {
+                onCancelRename();
+              } else {
+                setLocalIsEditing(false);
+                setLocalEditTitle(tab.title || '');
+              }
             }
           }}
           autoFocus
@@ -267,6 +301,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         <button
           type="submit"
           title="Save Title"
+          onMouseDown={(e) => e.preventDefault()}
           className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
         >
           <Check className="w-3.5 h-3.5" />
@@ -274,9 +309,14 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         <button
           type="button"
           title="Cancel"
+          onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
-            setIsEditing(false);
-            setEditTitle(tab.title || '');
+            if (onCancelRename) {
+              onCancelRename();
+            } else {
+              setLocalIsEditing(false);
+              setLocalEditTitle(tab.title || '');
+            }
           }}
           className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
         >
@@ -354,15 +394,21 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         </div>
 
         {/* Title + Subdomain details */}
-        <div className="flex flex-col min-w-0 flex-1 justify-center py-0.5">
+        <div
+          className="flex flex-col min-w-0 flex-1 justify-center py-0.5"
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            if (onStartRename) {
+              onStartRename();
+            } else {
+              setLocalEditTitle(tab.title || '');
+              setLocalIsEditing(true);
+            }
+          }}
+        >
           <div className="flex items-center space-x-1.5 min-w-0">
             <span
               title={titleText}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                setEditTitle(tab.title || '');
-                setIsEditing(true);
-              }}
               className={`truncate text-[12.5px] leading-tight transition-colors duration-150 select-none ${
                 isActive
                   ? 'font-semibold text-zinc-900 dark:text-white'

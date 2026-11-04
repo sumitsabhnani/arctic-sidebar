@@ -289,9 +289,100 @@ export const App: React.FC = () => {
   const [isCreatingRootFolder, setIsCreatingRootFolder] = useState(false);
   const [rootFolderTitle, setRootFolderTitle] = useState('');
 
+  // Active Space Display Title
+  const activeSpaceObj = spaces.find((s) => s.id === activeSpaceId);
+  const spaceDisplayTitle =
+    activeSpaceObj?.name ||
+    (workspaceNode?.title?.toLowerCase() === 'workspace' ? 'Home' : workspaceNode?.title) ||
+    'Home';
+
   // Inline Space / Home Root Folder Renaming
   const [isRenamingWorkspace, setIsRenamingWorkspace] = useState(false);
   const [workspaceRenameTitle, setWorkspaceRenameTitle] = useState('');
+
+  // Renaming coordination across both Active space and Today's tabs
+  const [editingTarget, setEditingTarget] = useState<{
+    type: 'openTab' | 'bookmark' | 'folder';
+    id: string | number;
+    initialTitle: string;
+    title: string;
+  } | null>(null);
+
+  const commitCurrentEdit = useCallback(
+    (target: { type: 'openTab' | 'bookmark' | 'folder'; id: string | number; initialTitle: string; title: string }) => {
+      const trimmed = target.title.trim();
+      const initialTrimmed = target.initialTitle.trim();
+      if (trimmed && trimmed !== initialTrimmed) {
+        if (target.type === 'openTab' && (typeof target.id === 'number' || !isNaN(Number(target.id)))) {
+          renameOpenTab(Number(target.id), trimmed);
+        } else if ((target.type === 'bookmark' || target.type === 'folder') && target.id !== undefined) {
+          renameBookmarkOrFolder(String(target.id), trimmed);
+        }
+      }
+    },
+    [renameOpenTab, renameBookmarkOrFolder]
+  );
+
+  const handleStartRename = useCallback(
+    (type: 'openTab' | 'bookmark' | 'folder', id: string | number, currentTitle: string) => {
+      if (editingTarget !== null && !(editingTarget.type === type && editingTarget.id === id)) {
+        // Cancel (or save if changed) the previous one before opening the new one for editing
+        commitCurrentEdit(editingTarget);
+      }
+      if (isRenamingWorkspace && workspaceNode) {
+        const trimmed = workspaceRenameTitle.trim();
+        if (trimmed && trimmed !== spaceDisplayTitle) {
+          renameBookmarkOrFolder(workspaceNode.id, trimmed);
+        }
+        setIsRenamingWorkspace(false);
+      }
+      setEditingTarget({
+        type,
+        id,
+        initialTitle: currentTitle || '',
+        title: currentTitle || ''
+      });
+    },
+    [editingTarget, commitCurrentEdit, isRenamingWorkspace, workspaceNode, workspaceRenameTitle, spaceDisplayTitle, renameBookmarkOrFolder]
+  );
+
+  const handleChangeEditTitle = useCallback((newTitle: string) => {
+    setEditingTarget((prev) => (prev ? { ...prev, title: newTitle } : null));
+  }, []);
+
+  const handleSaveRename = useCallback(() => {
+    if (editingTarget) {
+      commitCurrentEdit(editingTarget);
+      setEditingTarget(null);
+    }
+  }, [editingTarget, commitCurrentEdit]);
+
+  const handleCancelRename = useCallback(() => {
+    setEditingTarget(null);
+  }, []);
+
+  // When activeSpaceId actually changes, commit or cancel any active bookmark/folder rename from the previous space
+  const prevActiveSpaceIdRef = React.useRef(activeSpaceId);
+  useEffect(() => {
+    if (prevActiveSpaceIdRef.current !== activeSpaceId) {
+      prevActiveSpaceIdRef.current = activeSpaceId;
+      if (editingTarget && (editingTarget.type === 'bookmark' || editingTarget.type === 'folder')) {
+        commitCurrentEdit(editingTarget);
+        setEditingTarget(null);
+      }
+    }
+  }, [activeSpaceId, editingTarget, commitCurrentEdit]);
+
+  // When an open tab being renamed is closed
+  useEffect(() => {
+    if (
+      editingTarget &&
+      editingTarget.type === 'openTab' &&
+      !unpinnedTabs.some((t) => t.id === editingTarget.id)
+    ) {
+      setEditingTarget(null);
+    }
+  }, [editingTarget, unpinnedTabs]);
 
   // Drag over workspace container
   const [isWorkspaceDragOver, setIsWorkspaceDragOver] = useState(false);
@@ -314,43 +405,18 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [createNewTab, reloadActiveTab]);
 
-  // Ensure the sidepanel window explicitly captures focus on any pointer down or right-click
-  // so that clicks outside the sidepanel reliably trigger blur and dismiss floating overlays
-  useEffect(() => {
-    const handleCaptureFocus = () => {
-      try {
-        window.focus();
-      } catch {
-        // ignore
-      }
-    };
-
-    window.addEventListener('pointerdown', handleCaptureFocus, true);
-    window.addEventListener('contextmenu', handleCaptureFocus, true);
-
-    return () => {
-      window.removeEventListener('pointerdown', handleCaptureFocus, true);
-      window.removeEventListener('contextmenu', handleCaptureFocus, true);
-    };
-  }, []);
-
-  const handleOpenContextMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
+  const handleOpenContextMenu = useCallback((e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
-    try {
-      window.focus();
-    } catch {
-      // ignore
-    }
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
       items
     });
-  };
+  }, []);
 
-  const handleCloseContextMenu = () => {
+  const handleCloseContextMenu = useCallback(() => {
     setContextMenu(null);
-  };
+  }, []);
 
   // Pin action handlers
   const handlePinTabToQuickAccess = async (tab: chrome.tabs.Tab) => {
@@ -597,12 +663,6 @@ export const App: React.FC = () => {
   const quickAccessBookmarks = quickAccessNode?.children || [];
   const workspaceBookmarks = workspaceNode?.children || [];
 
-  const activeSpaceObj = spaces.find((s) => s.id === activeSpaceId);
-  const spaceDisplayTitle =
-    activeSpaceObj?.name ||
-    (workspaceNode?.title?.toLowerCase() === 'workspace' ? 'Home' : workspaceNode?.title) ||
-    'Home';
-
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-[#f8f9fa] dark:bg-[#121214] text-zinc-500 dark:text-zinc-400">
@@ -769,6 +829,10 @@ export const App: React.FC = () => {
                 title="Double-click to rename space"
                 onDoubleClick={(e) => {
                   e.stopPropagation();
+                  if (editingTarget) {
+                    commitCurrentEdit(editingTarget);
+                    setEditingTarget(null);
+                  }
                   if (workspaceNode) {
                     setWorkspaceRenameTitle(spaceDisplayTitle);
                     setIsRenamingWorkspace(true);
@@ -893,6 +957,11 @@ export const App: React.FC = () => {
                         setActiveReminderTarget({ target, anchorRect: rect })
                       }
                       densityMode={tabsDensity}
+                      editingTarget={editingTarget}
+                      onStartRename={handleStartRename}
+                      onChangeEditTitle={handleChangeEditTitle}
+                      onSaveRename={handleSaveRename}
+                      onCancelRename={handleCancelRename}
                     />
                   );
                 }
@@ -901,6 +970,7 @@ export const App: React.FC = () => {
                 const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
                 const isActive = Boolean(binding && binding.tabId === activeTabId);
                 const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
+                const isEditing = Boolean(editingTarget && editingTarget.type === 'bookmark' && editingTarget.id === child.id);
 
                 return (
                   <BookmarkRow
@@ -934,6 +1004,12 @@ export const App: React.FC = () => {
                       setActiveReminderTarget({ target, anchorRect: rect })
                     }
                     densityMode={tabsDensity}
+                    isEditing={isEditing}
+                    editTitle={isEditing && editingTarget ? editingTarget.title : (child.title || '')}
+                    onStartRename={() => handleStartRename('bookmark', child.id, child.title || '')}
+                    onChangeEditTitle={handleChangeEditTitle}
+                    onSaveRename={handleSaveRename}
+                    onCancelRename={handleCancelRename}
                   />
                 );
               })
@@ -968,6 +1044,12 @@ export const App: React.FC = () => {
           onOpenReminderPopover={(target, rect) =>
             setActiveReminderTarget({ target, anchorRect: rect })
           }
+          editingTabId={editingTarget?.type === 'openTab' ? Number(editingTarget.id) : null}
+          editingTitle={editingTarget?.type === 'openTab' ? editingTarget.title : ''}
+          onStartRename={(tab) => typeof tab.id === 'number' && handleStartRename('openTab', tab.id, tab.title || '')}
+          onChangeEditTitle={handleChangeEditTitle}
+          onSaveRename={handleSaveRename}
+          onCancelRename={handleCancelRename}
         />
       </div>
 

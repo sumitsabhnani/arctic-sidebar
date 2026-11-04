@@ -112,11 +112,30 @@ describe('ContextMenu component', () => {
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
 
-  it('closes menu on focusout when focus leaves menu container', () => {
+  it('closes menu when cursor leaves the sidepanel document (even when window does not have focus)', () => {
+    vi.useFakeTimers();
     const handleClose = vi.fn();
     render(<ContextMenu x={50} y={50} items={[{ label: 'Item 1', action: vi.fn() }]} onClose={handleClose} />);
 
-    fireEvent.focusOut(window, { relatedTarget: null });
+    fireEvent.mouseLeave(document.documentElement);
+    expect(handleClose).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(100);
     expect(handleClose).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
+  it('cancels close if cursor briefly leaves and re-enters sidepanel within grace period', () => {
+    vi.useFakeTimers();
+    const handleClose = vi.fn();
+    render(<ContextMenu x={50} y={50} items={[{ label: 'Item 1', action: vi.fn() }]} onClose={handleClose} />);
+
+    fireEvent.mouseLeave(document.documentElement);
+    vi.advanceTimersByTime(40);
+    fireEvent.mouseEnter(document.documentElement);
+    vi.advanceTimersByTime(100);
+
+    expect(handleClose).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

@@ -63,6 +63,11 @@ interface FolderNodeProps {
   getReminderForBookmark?: (bookmarkId: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
   densityMode?: 'relaxed' | 'compact';
+  editingTarget?: { type: 'openTab' | 'bookmark' | 'folder'; id: string | number; initialTitle?: string; title: string } | null;
+  onStartRename?: (type: 'openTab' | 'bookmark' | 'folder', id: string | number, currentTitle: string) => void;
+  onChangeEditTitle?: (newTitle: string) => void;
+  onSaveRename?: () => void;
+  onCancelRename?: () => void;
 }
 
 export const FolderNode: React.FC<FolderNodeProps> = ({
@@ -97,7 +102,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onMoveBookmarkToIndex,
   getReminderForBookmark,
   onOpenReminderPopover,
-  densityMode = 'relaxed'
+  densityMode = 'relaxed',
+  editingTarget,
+  onStartRename,
+  onChangeEditTitle,
+  onSaveRename,
+  onCancelRename
 }) => {
   const isCollapsed = Boolean(collapsedFolderIds[node.id]);
   const children = node.children || [];
@@ -108,8 +118,16 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   const [newSubfolderTitle, setNewSubfolderTitle] = useState('');
 
   // Inline rename state
-  const [isRenaming, setIsRenaming] = useState(false);
-  const [renameTitle, setRenameTitle] = useState(node.title || '');
+  const [localIsRenaming, setLocalIsRenaming] = useState(false);
+  const [localRenameTitle, setLocalRenameTitle] = useState(node.title || '');
+
+  const isControlled = typeof onStartRename === 'function';
+  const isRenaming = isControlled
+    ? Boolean(editingTarget && editingTarget.type === 'folder' && editingTarget.id === node.id)
+    : localIsRenaming;
+  const renameTitle = isControlled
+    ? (editingTarget && editingTarget.type === 'folder' && editingTarget.id === node.id ? editingTarget.title : (node.title || ''))
+    : localRenameTitle;
 
   // Drop target state
   const [dropState, setDropState] = useState<'inside' | 'top' | 'bottom' | null>(null);
@@ -162,16 +180,24 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
   const handleConfirmRename = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const title = renameTitle.trim();
-    if (title && onRenameFolder && title !== node.title) {
-      onRenameFolder(node.id, title);
+    if (onSaveRename) {
+      onSaveRename();
+    } else {
+      const title = renameTitle.trim();
+      if (title && onRenameFolder && title !== node.title) {
+        onRenameFolder(node.id, title);
+      }
+      setLocalIsRenaming(false);
     }
-    setIsRenaming(false);
   };
 
   const handleCancelRename = () => {
-    setIsRenaming(false);
-    setRenameTitle(node.title || '');
+    if (onCancelRename) {
+      onCancelRename();
+    } else {
+      setLocalIsRenaming(false);
+      setLocalRenameTitle(node.title || '');
+    }
   };
 
   const handleDragStart = (e: React.DragEvent) => {
@@ -295,8 +321,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         label: 'Rename Folder',
         icon: <Edit2 className="w-3.5 h-3.5" />,
         action: () => {
-          setIsRenaming(true);
-          setRenameTitle(node.title || '');
+          if (onStartRename) {
+            onStartRename('folder', node.id, node.title || '');
+          } else {
+            setLocalRenameTitle(node.title || '');
+            setLocalIsRenaming(true);
+          }
         },
         dividerBefore: true
       },
@@ -329,7 +359,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           <input
             type="text"
             value={renameTitle}
-            onChange={(e) => setRenameTitle(e.target.value)}
+            onChange={(e) => {
+              if (onChangeEditTitle && isRenaming && editingTarget?.id === node.id) {
+                onChangeEditTitle(e.target.value);
+              } else {
+                setLocalRenameTitle(e.target.value);
+              }
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Escape') handleCancelRename();
             }}
@@ -350,6 +386,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           <button
             type="submit"
             data-tooltip="Confirm"
+            onMouseDown={(e) => e.preventDefault()}
             className="p-1 rounded text-emerald-500 hover:bg-emerald-500/20"
           >
             <Check className="w-3.5 h-3.5" />
@@ -357,6 +394,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           <button
             type="button"
             data-tooltip="Cancel"
+            onMouseDown={(e) => e.preventDefault()}
             onClick={handleCancelRename}
             className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
           >
@@ -375,8 +413,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           onClick={() => onToggleCollapse(node.id)}
           onDoubleClick={(e) => {
             e.stopPropagation();
-            setRenameTitle(node.title || '');
-            setIsRenaming(true);
+            if (onStartRename) {
+              onStartRename('folder', node.id, node.title || '');
+            } else {
+              setLocalRenameTitle(node.title || '');
+              setLocalIsRenaming(true);
+            }
           }}
           onContextMenu={handleContextMenu}
           onKeyDown={(e) => {
@@ -400,8 +442,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             className="flex items-center min-w-0 flex-1 space-x-2 mr-2"
             onDoubleClick={(e) => {
               e.stopPropagation();
-              setRenameTitle(node.title || '');
-              setIsRenaming(true);
+              if (onStartRename) {
+                onStartRename('folder', node.id, node.title || '');
+              } else {
+                setLocalRenameTitle(node.title || '');
+                setLocalIsRenaming(true);
+              }
             }}
           >
             <div className="relative w-4 h-4 flex items-center justify-center flex-shrink-0">
@@ -564,6 +610,11 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     getReminderForBookmark={getReminderForBookmark}
                     onOpenReminderPopover={onOpenReminderPopover}
                     densityMode={densityMode}
+                    editingTarget={editingTarget}
+                    onStartRename={onStartRename}
+                    onChangeEditTitle={onChangeEditTitle}
+                    onSaveRename={onSaveRename}
+                    onCancelRename={onCancelRename}
                   />
                 );
               }
@@ -572,6 +623,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
               const isActive = Boolean(binding && binding.tabId === activeTabId);
               const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
+              const isEditing = Boolean(editingTarget && editingTarget.type === 'bookmark' && editingTarget.id === child.id);
 
               return (
                 <BookmarkRow
@@ -603,6 +655,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   reminder={getReminderForBookmark?.(child.id)}
                   onOpenReminderPopover={onOpenReminderPopover}
                   densityMode={densityMode}
+                  isEditing={isEditing}
+                  editTitle={isEditing && editingTarget ? editingTarget.title : (child.title || '')}
+                  onStartRename={() => onStartRename?.('bookmark', child.id, child.title || '')}
+                  onChangeEditTitle={onChangeEditTitle}
+                  onSaveRename={onSaveRename}
+                  onCancelRename={onCancelRename}
                 />
               );
             })

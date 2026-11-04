@@ -21,8 +21,12 @@ interface ContextMenuProps {
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
-  const focusTrapRef = useRef<HTMLInputElement>(null);
   const [expandedSubmenuIdx, setExpandedSubmenuIdx] = useState<number | null>(null);
+
+  // Reset expanded submenu when menu coordinates or items change
+  useEffect(() => {
+    setExpandedSubmenuIdx(null);
+  }, [x, y, items]);
 
   // Initial smart positioning using conservative estimates
   const [coords, setCoords] = useState<{ x: number; y: number }>(() => {
@@ -58,22 +62,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     setCoords({ x: adjustedX, y: adjustedY });
   }, [x, y, items, expandedSubmenuIdx]);
 
-  // Ensure sidepanel window and an actual input have active focus immediately on mount
-  // so that Chromium activates the WebContents and reliably triggers blur/focusout when clicking the webpage
   useEffect(() => {
-    try {
-      window.focus();
-    } catch {
-      // ignore
-    }
-    focusTrapRef.current?.focus({ preventScroll: true });
-  }, []);
+    let leaveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  useEffect(() => {
-    let isClosed = false;
     const handleClose = () => {
-      if (isClosed) return;
-      isClosed = true;
+      if (leaveTimer) {
+        clearTimeout(leaveTimer);
+        leaveTimer = null;
+      }
       onClose();
     };
 
@@ -89,12 +85,30 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       }
     };
 
-    const handleFocusOut = (e: FocusEvent) => {
-      // If focus moved to another element inside our menu, do not close
-      if (menuRef.current && e.relatedTarget && menuRef.current.contains(e.relatedTarget as Node)) {
+    const handleScroll = (e: Event) => {
+      if (menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) {
         return;
       }
       handleClose();
+    };
+
+    // In Chromium's SidePanelWebUIView, right-clicking inside the sidepanel does not transfer
+    // native C++ views::FocusManager focus from the webpage to the sidepanel. After the first
+    // outside click on the webpage, document.hasFocus() remains false on subsequent right-clicks,
+    // so window.blur will not fire again. Detecting cursor exit from the sidepanel document
+    // guarantees the menu closes whenever the user moves back to the webpage to click.
+    const handleMouseLeaveDocument = () => {
+      if (leaveTimer) clearTimeout(leaveTimer);
+      leaveTimer = setTimeout(() => {
+        handleClose();
+      }, 80);
+    };
+
+    const handleMouseEnterDocument = () => {
+      if (leaveTimer) {
+        clearTimeout(leaveTimer);
+        leaveTimer = null;
+      }
     };
 
     const handleVisibilityChange = () => {
@@ -124,10 +138,11 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('blur', handleClose);
-    window.addEventListener('focusout', handleFocusOut);
     window.addEventListener('resize', handleClose);
-    window.addEventListener('scroll', handleClose, true);
+    window.addEventListener('scroll', handleScroll, true);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.documentElement.addEventListener('mouseleave', handleMouseLeaveDocument);
+    document.documentElement.addEventListener('mouseenter', handleMouseEnterDocument);
 
     if (chrome?.tabs?.onActivated) {
       chrome.tabs.onActivated.addListener(handleTabActivated);
@@ -142,21 +157,23 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       chrome.tabs.onUpdated.addListener(handleTabUpdated);
     }
 
-    // Use capture or slight timeout so triggering right-click doesn't instantly dismiss
+    // Use capture phase so clicks outside close the menu even if a child stops propagation,
+    // and right-clicking another item closes the current menu in capture before opening the new one in bubble
     const timer = setTimeout(() => {
-      window.addEventListener('mousedown', handleClickOutside);
-      window.addEventListener('contextmenu', handleClickOutside);
+      window.addEventListener('mousedown', handleClickOutside, true);
+      window.addEventListener('contextmenu', handleClickOutside, true);
     }, 10);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('blur', handleClose);
-      window.removeEventListener('focusout', handleFocusOut);
       window.removeEventListener('resize', handleClose);
-      window.removeEventListener('scroll', handleClose, true);
+      window.removeEventListener('scroll', handleScroll, true);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('contextmenu', handleClickOutside);
+      document.documentElement.addEventListener('mouseleave', handleMouseLeaveDocument);
+      document.documentElement.addEventListener('mouseenter', handleMouseEnterDocument);
+      window.removeEventListener('mousedown', handleClickOutside, true);
+      window.removeEventListener('contextmenu', handleClickOutside, true);
       if (chrome?.tabs?.onActivated) {
         chrome.tabs.onActivated.removeListener(handleTabActivated);
       }
@@ -170,6 +187,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
         chrome.tabs.onUpdated.removeListener(handleTabUpdated);
       }
       clearTimeout(timer);
+      if (leaveTimer) {
+        clearTimeout(leaveTimer);
+      }
     };
   }, [onClose]);
 
@@ -180,13 +200,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       style={{ top: `${coords.y}px`, left: `${coords.x}px` }}
       className="fixed z-[99999] min-w-[196px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-y-auto p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in zoom-in-95 duration-100 outline-none"
     >
-      <input
-        ref={focusTrapRef}
-        type="text"
-        aria-hidden="true"
-        tabIndex={-1}
-        className="sr-only opacity-0 w-0 h-0 absolute pointer-events-none"
-      />
       {items.map((item, idx) => {
         const hasSubmenu = Boolean(item.submenu && item.submenu.length > 0);
         const isSubmenuOpen = expandedSubmenuIdx === idx;

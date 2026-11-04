@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Layers, Trash2, ChevronDown, X } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
 import type { SpaceItem, TabReminder } from '../../types';
@@ -28,6 +28,12 @@ interface OpenTabsSectionProps {
   getReminderForTab?: (tabId: number, url?: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
   densityMode?: 'relaxed' | 'compact';
+  editingTabId?: number | null;
+  editingTitle?: string;
+  onStartRename?: (tab: chrome.tabs.Tab) => void;
+  onChangeEditTitle?: (newTitle: string) => void;
+  onSaveRename?: () => void;
+  onCancelRename?: () => void;
 }
 
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
@@ -53,8 +59,78 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onMoveOpenTab,
   getReminderForTab,
   onOpenReminderPopover,
-  densityMode = 'relaxed'
+  densityMode = 'relaxed',
+  editingTabId: controlledEditingTabId,
+  editingTitle: controlledEditingTitle,
+  onStartRename: controlledOnStartRename,
+  onChangeEditTitle: controlledOnChangeEditTitle,
+  onSaveRename: controlledOnSaveRename,
+  onCancelRename: controlledOnCancelRename
 }) => {
+  const [localEditingTabId, setLocalEditingTabId] = useState<number | null>(null);
+  const [localEditingTitle, setLocalEditingTitle] = useState<string>('');
+
+  const isControlled = typeof controlledOnStartRename === 'function';
+  const effectiveEditingTabId = isControlled ? controlledEditingTabId : localEditingTabId;
+  const effectiveEditingTitle = isControlled && controlledEditingTitle !== undefined ? controlledEditingTitle : localEditingTitle;
+
+  const commitEdit = useCallback(
+    (tabId: number, newTitle: string) => {
+      const tab = unpinnedTabs.find((t) => t.id === tabId);
+      const originalTitle = tab?.title || '';
+      const trimmed = newTitle.trim();
+      if (trimmed && trimmed !== originalTitle && onRenameTab) {
+        onRenameTab(tabId, trimmed);
+      }
+    },
+    [unpinnedTabs, onRenameTab]
+  );
+
+  const localHandleStartRename = useCallback(
+    (tab: chrome.tabs.Tab) => {
+      if (typeof tab.id !== 'number') return;
+      if (localEditingTabId !== null && localEditingTabId !== tab.id) {
+        commitEdit(localEditingTabId, localEditingTitle);
+      }
+      setLocalEditingTabId(tab.id);
+      setLocalEditingTitle(tab.title || '');
+    },
+    [localEditingTabId, localEditingTitle, commitEdit]
+  );
+
+  const localHandleSaveRename = useCallback(
+    (tabId: number) => {
+      commitEdit(tabId, localEditingTitle);
+      setLocalEditingTabId(null);
+      setLocalEditingTitle('');
+    },
+    [commitEdit, localEditingTitle]
+  );
+
+  const localHandleCancelRename = useCallback(() => {
+    setLocalEditingTabId(null);
+    setLocalEditingTitle('');
+  }, []);
+
+  const handleStartRename = controlledOnStartRename || localHandleStartRename;
+  const handleSaveRename = (tabId: number) => {
+    if (controlledOnSaveRename) {
+      controlledOnSaveRename();
+    } else {
+      localHandleSaveRename(tabId);
+    }
+  };
+  const handleCancelRename = controlledOnCancelRename || localHandleCancelRename;
+  const handleChangeEditTitle = controlledOnChangeEditTitle || setLocalEditingTitle;
+
+  // Cleanup if edited tab is closed or removed
+  useEffect(() => {
+    if (localEditingTabId !== null && !unpinnedTabs.some((t) => t.id === localEditingTabId)) {
+      setLocalEditingTabId(null);
+      setLocalEditingTitle('');
+    }
+  }, [localEditingTabId, unpinnedTabs]);
+
   return (
     <div className="flex flex-col space-y-1 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
       {/* Header Bar */}
@@ -124,6 +200,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
           ) : (
             unpinnedTabs.map((tab) => {
               const isActive = Boolean(tab.id && tab.id === activeTabId);
+              const isEditing = typeof tab.id === 'number' && effectiveEditingTabId === tab.id;
               return (
                 <OpenTabRow
                   key={tab.id}
@@ -145,6 +222,12 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   reminder={typeof tab.id === 'number' ? getReminderForTab?.(tab.id, tab.url) : undefined}
                   onOpenReminderPopover={onOpenReminderPopover}
                   densityMode={densityMode}
+                  isEditing={isEditing}
+                  editTitle={isEditing ? (effectiveEditingTitle || '') : (tab.title || '')}
+                  onStartRename={() => handleStartRename(tab)}
+                  onChangeEditTitle={handleChangeEditTitle}
+                  onSaveRename={() => typeof tab.id === 'number' && handleSaveRename(tab.id)}
+                  onCancelRename={handleCancelRename}
                 />
               );
             })

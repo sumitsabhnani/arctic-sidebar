@@ -57,6 +57,7 @@ export function useScratchpad() {
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedAtRef = useRef<number>(0);
+  const lastChunkCountRef = useRef<number>(0);
   const currentTextRef = useRef<string>('');
 
   currentTextRef.current = text;
@@ -80,10 +81,12 @@ export function useScratchpad() {
       payload[`${SCRATCHPAD_CHUNK_PREFIX}${i}`] = chunks[i];
     }
 
-    // Determine unused chunk keys to remove
+    // Determine unused chunk keys to remove only if chunk count decreased
     const keysToRemove: string[] = [];
-    for (let i = chunkCount; i < MAX_CHUNKS; i++) {
-      keysToRemove.push(`${SCRATCHPAD_CHUNK_PREFIX}${i}`);
+    if (chunkCount < lastChunkCountRef.current) {
+      for (let i = chunkCount; i < MAX_CHUNKS; i++) {
+        keysToRemove.push(`${SCRATCHPAD_CHUNK_PREFIX}${i}`);
+      }
     }
 
     try {
@@ -97,6 +100,7 @@ export function useScratchpad() {
         }
         await chrome.storage.sync.set(payload);
         lastSavedAtRef.current = timestamp;
+        lastChunkCountRef.current = chunkCount;
         setSyncStatus('Synced');
       } else {
         setSyncStatus('Offline - Saved locally');
@@ -230,6 +234,7 @@ export function useScratchpad() {
               if (isMounted) {
                 setTextState(assembled);
                 lastSavedAtRef.current = syncTime;
+                lastChunkCountRef.current = meta.chunkCount || 0;
                 setSyncStatus('Synced');
                 // Synchronize local draft
                 if (chrome.storage && chrome.storage.local) {
@@ -268,6 +273,7 @@ export function useScratchpad() {
       isMounted = false;
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
+        flushToSync(currentTextRef.current, lastSavedAtRef.current);
       }
     };
   }, [flushToSync]);
@@ -290,11 +296,14 @@ export function useScratchpad() {
       if (!hasMetaChange && !hasChunkChange) return;
 
       try {
-        const metaChange = changes[SCRATCHPAD_META_KEY];
-        const newMeta = metaChange?.newValue as ScratchpadMeta | undefined;
+        let meta = changes[SCRATCHPAD_META_KEY]?.newValue as ScratchpadMeta | undefined;
+        if (!meta) {
+          const syncMeta = await chrome.storage.sync.get(SCRATCHPAD_META_KEY);
+          meta = syncMeta[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
+        }
 
         // If new sync timestamp is newer than our local state, update
-        if (newMeta && newMeta.updatedAt > lastSavedAtRef.current) {
+        if (meta && typeof meta.updatedAt === 'number' && meta.updatedAt > lastSavedAtRef.current) {
           const allChunkKeys = [
             SCRATCHPAD_META_KEY,
             `${SCRATCHPAD_CHUNK_PREFIX}0`,
@@ -303,17 +312,18 @@ export function useScratchpad() {
             `${SCRATCHPAD_CHUNK_PREFIX}3`
           ];
           const syncData = await chrome.storage.sync.get(allChunkKeys);
-          const assembled = assembleChunks(syncData, newMeta.chunkCount || 0);
+          const assembled = assembleChunks(syncData, meta.chunkCount || 0);
 
           setTextState(assembled);
-          lastSavedAtRef.current = newMeta.updatedAt;
+          lastSavedAtRef.current = meta.updatedAt;
+          lastChunkCountRef.current = meta.chunkCount || 0;
           setSyncStatus('Synced');
 
           if (chrome.storage && chrome.storage.local) {
             chrome.storage.local.set({
               [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
                 text: assembled,
-                updatedAt: newMeta.updatedAt
+                updatedAt: meta.updatedAt
               } as ScratchpadLocalDraft
             });
           }

@@ -89,4 +89,52 @@ describe('OpenTabsSection component', () => {
     expect(titleElement.className).not.toContain('select-text');
     expect(titleElement.className).toContain('select-none');
   });
+
+  it('cancels previous tab edit when double-clicking another tab without changes', () => {
+    const onRenameTab = vi.fn();
+    render(<OpenTabsSection {...defaultProps} onRenameTab={onRenameTab} />);
+
+    // Double click first tab
+    const firstTab = screen.getByText('Hacker News');
+    fireEvent.doubleClick(firstTab);
+
+    // Input for first tab should appear
+    const inputsAfterFirst = screen.getAllByRole('textbox');
+    expect(inputsAfterFirst.length).toBe(1);
+    expect(inputsAfterFirst[0]).toHaveValue('Hacker News');
+
+    // Double click second tab without changing anything
+    const secondTab = screen.getByText('GitHub Trending');
+    fireEvent.doubleClick(secondTab);
+
+    // Only one input should be present (the second tab's input)
+    const inputsAfterSecond = screen.getAllByRole('textbox');
+    expect(inputsAfterSecond.length).toBe(1);
+    expect(inputsAfterSecond[0]).toHaveValue('GitHub Trending');
+    expect(onRenameTab).not.toHaveBeenCalled();
+  });
+
+  it('saves previous tab edit when double-clicking another tab after title changes', () => {
+    const onRenameTab = vi.fn();
+    render(<OpenTabsSection {...defaultProps} onRenameTab={onRenameTab} />);
+
+    // Double click first tab
+    const firstTab = screen.getByText('Hacker News');
+    fireEvent.doubleClick(firstTab);
+
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'HN Frontpage' } });
+
+    // Double click second tab
+    const secondTab = screen.getByText('GitHub Trending');
+    fireEvent.doubleClick(secondTab);
+
+    // Previous tab should have saved the change
+    expect(onRenameTab).toHaveBeenCalledWith(101, 'HN Frontpage');
+
+    // Second tab should now be in editing state
+    const inputsAfterSecond = screen.getAllByRole('textbox');
+    expect(inputsAfterSecond.length).toBe(1);
+    expect(inputsAfterSecond[0]).toHaveValue('GitHub Trending');
+  });
 });
