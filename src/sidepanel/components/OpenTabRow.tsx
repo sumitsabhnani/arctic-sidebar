@@ -474,6 +474,22 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           </button>
         )}
 
+        {/* Reload Tab Button (visible on hover) */}
+        {typeof tabId === 'number' && (
+          <button
+            type="button"
+            data-tooltip="Reload tab"
+            data-tooltip-pos="bottom-right"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReload(tabId);
+            }}
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-all duration-100"
+          >
+            <RotateCw className="w-3 h-3 stroke-[2.2]" />
+          </button>
+        )}
+
         {/* Tab Reminder Bell Icon */}
         {onOpenReminderPopover && typeof tabId === 'number' && !isNewTab && (
           <button

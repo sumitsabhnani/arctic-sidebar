@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { OpenTabsSection } from './OpenTabsSection';
 
 describe('OpenTabsSection component', () => {
@@ -39,6 +39,7 @@ describe('OpenTabsSection component', () => {
     onPinToWorkspace: vi.fn(),
     onDuplicateTab: vi.fn(),
     onReloadTab: vi.fn(),
+    onNewTab: vi.fn(),
     onToggleMuteTab: vi.fn(),
     onOpenContextMenu: vi.fn()
   };
@@ -51,18 +52,119 @@ describe('OpenTabsSection component', () => {
     expect(screen.getByText('GitHub Trending')).toBeInTheDocument();
   });
 
-  it('renders both Clear (temporary tabs) and Clear All (all window tabs) buttons and handles clicks', () => {
+  it('renders Clear button and dropdown menu with Clear all tabs option', () => {
     render(<OpenTabsSection {...defaultProps} />);
 
+    // Clear temporary tabs button exists and calls onCloseAll
     const clearBtn = screen.getByTitle('Close temporary Today\'s tabs');
     expect(clearBtn).toBeInTheDocument();
+    expect(clearBtn).not.toHaveTextContent('Clear');
     fireEvent.click(clearBtn);
     expect(defaultProps.onCloseAll).toHaveBeenCalledTimes(1);
 
-    const clearAllBtn = screen.getByTitle('Close all tabs in current window');
-    expect(clearAllBtn).toBeInTheDocument();
-    fireEvent.click(clearAllBtn);
+    // Clear All button is NOT directly visible on the header (preventing accidental clicks)
+    expect(screen.queryByTitle('Close all tabs in current window')).not.toBeInTheDocument();
+
+    // Open dropdown menu via chevron
+    const clearOptionsBtn = screen.getByTitle('Clear options');
+    expect(clearOptionsBtn).toBeInTheDocument();
+    fireEvent.click(clearOptionsBtn);
+
+    // Now Clear all tabs option is revealed in dropdown
+    const clearAllOption = screen.getByTitle('Close all tabs in current window');
+    expect(clearAllOption).toBeInTheDocument();
+    expect(clearAllOption).toHaveTextContent('Clear all tabs');
+
+    // Click Clear all option
+    fireEvent.click(clearAllOption);
     expect(defaultProps.onCloseAllWindowTabs).toHaveBeenCalledTimes(1);
+
+    // Dropdown closes after selection
+    expect(screen.queryByTitle('Close all tabs in current window')).not.toBeInTheDocument();
+  });
+
+  it('closes clear dropdown when Escape key is pressed or outside is clicked', () => {
+    render(<OpenTabsSection {...defaultProps} />);
+
+    const clearOptionsBtn = screen.getByTitle('Clear options');
+    fireEvent.click(clearOptionsBtn);
+    expect(screen.getByText('Clear all tabs')).toBeInTheDocument();
+
+    // Press Escape
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('Clear all tabs')).not.toBeInTheDocument();
+  });
+
+  it('closes clear dropdown when moving to main browser window (mouseleave or window blur)', () => {
+    vi.useFakeTimers();
+    render(<OpenTabsSection {...defaultProps} />);
+
+    const clearOptionsBtn = screen.getByTitle('Clear options');
+    fireEvent.click(clearOptionsBtn);
+    expect(screen.getByText('Clear all tabs')).toBeInTheDocument();
+
+    // Cursor leaves sidepanel document to main browser window
+    fireEvent.mouseLeave(document.documentElement);
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(screen.queryByText('Clear all tabs')).not.toBeInTheDocument();
+
+    // Reopen and test window blur (e.g. clicking into main window)
+    fireEvent.click(clearOptionsBtn);
+    expect(screen.getByText('Clear all tabs')).toBeInTheDocument();
+
+    fireEvent.blur(window);
+    expect(screen.queryByText('Clear all tabs')).not.toBeInTheDocument();
+
+    vi.useRealTimers();
+  });
+
+  it('renders + button for New tab and triggers onNewTab on click', () => {
+    render(<OpenTabsSection {...defaultProps} />);
+
+    const newTabBtn = screen.getByRole('button', { name: /new tab/i });
+    expect(newTabBtn).toBeInTheDocument();
+    fireEvent.click(newTabBtn);
+    expect(defaultProps.onNewTab).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders reload button on open tab rows on hover and calls onReloadTab', () => {
+    const { container } = render(<OpenTabsSection {...defaultProps} />);
+
+    const reloadButtons = container.querySelectorAll('button[data-tooltip="Reload tab"]');
+    expect(reloadButtons.length).toBe(2);
+    reloadButtons.forEach((btn) => {
+      expect(btn.className).toContain('hidden');
+      expect(btn.className).toContain('group-hover:flex');
+    });
+
+    fireEvent.click(reloadButtons[0]);
+    expect(defaultProps.onReloadTab).toHaveBeenCalledWith(101);
+  });
+
+  it('renders tab row buttons in consistent order: Pin -> Reload -> Bell -> Close', () => {
+    const onOpenReminderPopover = vi.fn();
+    render(
+      <OpenTabsSection
+        {...defaultProps}
+        onOpenReminderPopover={onOpenReminderPopover}
+      />
+    );
+
+    // Get the first tab row's action cluster
+    const firstTabRow = screen.getByText('Hacker News').closest('[role="button"]')!;
+    const actionButtons = Array.from(
+      firstTabRow.querySelectorAll(
+        'button[data-tooltip="Pin to Bookmarks"], button[data-tooltip="Reload tab"], button[data-tooltip="Set reminder"], button[data-tooltip="Close tab (Cmd+W)"]'
+      )
+    );
+
+    expect(actionButtons.length).toBe(4);
+    expect(actionButtons[0]).toHaveAttribute('data-tooltip', 'Pin to Bookmarks');
+    expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Reload tab');
+    expect(actionButtons[2]).toHaveAttribute('data-tooltip', 'Set reminder');
+    expect(actionButtons[3]).toHaveAttribute('data-tooltip', 'Close tab (Cmd+W)');
   });
 
   it('activates a tab when clicked', () => {

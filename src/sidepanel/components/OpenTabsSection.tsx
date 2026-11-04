@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Layers, Trash2, ChevronDown, X } from 'lucide-react';
+import { Layers, Trash2, ChevronDown, X, Plus } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
 import type { SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
@@ -69,6 +69,116 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
 }) => {
   const [localEditingTabId, setLocalEditingTabId] = useState<number | null>(null);
   const [localEditingTitle, setLocalEditingTitle] = useState<string>('');
+  const [isClearMenuOpen, setIsClearMenuOpen] = useState(false);
+  const clearDropdownRef = React.useRef<HTMLDivElement>(null);
+  const dropdownMenuRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isClearMenuOpen) return;
+
+    let leaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handleClose = () => {
+      if (leaveTimer) {
+        clearTimeout(leaveTimer);
+        leaveTimer = null;
+      }
+      setIsClearMenuOpen(false);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleClose();
+      }
+    };
+
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        clearDropdownRef.current &&
+        !clearDropdownRef.current.contains(target) &&
+        dropdownMenuRef.current &&
+        !dropdownMenuRef.current.contains(target)
+      ) {
+        handleClose();
+      }
+    };
+
+    const handleScroll = (e: Event) => {
+      if (dropdownMenuRef.current && e.target instanceof Node && dropdownMenuRef.current.contains(e.target)) {
+        return;
+      }
+      handleClose();
+    };
+
+    const handleMouseLeaveDocument = () => {
+      if (leaveTimer) clearTimeout(leaveTimer);
+      leaveTimer = setTimeout(() => {
+        handleClose();
+      }, 80);
+    };
+
+    const handleMouseEnterDocument = () => {
+      if (leaveTimer) {
+        clearTimeout(leaveTimer);
+        leaveTimer = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) handleClose();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('blur', handleClose);
+    window.addEventListener('resize', handleClose);
+    window.addEventListener('scroll', handleScroll, true);
+    document.addEventListener('mousedown', handleClickOutside, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.documentElement.addEventListener('mouseleave', handleMouseLeaveDocument);
+    document.documentElement.addEventListener('mouseenter', handleMouseEnterDocument);
+
+    if (chrome?.tabs?.onActivated) {
+      chrome.tabs.onActivated.addListener(handleClose);
+    }
+    if (chrome?.windows?.onFocusChanged) {
+      chrome.windows.onFocusChanged.addListener(handleClose);
+    }
+    if (chrome?.tabs?.onHighlighted) {
+      chrome.tabs.onHighlighted.addListener(handleClose);
+    }
+
+    return () => {
+      if (leaveTimer) {
+        clearTimeout(leaveTimer);
+        leaveTimer = null;
+      }
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('blur', handleClose);
+      window.removeEventListener('resize', handleClose);
+      window.removeEventListener('scroll', handleScroll, true);
+      document.removeEventListener('mousedown', handleClickOutside, true);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.documentElement.removeEventListener('mouseleave', handleMouseLeaveDocument);
+      document.documentElement.removeEventListener('mouseenter', handleMouseEnterDocument);
+
+      if (chrome?.tabs?.onActivated) {
+        chrome.tabs.onActivated.removeListener(handleClose);
+      }
+      if (chrome?.windows?.onFocusChanged) {
+        chrome.windows.onFocusChanged.removeListener(handleClose);
+      }
+      if (chrome?.tabs?.onHighlighted) {
+        chrome.tabs.onHighlighted.removeListener(handleClose);
+      }
+    };
+  }, [isClearMenuOpen]);
+
+  useEffect(() => {
+    if (unpinnedTabs.length === 0) {
+      setIsClearMenuOpen(false);
+    }
+  }, [unpinnedTabs.length]);
 
   const isControlled = typeof controlledOnStartRename === 'function';
   const effectiveEditingTabId = isControlled ? controlledEditingTabId : localEditingTabId;
@@ -156,29 +266,103 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
           </span>
         </button>
 
-        {/* Action Buttons: Clear & Clear All */}
+        {/* Action Buttons: New Tab & Delete with Dropdown */}
         <div className="flex items-center space-x-1">
-          {unpinnedTabs.length > 0 && (
+          {onNewTab && (
             <button
               type="button"
-              title="Close temporary Today's tabs"
-              onClick={onCloseAll}
-              className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              title="New tab (Cmd+T)"
+              aria-label="New tab"
+              onClick={onNewTab}
+              className="p-1 rounded text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
             >
-              <Trash2 className="w-2.5 h-2.5" />
-              <span>Clear</span>
+              <Plus className="w-3.5 h-3.5" />
             </button>
           )}
-          {onCloseAllWindowTabs && (
-            <button
-              type="button"
-              title="Close all tabs in current window"
-              onClick={onCloseAllWindowTabs}
-              className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] text-zinc-500 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+
+          {unpinnedTabs.length > 0 && (
+            <div
+              ref={clearDropdownRef}
+              className={`relative flex items-center rounded-md border transition-colors ${
+                isClearMenuOpen
+                  ? 'bg-black/10 dark:bg-white/10 border-black/15 dark:border-white/20'
+                  : 'border-transparent hover:border-black/10 dark:hover:border-white/10 hover:bg-black/5 dark:hover:bg-white/10'
+              }`}
             >
-              <X className="w-2.5 h-2.5" />
-              <span>Clear All</span>
-            </button>
+              <button
+                type="button"
+                title="Close temporary Today's tabs"
+                aria-label="Close temporary Today's tabs"
+                onClick={onCloseAll}
+                onContextMenu={(e) => {
+                  if (onCloseAllWindowTabs) {
+                    e.preventDefault();
+                    setIsClearMenuOpen((prev) => !prev);
+                  }
+                }}
+                className="p-1 pl-1.5 rounded-l text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+
+              {onCloseAllWindowTabs && (
+                <>
+                  <span className="w-[1px] h-3 bg-black/15 dark:bg-white/15 my-auto" />
+                  <button
+                    type="button"
+                    title="Clear options"
+                    aria-label="Clear options"
+                    aria-expanded={isClearMenuOpen}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsClearMenuOpen((prev) => !prev);
+                    }}
+                    className="p-1 pr-1.5 rounded-r text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+                  >
+                    <ChevronDown
+                      className={`w-3 h-3 stroke-[2.5] transition-transform duration-150 ${
+                        isClearMenuOpen ? 'rotate-180 text-zinc-800 dark:text-zinc-100' : ''
+                      }`}
+                    />
+                  </button>
+                </>
+              )}
+
+              {/* Clear Dropdown Menu */}
+              {isClearMenuOpen && (
+                <div
+                  ref={dropdownMenuRef}
+                  className="absolute right-0 top-full mt-1 w-44 rounded-xl bg-white dark:bg-[#18181b] border border-zinc-200 dark:border-zinc-700/80 shadow-[0_12px_36px_rgba(0,0,0,0.2)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.8)] p-1 z-50 animate-in fade-in zoom-in-95 duration-100 select-none text-zinc-900 dark:text-zinc-100"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onCloseAll();
+                      setIsClearMenuOpen(false);
+                    }}
+                    className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
+                    <span>Clear Today&apos;s tabs</span>
+                  </button>
+
+                  {onCloseAllWindowTabs && (
+                    <button
+                      type="button"
+                      title="Close all tabs in current window"
+                      onClick={() => {
+                        onCloseAllWindowTabs();
+                        setIsClearMenuOpen(false);
+                      }}
+                      className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                      <span>Clear all tabs</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>

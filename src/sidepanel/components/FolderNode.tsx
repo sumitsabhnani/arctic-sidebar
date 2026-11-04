@@ -46,6 +46,7 @@ interface FolderNodeProps {
   onFaviconDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
+  onDuplicateTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
   onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
@@ -86,6 +87,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onFaviconDoubleClick,
   onCloseTab,
   onReloadTab,
+  onDuplicateTab,
   onDiscardTab,
   onToggleMuteTab,
   onMoveToSpace,
@@ -591,6 +593,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onFaviconDoubleClick={onFaviconDoubleClick}
                     onCloseTab={onCloseTab}
                     onReloadTab={onReloadTab}
+                    onDuplicateTab={onDuplicateTab}
                     onDiscardTab={onDiscardTab}
                     onToggleMuteTab={onToggleMuteTab}
                     onMoveToSpace={onMoveToSpace}
@@ -641,6 +644,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onFaviconDoubleClick={onFaviconDoubleClick}
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
+                  onDuplicateTab={onDuplicateTab}
                   onDiscardTab={onDiscardTab}
                   onToggleMuteTab={onToggleMuteTab}
                   onMoveToSpace={onMoveToSpace}

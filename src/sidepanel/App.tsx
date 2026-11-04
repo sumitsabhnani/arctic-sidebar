@@ -788,6 +788,8 @@ export const App: React.FC = () => {
             onRenameBookmark={renameBookmarkOrFolder}
             onRemoveBookmark={handleDeleteBookmark}
             onReorderQuickAccess={handleReorderQuickAccess}
+            onReloadTab={reloadTab}
+            onDuplicateTab={duplicateTab}
           />
         </div>
       )}
@@ -968,6 +970,7 @@ export const App: React.FC = () => {
                       onFaviconDoubleClick={handleFaviconDoubleClick}
                       onCloseTab={handleCloseTab}
                       onReloadTab={reloadTab}
+                      onDuplicateTab={duplicateTab}
                       onDiscardTab={discardTab}
                       onToggleMuteTab={toggleMuteTab}
                       onMoveToSpace={moveNodeToSpace}
@@ -1018,6 +1021,7 @@ export const App: React.FC = () => {
                     onFaviconDoubleClick={handleFaviconDoubleClick}
                     onCloseTab={handleCloseTab}
                     onReloadTab={reloadTab}
+                    onDuplicateTab={duplicateTab}
                     onDiscardTab={discardTab}
                     onToggleMuteTab={toggleMuteTab}
                     onMoveToSpace={moveNodeToSpace}
