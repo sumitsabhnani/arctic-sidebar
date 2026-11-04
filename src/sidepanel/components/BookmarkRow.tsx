@@ -3,6 +3,7 @@ import {
   Globe,
   RotateCcw,
   RotateCw,
+  CopyPlus,
   X,
   ExternalLink,
   Link2,
@@ -50,6 +51,7 @@ interface BookmarkRowProps {
   onFaviconDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
+  onDuplicateTab?: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
   onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
@@ -85,6 +87,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onFaviconDoubleClick,
   onCloseTab,
   onReloadTab,
+  onDuplicateTab,
   onDiscardTab,
   onToggleMuteTab,
   onMoveToSpace,
@@ -147,6 +150,21 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         icon: <ExternalLink className="w-3.5 h-3.5" />,
         action: () => {
           if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
+        }
+      },
+      {
+        label: 'Duplicate Tab',
+        icon: <CopyPlus className="w-3.5 h-3.5" />,
+        action: () => {
+          if (binding && typeof binding.tabId === 'number') {
+            if (onDuplicateTab) {
+              onDuplicateTab(binding.tabId);
+            } else {
+              chrome.tabs.duplicate(binding.tabId);
+            }
+          } else if (bookmark.url) {
+            chrome.tabs.create({ url: bookmark.url, active: true });
+          }
         }
       },
       ...(isRunning && binding && onReloadTab
@@ -560,6 +578,40 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           </button>
         )}
 
+        {/* Unpin Bookmark to Today's Tabs Button (on hover) */}
+        {onUnpinBookmark && (
+          <button
+            type="button"
+            data-tooltip="Unpin to Today's Tabs (Removes bookmark)"
+            data-tooltip-pos="bottom-right"
+            onClick={(e) => {
+              e.stopPropagation();
+              onUnpinBookmark(bookmark);
+            }}
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100"
+          >
+            <PinOff className="w-3 h-3 stroke-[2.2]" />
+          </button>
+        )}
+
+        {/* Reload Tab Button (visible on hover, only for open/running tabs) */}
+        {isRunning && binding && typeof binding.tabId === 'number' && (
+          <button
+            type="button"
+            data-tooltip="Reload tab"
+            data-tooltip-pos="bottom-right"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (onReloadTab) {
+                onReloadTab(binding.tabId);
+              }
+            }}
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-all duration-100"
+          >
+            <RotateCw className="w-3 h-3 stroke-[2.2]" />
+          </button>
+        )}
+
         {/* Tab Reminder Bell Icon */}
         {onOpenReminderPopover && bookmark.url && (
           <button
@@ -593,22 +645,6 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             }`}
           >
             <Bell className="w-3 h-3 stroke-[2.5]" />
-          </button>
-        )}
-
-        {/* Unpin Bookmark to Today's Tabs Button (on hover) */}
-        {onUnpinBookmark && (
-          <button
-            type="button"
-            data-tooltip="Unpin to Today's Tabs (Removes bookmark)"
-            data-tooltip-pos="bottom-right"
-            onClick={(e) => {
-              e.stopPropagation();
-              onUnpinBookmark(bookmark);
-            }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100"
-          >
-            <PinOff className="w-3 h-3 stroke-[2.2]" />
           </button>
         )}
 

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import {
   Globe,
   RotateCcw,
+  RotateCw,
+  CopyPlus,
   ExternalLink,
   FolderPlus,
   Link2,
@@ -32,6 +34,8 @@ interface QuickAccessGridProps {
   onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
   onReorderQuickAccess?: (draggedId: string, targetIndex: number) => void;
+  onReloadTab?: (tabId: number) => void;
+  onDuplicateTab?: (tabId: number) => void;
 }
 
 function getShortTitle(rawTitle?: string, rawUrl?: string): string {
@@ -75,7 +79,9 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   onReplaceUrl,
   onRenameBookmark,
   onRemoveBookmark,
-  onReorderQuickAccess
+  onReorderQuickAccess,
+  onReloadTab,
+  onDuplicateTab
 }) => {
   const items = bookmarks.filter((b) => Boolean(b.url));
 
@@ -113,6 +119,8 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
             onRenameBookmark={onRenameBookmark}
             onRemoveBookmark={onRemoveBookmark}
             onReorderQuickAccess={onReorderQuickAccess}
+            onReloadTab={onReloadTab}
+            onDuplicateTab={onDuplicateTab}
           />
         );
       })}
@@ -136,6 +144,8 @@ interface QuickAccessTileProps {
   onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
   onReorderQuickAccess?: (draggedId: string, targetIndex: number) => void;
+  onReloadTab?: (tabId: number) => void;
+  onDuplicateTab?: (tabId: number) => void;
 }
 
 const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
@@ -153,7 +163,9 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   onReplaceUrl,
   onRenameBookmark,
   onRemoveBookmark,
-  onReorderQuickAccess
+  onReorderQuickAccess,
+  onReloadTab,
+  onDuplicateTab
 }) => {
   const [faviconError, setFaviconError] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -190,6 +202,30 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
         }
       },
+      {
+        label: 'Duplicate Tab',
+        icon: <CopyPlus className="w-3.5 h-3.5" />,
+        action: () => {
+          if (binding && typeof binding.tabId === 'number') {
+            if (onDuplicateTab) {
+              onDuplicateTab(binding.tabId);
+            } else {
+              chrome.tabs.duplicate(binding.tabId);
+            }
+          } else if (bookmark.url) {
+            chrome.tabs.create({ url: bookmark.url, active: true });
+          }
+        }
+      },
+      ...(binding && onReloadTab
+        ? [
+            {
+              label: 'Reload Tab',
+              icon: <RotateCw className="w-3.5 h-3.5" />,
+              action: () => onReloadTab(binding.tabId)
+            }
+          ]
+        : []),
       ...(binding && onToggleMuteTab
         ? [
             {
@@ -387,6 +423,36 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           ) : (
             <Volume2 className="w-2.5 h-2.5 stroke-[2.5] animate-pulse" />
           )}
+        </span>
+      )}
+
+      {/* Reload Tab Button on hover (only for open tabs) */}
+      {binding && typeof binding.tabId === 'number' && (
+        <span
+          role="button"
+          tabIndex={0}
+          title="Reload tab"
+          aria-label="Reload tab"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (onReloadTab) {
+              onReloadTab(binding.tabId);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.stopPropagation();
+              e.preventDefault();
+              if (onReloadTab) {
+                onReloadTab(binding.tabId);
+              }
+            }
+          }}
+          className={`absolute top-1 ${
+            isAudible || isMuted ? 'left-1' : 'right-1'
+          } z-10 w-4 h-4 rounded-full hidden group-hover:flex items-center justify-center bg-black/10 dark:bg-white/10 hover:bg-black/20 dark:hover:bg-white/20 text-zinc-600 dark:text-zinc-300 transition-all shadow-xs cursor-pointer`}
+        >
+          <RotateCw className="w-2.5 h-2.5 stroke-[2.2]" />
         </span>
       )}
 
