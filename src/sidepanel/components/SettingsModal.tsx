@@ -51,7 +51,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   theme,
   colorTheme,
   quickAccessDensity = 'relaxed',
-  tabsDensity = 'relaxed',
+  tabsDensity = 'compact',
   showMemorySaverBar,
   allFolders,
   activeFolderIds,

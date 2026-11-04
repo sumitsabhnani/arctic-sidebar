@@ -102,14 +102,14 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onMoveBookmarkToIndex,
   getReminderForBookmark,
   onOpenReminderPopover,
-  densityMode = 'relaxed',
+  densityMode = 'compact',
   editingTarget,
   onStartRename,
   onChangeEditTitle,
   onSaveRename,
   onCancelRename
 }) => {
-  const isCollapsed = Boolean(collapsedFolderIds[node.id]);
+  const isCollapsed = collapsedFolderIds[node.id] !== undefined ? Boolean(collapsedFolderIds[node.id]) : true;
   const children = node.children || [];
   const itemCount = children.length;
 

@@ -104,7 +104,7 @@ describe('Active Space tab and folder renaming coordination', () => {
         </div>
         <FolderNode
           node={folder1}
-          collapsedFolderIds={{}}
+          collapsedFolderIds={{ f1: false }}
           onToggleCollapse={vi.fn()}
           bindingsByBookmarkId={{}}
           activeTabId={null}

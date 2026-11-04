@@ -64,7 +64,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   tab,
   isActive,
   spaces = [],
-  densityMode = 'relaxed',
+  densityMode = 'compact',
   onFocus,
   onClose,
   onPinToQuickAccess,

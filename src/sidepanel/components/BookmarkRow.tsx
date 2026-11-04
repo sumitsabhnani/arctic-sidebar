@@ -98,7 +98,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onDropItemToFolder,
   reminder,
   onOpenReminderPopover,
-  densityMode = 'relaxed',
+  densityMode = 'compact',
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
   onStartRename,

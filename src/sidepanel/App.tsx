@@ -112,11 +112,11 @@ export const App: React.FC = () => {
   } | null>(null);
 
   // Theme State
-  const [theme, setTheme] = useState<ThemeMode>('dark');
-  const [colorTheme, setColorTheme] = useState<ColorThemeId>('glacier-blue');
+  const [theme, setTheme] = useState<ThemeMode>('light');
+  const [colorTheme, setColorTheme] = useState<ColorThemeId>('pure-monochrome');
   const [quickAccessDensity, setQuickAccessDensity] = useState<'relaxed' | 'compact'>('relaxed');
-  const [tabsDensity, setTabsDensity] = useState<'relaxed' | 'compact'>('relaxed');
-  const [showMemorySaverBar, setShowMemorySaverBar] = useState<boolean>(true);
+  const [tabsDensity, setTabsDensity] = useState<'relaxed' | 'compact'>('compact');
+  const [showMemorySaverBar, setShowMemorySaverBar] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Section Collapsed States
@@ -647,6 +647,35 @@ export const App: React.FC = () => {
     [bindingsByBookmarkId, handleCloseTab, removeBookmarkOrFolder]
   );
 
+  const activeBookmarkIds = useMemo(() => {
+    const ids = new Set<string>();
+    const collect = (node?: chrome.bookmarks.BookmarkTreeNode | null) => {
+      if (!node) return;
+      if (node.url && node.id) {
+        ids.add(node.id);
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          collect(child);
+        }
+      }
+    };
+    collect(quickAccessNode);
+    collect(workspaceNode);
+    return ids;
+  }, [quickAccessNode, workspaceNode]);
+
+  const visibleUnpinnedTabs = useMemo(() => {
+    return unpinnedTabs.concat(
+      Object.values(tabsByTabId).filter((tab) => {
+        if (typeof tab.id !== 'number') return false;
+        const boundId = bookmarkIdByTabId[tab.id];
+        // If tab is bound to a bookmark that is NOT in the active space's Quick Access or Workspace, show it in Today's Tabs so it is never hidden
+        return Boolean(boundId && !activeBookmarkIds.has(boundId));
+      })
+    ).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  }, [unpinnedTabs, tabsByTabId, bookmarkIdByTabId, activeBookmarkIds]);
+
   const discardedTabsCount = useMemo(() => {
     let count = 0;
     for (const tabIdStr of Object.keys(discardedTabsByTabId)) {
@@ -661,16 +690,12 @@ export const App: React.FC = () => {
   }, [discardedTabsByTabId, unpinnedTabs]);
 
   const quickAccessBookmarks = quickAccessNode?.children || [];
-  const workspaceBookmarks = workspaceNode?.children || [];
-
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[#f8f9fa] dark:bg-[#121214] text-zinc-500 dark:text-zinc-400">
-        <Loader2 className="w-6 h-6 animate-spin text-cyan-500 dark:text-cyan-400 mb-2" />
-        <span className="text-xs font-medium">Initializing Arctic...</span>
-      </div>
-    );
-  }
+  // Filter out the Quick Access subfolder from the Active Space tree so it only renders in the top Quick Access grid
+  const workspaceBookmarks = (workspaceNode?.children || []).filter(
+    (child) =>
+      child.id !== activeFolderIds.quickAccessId &&
+      !(!child.url && child.title.trim().toLowerCase() === 'quick access')
+  );
 
   return (
     <div
@@ -903,7 +928,12 @@ export const App: React.FC = () => {
               </form>
             )}
 
-            {workspaceBookmarks.length === 0 && !isCreatingRootFolder ? (
+            {loading && workspaceBookmarks.length === 0 ? (
+              <div className="flex items-center justify-center py-6 space-x-2 text-zinc-400 dark:text-zinc-500">
+                <Loader2 className="w-4 h-4 animate-spin text-cyan-500 dark:text-cyan-400" />
+                <span className="text-xs">Loading bookmarks...</span>
+              </div>
+            ) : workspaceBookmarks.length === 0 && !isCreatingRootFolder ? (
               <div className="px-3 py-6 text-center text-zinc-500">
                 <p className="text-xs">
                   {`No tabs or folders in ${spaceDisplayTitle} yet.`}
@@ -1019,7 +1049,7 @@ export const App: React.FC = () => {
 
         {/* Section 3: Today's Tabs / Open Tabs (Ephemeral Unpinned Tabs) */}
         <OpenTabsSection
-          unpinnedTabs={unpinnedTabs}
+          unpinnedTabs={visibleUnpinnedTabs}
           activeTabId={activeTabId}
           spaces={spaces}
           isCollapsed={collapsedSections.todayTabs}

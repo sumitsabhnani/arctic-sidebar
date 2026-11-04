@@ -131,7 +131,19 @@ export async function getArcticBookmarks(): Promise<ArcticBookmarkItem[]> {
       }
       if (node.children) {
         for (const child of node.children) {
-          walk(child, spaceId, spaceName, isQuickAccess);
+          const childIsQa =
+            isQuickAccess ||
+            (!child.url && child.title.trim().toLowerCase() === 'quick access');
+          walk(
+            child,
+            spaceId,
+            childIsQa && !isQuickAccess
+              ? spaceId && spaceId !== 'home'
+                ? `Quick Access (${spaceName})`
+                : 'Quick Access'
+              : spaceName,
+            childIsQa
+          );
         }
       }
     };
@@ -143,24 +155,47 @@ export async function getArcticBookmarks(): Promise<ArcticBookmarkItem[]> {
       if (arcticSubtree?.children) {
         for (const section of arcticSubtree.children) {
           visitedFolderIds.add(section.id);
+          const sectionTitleLower = section.title.toLowerCase();
           const isQA =
             section.id === quickAccessFolderId ||
-            section.title.toLowerCase() === 'quick access';
+            sectionTitleLower === 'quick access' ||
+            sectionTitleLower.startsWith('quick access (');
 
           if (isQA) {
-            walk(section, null, 'Quick Access', true);
+            if (sectionTitleLower.startsWith('quick access (')) {
+              const matchedQaSpace = storedSpaces.find(
+                (s) =>
+                  s.quickAccessFolderId === section.id ||
+                  `quick access (${s.name.toLowerCase()})` === sectionTitleLower
+              );
+              if (storedSpaces.length > 0 && !matchedQaSpace) {
+                continue;
+              }
+              walk(
+                section,
+                matchedQaSpace?.id || null,
+                matchedQaSpace ? `Quick Access (${matchedQaSpace.name})` : 'Quick Access',
+                true
+              );
+            } else {
+              walk(section, null, 'Quick Access', true);
+            }
           } else {
             const matchedSpace = storedSpaces.find(
               (s) =>
                 s.folderId === section.id ||
-                s.name.toLowerCase() === section.title.toLowerCase() ||
-                s.id.toLowerCase() === section.title.toLowerCase()
+                s.name.toLowerCase() === sectionTitleLower ||
+                s.id.toLowerCase() === sectionTitleLower
             );
+            const isHomeSection =
+              sectionTitleLower === 'home' || sectionTitleLower === 'workspace';
+            if (storedSpaces.length > 0 && !matchedSpace && !isHomeSection) {
+              // Skip orphaned folders under Arctic root that do not belong to any active Space
+              continue;
+            }
             const spaceId =
               matchedSpace?.id ||
-              (section.title.toLowerCase() === 'home' || section.title.toLowerCase() === 'workspace'
-                ? 'home'
-                : section.title.toLowerCase());
+              (isHomeSection ? 'home' : sectionTitleLower);
             const spaceName = matchedSpace?.name || section.title;
             walk(section, spaceId, spaceName, false);
           }
@@ -202,8 +237,8 @@ export const App: React.FC = () => {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
-  const [theme, setTheme] = useState<ThemeMode>('dark');
-  const [colorTheme, setColorTheme] = useState<ColorThemeId>('glacier-blue');
+  const [theme, setTheme] = useState<ThemeMode>('light');
+  const [colorTheme, setColorTheme] = useState<ColorThemeId>('pure-monochrome');
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -306,9 +341,7 @@ export const App: React.FC = () => {
           );
         } else {
           setSpaces([
-            { id: 'home', name: 'Home' },
-            { id: 'work', name: 'Work' },
-            { id: 'personal', name: 'Personal' }
+            { id: 'home', name: 'Home' }
           ]);
         }
       });

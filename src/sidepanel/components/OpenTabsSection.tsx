@@ -59,7 +59,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onMoveOpenTab,
   getReminderForTab,
   onOpenReminderPopover,
-  densityMode = 'relaxed',
+  densityMode = 'compact',
   editingTabId: controlledEditingTabId,
   editingTitle: controlledEditingTitle,
   onStartRename: controlledOnStartRename,
