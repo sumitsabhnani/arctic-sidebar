@@ -147,7 +147,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             {
               label: isMuted ? 'Unmute Tab' : 'Mute Tab',
               icon: isMuted ? (
-                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                <Volume2 className="w-3.5 h-3.5" />
               ) : (
                 <VolumeX className="w-3.5 h-3.5" />
               ),
@@ -159,7 +159,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: 'Replace with Current URL',
-              icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-400" />,
+              icon: <RefreshCw className="w-3.5 h-3.5" />,
               action: () => onReplaceUrl(bookmark.id)
             }
           ]
@@ -168,7 +168,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: 'Rename Tab',
-              icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+              icon: <Edit2 className="w-3.5 h-3.5" />,
               action: () => {
                 setEditTitle(bookmark.title || '');
                 setIsEditing(true);
@@ -180,7 +180,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: 'Pin to Quick Access',
-              icon: <Sparkles className="w-3.5 h-3.5 text-cyan-400" />,
+              icon: <Sparkles className="w-3.5 h-3.5" />,
               action: () => onMoveToQuickAccess(bookmark)
             }
           ]
@@ -189,7 +189,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: "Unpin to Today's Tabs",
-              icon: <PinOff className="w-3.5 h-3.5 text-amber-500" />,
+              icon: <PinOff className="w-3.5 h-3.5" />,
               action: () => onUnpinBookmark(bookmark)
             }
           ]
@@ -198,10 +198,10 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: 'Move to Space',
-              icon: <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />,
+              icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
               submenu: otherSpaces.map((sp) => ({
                 label: sp.name,
-                icon: <Folder className="w-3.5 h-3.5 text-amber-400" />,
+                icon: <Folder className="w-3.5 h-3.5" />,
                 action: () => onMoveToSpace(bookmark.id, sp.folderId)
               }))
             }
@@ -211,7 +211,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: 'Hibernate Tab (Save RAM)',
-              icon: <Moon className="w-3.5 h-3.5 text-indigo-400" />,
+              icon: <Moon className="w-3.5 h-3.5" />,
               action: () => onDiscardTab(binding.tabId)
             }
           ]
@@ -228,7 +228,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: 'Close Running Tab',
-              icon: <X className="w-3.5 h-3.5 text-rose-400" />,
+              icon: <X className="w-3.5 h-3.5" />,
               action: () => onCloseTab(binding.tabId, e),
               danger: true
             }
@@ -238,7 +238,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ? [
             {
               label: 'Delete Bookmark',
-              icon: <Trash2 className="w-3.5 h-3.5 text-rose-400" />,
+              icon: <Trash2 className="w-3.5 h-3.5" />,
               action: () => onDeleteBookmark(bookmark.id),
               danger: true,
               dividerBefore: true

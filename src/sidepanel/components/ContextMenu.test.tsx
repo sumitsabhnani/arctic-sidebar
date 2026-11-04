@@ -79,4 +79,20 @@ describe('ContextMenu component', () => {
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
+
+  it('applies neutral styling to standard icons and danger styling to danger icons', () => {
+    const items: ContextMenuItem[] = [
+      { label: 'Standard Item', icon: <span data-testid="std-icon">std</span> },
+      { label: 'Danger Item', icon: <span data-testid="danger-icon">danger</span>, danger: true }
+    ];
+
+    render(<ContextMenu x={50} y={50} items={items} onClose={vi.fn()} />);
+
+    const stdIconContainer = screen.getByTestId('std-icon').parentElement!;
+    expect(stdIconContainer.className).toContain('text-zinc-400');
+    expect(stdIconContainer.className).not.toContain('text-rose-500');
+
+    const dangerIconContainer = screen.getByTestId('danger-icon').parentElement!;
+    expect(dangerIconContainer.className).toContain('text-rose-500');
+  });
 });

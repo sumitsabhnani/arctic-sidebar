@@ -259,24 +259,24 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         ? [
             {
               label: 'Bookmark Current Page Here',
-              icon: <BookmarkPlus className="w-3.5 h-3.5 text-cyan-400" />,
+              icon: <BookmarkPlus className="w-3.5 h-3.5" />,
               action: () => onBookmarkCurrentPage(node.id)
             }
           ]
         : []),
       {
         label: 'New Subfolder',
-        icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
+        icon: <FolderPlus className="w-3.5 h-3.5" />,
         action: () => handleStartCreateSubfolder()
       },
       ...(onMoveToSpace && otherSpaces.length > 0
         ? [
             {
               label: 'Move Folder to Space',
-              icon: <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />,
+              icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
               submenu: otherSpaces.map((sp) => ({
                 label: sp.name,
-                icon: <Folder className="w-3.5 h-3.5 text-amber-400" />,
+                icon: <Folder className="w-3.5 h-3.5" />,
                 action: () => onMoveToSpace(node.id, sp.folderId)
               }))
             }
@@ -286,14 +286,14 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         ? [
             {
               label: `Archive All Tabs in Folder (${runningTabIdsUnderFolder.length} open)`,
-              icon: <Archive className="w-3.5 h-3.5 text-indigo-400" />,
+              icon: <Archive className="w-3.5 h-3.5" />,
               action: () => handleArchiveAllTabs()
             }
           ]
         : []),
       {
         label: 'Rename Folder',
-        icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+        icon: <Edit2 className="w-3.5 h-3.5" />,
         action: () => {
           setIsRenaming(true);
           setRenameTitle(node.title || '');
@@ -304,7 +304,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         ? [
             {
               label: 'Delete Folder',
-              icon: <Trash2 className="w-3.5 h-3.5 text-rose-400" />,
+              icon: <Trash2 className="w-3.5 h-3.5" />,
               action: () => onDeleteBookmark(node.id),
               danger: true,
               dividerBefore: true

@@ -195,7 +195,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
             {
               label: isMuted ? 'Unmute Tab' : 'Mute Tab',
               icon: isMuted ? (
-                <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                <Volume2 className="w-3.5 h-3.5" />
               ) : (
                 <VolumeX className="w-3.5 h-3.5" />
               ),
@@ -207,7 +207,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Move to Active Space',
-              icon: <FolderPlus className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400" />,
+              icon: <FolderPlus className="w-3.5 h-3.5" />,
               action: () => onMoveToWorkspace(bookmark)
             }
           ]
@@ -216,7 +216,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Replace with Current URL',
-              icon: <RefreshCw className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400" />,
+              icon: <RefreshCw className="w-3.5 h-3.5" />,
               action: () => onReplaceUrl(bookmark.id)
             }
           ]
@@ -225,7 +225,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Rename Tab',
-              icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+              icon: <Edit2 className="w-3.5 h-3.5" />,
               action: () => {
                 const newTitle = window.prompt('Rename Quick Access tab:', bookmark.title || '');
                 if (newTitle !== null && newTitle.trim()) {
@@ -247,7 +247,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Close Running Tab',
-              icon: <X className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />,
+              icon: <X className="w-3.5 h-3.5" />,
               action: () => onCloseTab(binding.tabId, e),
               danger: true
             }
@@ -257,7 +257,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         ? [
             {
               label: 'Remove from Quick Access',
-              icon: <Trash2 className="w-3.5 h-3.5 text-rose-500 dark:text-rose-400" />,
+              icon: <Trash2 className="w-3.5 h-3.5" />,
               action: () => onRemoveBookmark(bookmark.id),
               danger: true,
               dividerBefore: true

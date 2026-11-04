@@ -142,7 +142,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
                 item.action?.();
                 onClose();
               }}
-              className={`w-full flex items-center justify-between space-x-2 px-2.5 py-1.5 rounded-lg text-left transition-colors ${
+              className={`w-full flex items-center justify-between space-x-2 px-2.5 py-1.5 rounded-lg text-left transition-colors group ${
                 item.disabled
                   ? 'opacity-40 cursor-not-allowed'
                   : item.danger
@@ -154,7 +154,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
             >
               <div className="flex items-center space-x-2 min-w-0 flex-1">
                 {item.icon && (
-                  <span className="w-3.5 h-3.5 flex items-center justify-center flex-shrink-0 text-zinc-400 dark:text-zinc-400">
+                  <span
+                    className={`w-3.5 h-3.5 flex items-center justify-center flex-shrink-0 transition-colors ${
+                      item.danger
+                        ? 'text-rose-500 dark:text-rose-400 group-hover:text-rose-600 dark:group-hover:text-rose-300'
+                        : 'text-zinc-400 dark:text-zinc-400 group-hover:text-zinc-600 dark:group-hover:text-zinc-200'
+                    }`}
+                  >
                     {item.icon}
                   </span>
                 )}
@@ -180,14 +186,22 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
                       sub.action?.();
                       onClose();
                     }}
-                    className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition-colors ${
+                    className={`w-full flex items-center space-x-2 px-2 py-1.5 rounded-lg text-left transition-colors group ${
                       sub.disabled
                         ? 'opacity-40 cursor-not-allowed'
+                        : sub.danger
+                        ? 'text-rose-500 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-500/15 hover:text-rose-600 dark:hover:text-rose-300'
                         : 'hover:bg-zinc-100 dark:hover:bg-white/10 text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white'
                     }`}
                   >
                     {sub.icon && (
-                      <span className="w-3.5 h-3.5 flex items-center justify-center flex-shrink-0 text-zinc-400">
+                      <span
+                        className={`w-3.5 h-3.5 flex items-center justify-center flex-shrink-0 transition-colors ${
+                          sub.danger
+                            ? 'text-rose-500 dark:text-rose-400 group-hover:text-rose-600 dark:group-hover:text-rose-300'
+                            : 'text-zinc-400 dark:text-zinc-400 group-hover:text-zinc-600 dark:group-hover:text-zinc-200'
+                        }`}
+                      >
                         {sub.icon}
                       </span>
                     )}

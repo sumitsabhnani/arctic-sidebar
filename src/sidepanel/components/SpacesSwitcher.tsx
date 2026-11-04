@@ -101,7 +101,7 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
     const items: ContextMenuItem[] = [
       {
         label: `Rename "${space.name}"`,
-        icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+        icon: <Edit2 className="w-3.5 h-3.5" />,
         action: () => {
           const next = window.prompt('Rename Space:', space.name);
           if (next && next.trim()) {
@@ -113,7 +113,7 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
         ? [
             {
               label: `Remove "${space.name}" Space`,
-              icon: <Trash2 className="w-3.5 h-3.5 text-rose-400" />,
+              icon: <Trash2 className="w-3.5 h-3.5" />,
               action: () => onDeleteSpace(space.id),
               danger: true,
               dividerBefore: true

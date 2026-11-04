@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Arctic: Sidebar & Commands",
   "short_name": "Arctic",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Vertical bookmark sidebar, spaces, and lightning-fast command bar.",
   "permissions": [
     "sidePanel",

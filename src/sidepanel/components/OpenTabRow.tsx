@@ -101,13 +101,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     const items: ContextMenuItem[] = [
       {
         label: 'Pin to Quick Access',
-        icon: <Sparkles className="w-3.5 h-3.5 text-cyan-400" />,
+        icon: <Sparkles className="w-3.5 h-3.5" />,
         action: () => onPinToQuickAccess(tab),
         disabled: !tab.url || isNewTab
       },
       {
         label: 'Pin to Active Space',
-        icon: <FolderPlus className="w-3.5 h-3.5 text-amber-400" />,
+        icon: <FolderPlus className="w-3.5 h-3.5" />,
         action: () => onPinToWorkspace(tab),
         disabled: !tab.url || isNewTab
       },
@@ -115,10 +115,10 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         ? [
             {
               label: 'Move to Space',
-              icon: <ArrowRightLeft className="w-3.5 h-3.5 text-amber-400" />,
+              icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
               submenu: spaces.map((sp) => ({
                 label: sp.name,
-                icon: <Folder className="w-3.5 h-3.5 text-amber-400" />,
+                icon: <Folder className="w-3.5 h-3.5" />,
                 action: () => onPinToSpace(tab, sp.folderId)
               }))
             }
@@ -128,7 +128,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         ? [
             {
               label: 'Hibernate Tab (Save RAM)',
-              icon: <Moon className="w-3.5 h-3.5 text-indigo-400" />,
+              icon: <Moon className="w-3.5 h-3.5" />,
               action: () => onDiscardTab(tabId)
             }
           ]
@@ -149,7 +149,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       },
       {
         label: isMuted ? 'Unmute Tab' : 'Mute Tab',
-        icon: isMuted ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5" />,
+        icon: isMuted ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />,
         action: () => onToggleMute(tab)
       },
       {
@@ -161,7 +161,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         ? [
             {
               label: 'Rename Tab',
-              icon: <Edit2 className="w-3.5 h-3.5 text-zinc-400" />,
+              icon: <Edit2 className="w-3.5 h-3.5" />,
               action: () => {
                 setEditTitle(tab.title || '');
                 setIsEditing(true);
@@ -171,7 +171,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         : []),
       {
         label: 'Close Tab',
-        icon: <X className="w-3.5 h-3.5 text-rose-400" />,
+        icon: <X className="w-3.5 h-3.5" />,
         action: () => onClose(tabId, e),
         danger: true,
         dividerBefore: true
