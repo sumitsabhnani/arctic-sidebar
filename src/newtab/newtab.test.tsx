@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { isLikelyUrl, formatNavigationUrl, App } from './App';
 
@@ -222,6 +222,65 @@ describe('newtab url detection and formatting', () => {
 
       // Verify the launcher tab (tab 1) was closed
       expect(chrome.tabs.remove).toHaveBeenCalledWith(1);
+    });
+
+    it('immediately fades out command bar, shows progress bar, and disables input on enter', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'https://news.ycombinator.com' } });
+      });
+
+      // Initially not navigating
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      expect(input).not.toBeDisabled();
+
+      // Press Enter to navigate
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      });
+
+      // Immediately shows navigation progress bar
+      expect(screen.getByRole('progressbar')).toBeInTheDocument();
+
+      // Input becomes disabled immediately
+      expect(input).toBeDisabled();
+
+      // Palette card has opacity-0 and pointer-events-none class
+      const paletteContainer = input.closest('.max-w-\\[620px\\]');
+      expect(paletteContainer).toHaveClass('opacity-0');
+      expect(paletteContainer).toHaveClass('pointer-events-none');
+
+      // Navigation was initiated
+      expect(chrome.tabs.update).toHaveBeenCalledWith(1, {
+        url: 'https://news.ycombinator.com',
+        active: true
+      });
+    });
+
+    it('prevents multiple submit attempts when user presses enter repeatedly', async () => {
+      vi.mocked(chrome.tabs.update).mockClear();
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'https://apple.com' } });
+      });
+
+      // Press Enter multiple times in rapid succession
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      });
+
+      // Only invoked once
+      expect(chrome.tabs.update).toHaveBeenCalledTimes(1);
+      expect(chrome.tabs.update).toHaveBeenCalledWith(1, {
+        url: 'https://apple.com',
+        active: true
+      });
     });
   });
 });

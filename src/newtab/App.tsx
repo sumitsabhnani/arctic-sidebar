@@ -206,17 +206,41 @@ export const App: React.FC = () => {
   const [colorTheme, setColorTheme] = useState<ColorThemeId>('glacier-blue');
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isNavigating, setIsNavigating] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arcticBookmarksRef = useRef<ArcticBookmarkItem[]>([]);
+  const isNavigatingRef = useRef(false);
+  const currentTabRef = useRef<chrome.tabs.Tab | null>(null);
+  const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Pre-load Arctic bookmarks for fast lookup and URL matching
   useEffect(() => {
     getArcticBookmarks().then((items) => {
       arcticBookmarksRef.current = items;
     });
+  }, []);
+
+  // Pre-resolve current tab for instantaneous navigation dispatch
+  useEffect(() => {
+    if (chrome?.tabs?.getCurrent) {
+      Promise.resolve(chrome.tabs.getCurrent())
+        .then((tab) => {
+          if (tab) currentTabRef.current = tab;
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  // Safety cleanup for navigation timeout
+  useEffect(() => {
+    return () => {
+      if (navTimeoutRef.current) {
+        clearTimeout(navTimeoutRef.current);
+      }
+    };
   }, []);
 
   const showToast = useCallback((msg: string) => {
@@ -325,6 +349,7 @@ export const App: React.FC = () => {
   // Keep input focused automatically
   useEffect(() => {
     const focusInput = () => {
+      if (isNavigatingRef.current) return;
       if (inputRef.current) {
         inputRef.current.focus();
         inputRef.current.select();
@@ -346,6 +371,7 @@ export const App: React.FC = () => {
   // Capture keyboard typing outside input and direct into search input
   useEffect(() => {
     const handleWindowKeyDown = (e: KeyboardEvent) => {
+      if (isNavigatingRef.current) return;
       if (
         inputRef.current &&
         document.activeElement !== inputRef.current &&
@@ -863,201 +889,231 @@ export const App: React.FC = () => {
         isArctic?: boolean;
       }
     ) => {
-      if (!targetUrl) return;
+      if (!targetUrl || isNavigatingRef.current) return;
 
-      const targetNormalized = normalizeUrl(targetUrl);
+      // Provide immediate visual confirmation and prevent multiple Enter presses
+      isNavigatingRef.current = true;
+      setIsNavigating(true);
+      inputRef.current?.blur();
 
-      // If bookmark info wasn't explicitly passed, check if targetUrl matches any known Arctic bookmark
-      if (!bookmarkInfo?.id && arcticBookmarksRef.current.length > 0) {
-        const matchedBm = arcticBookmarksRef.current.find(
-          (bm) => normalizeUrl(bm.url) === targetNormalized
-        );
-        if (matchedBm) {
-          bookmarkInfo = {
-            id: matchedBm.id,
-            title: matchedBm.title,
-            spaceId: matchedBm.spaceId,
-            spaceName: matchedBm.spaceName,
-            isQuickAccess: matchedBm.isQuickAccess,
-            isArctic: true
-          };
-        }
-      }
+      if (navTimeoutRef.current) clearTimeout(navTimeoutRef.current);
+      navTimeoutRef.current = setTimeout(() => {
+        isNavigatingRef.current = false;
+        setIsNavigating(false);
+      }, 12000);
 
-      const bookmarkId = bookmarkInfo?.id;
-      const isArctic = Boolean(bookmarkInfo?.isArctic);
-
-      // 1. Read existing tab session bindings
-      let bindings: Record<string, TabBinding> = {};
-      let byTab: Record<number, string> = {};
       try {
-        if (chrome?.storage?.session?.get) {
-          const session = await chrome.storage.session.get([
-            'bindingsByBookmarkId',
-            'bookmarkIdByTabId'
-          ]);
-          bindings =
-            (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
-          byTab = (session.bookmarkIdByTabId as Record<number, string>) || {};
-        }
-      } catch {
-        // ignore
-      }
+        const targetNormalized = normalizeUrl(targetUrl);
 
-      // 2. Identify the current tab running Arctic Command
-      let currentTab: chrome.tabs.Tab | undefined;
-      try {
-        if (chrome?.tabs?.getCurrent) {
-          const t = await chrome.tabs.getCurrent();
-          if (t) currentTab = t;
-        }
-      } catch {
-        // ignore
-      }
-      if (!currentTab && chrome?.tabs?.query) {
-        try {
-          const [activeTab] = await chrome.tabs.query({
-            active: true,
-            currentWindow: true
-          });
-          currentTab = activeTab;
-        } catch {
-          // ignore
-        }
-      }
-
-      // 3. Case A: Arctic Bookmark is ALREADY open in another tab
-      if (isArctic && bookmarkId && bindings[bookmarkId]) {
-        const boundTabId = bindings[bookmarkId].tabId;
-        try {
-          const boundTab = await chrome.tabs.get(boundTabId);
-          if (boundTab) {
-            // Switch sidebar space if bookmark belongs to a space
-            if (bookmarkInfo?.spaceId) {
-              await chrome?.storage?.local?.set({
-                activeSpaceId: bookmarkInfo.spaceId
-              });
-            }
-            // Activate the existing tab
-            await chrome.tabs.update(boundTabId, { active: true });
-            if (boundTab.windowId) {
-              try {
-                await chrome.windows.update(boundTab.windowId, { focused: true });
-              } catch {}
-            }
-            // Notify sidebar
-            try {
-              chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
-            } catch {}
-            // Close the temporary launcher tab
-            if (currentTab?.id && currentTab.id !== boundTabId) {
-              await chrome.tabs.remove(currentTab.id);
-            } else {
-              window.close();
-            }
-            return;
-          }
-        } catch {
-          // Tab was closed, fall through to re-bind
-        }
-      }
-
-      // 4. Case B: An existing tab in current window already matches target URL
-      if (chrome?.tabs?.query) {
-        try {
-          const currentTabs = await chrome.tabs.query({ currentWindow: true });
-          const otherMatch = currentTabs.find(
-            (t) =>
-              typeof t.id === 'number' &&
-              t.id !== currentTab?.id &&
-              t.url &&
-              normalizeUrl(t.url) === targetNormalized
+        // If bookmark info wasn't explicitly passed, check if targetUrl matches any known Arctic bookmark
+        if (!bookmarkInfo?.id && arcticBookmarksRef.current.length > 0) {
+          const matchedBm = arcticBookmarksRef.current.find(
+            (bm) => normalizeUrl(bm.url) === targetNormalized
           );
-          if (otherMatch && typeof otherMatch.id === 'number') {
-            const matchedTabId = otherMatch.id;
-            if (isArctic && bookmarkId && chrome?.storage?.session?.set) {
-              const newBinding: TabBinding = {
-                bookmarkId,
-                tabId: matchedTabId,
-                windowId: otherMatch.windowId,
-                originalUrl: targetUrl,
-                currentUrl: otherMatch.url || targetUrl,
-                currentTitle: otherMatch.title || bookmarkInfo?.title || '',
-                isNavigatedAway: false
-              };
-              const nextBindings = { ...bindings, [bookmarkId]: newBinding };
-              const nextByTab = { ...byTab, [matchedTabId]: bookmarkId };
-              await chrome.storage.session.set({
-                bindingsByBookmarkId: nextBindings,
-                bookmarkIdByTabId: nextByTab
-              });
+          if (matchedBm) {
+            bookmarkInfo = {
+              id: matchedBm.id,
+              title: matchedBm.title,
+              spaceId: matchedBm.spaceId,
+              spaceName: matchedBm.spaceName,
+              isQuickAccess: matchedBm.isQuickAccess,
+              isArctic: true
+            };
+          }
+        }
+
+        const bookmarkId = bookmarkInfo?.id;
+        const isArctic = Boolean(bookmarkInfo?.isArctic);
+
+        // 1. Read existing tab session bindings if Arctic bookmark
+        let bindings: Record<string, TabBinding> = {};
+        let byTab: Record<number, string> = {};
+        if (isArctic && bookmarkId) {
+          try {
+            if (chrome?.storage?.session?.get) {
+              const session = await chrome.storage.session.get([
+                'bindingsByBookmarkId',
+                'bookmarkIdByTabId'
+              ]);
+              bindings =
+                (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+              byTab = (session.bookmarkIdByTabId as Record<number, string>) || {};
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        // 2. Identify the current tab running Arctic Command
+        let currentTab: chrome.tabs.Tab | undefined = currentTabRef.current || undefined;
+        if (!currentTab && chrome?.tabs?.getCurrent) {
+          try {
+            const t = await chrome.tabs.getCurrent();
+            if (t) {
+              currentTab = t;
+              currentTabRef.current = t;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (!currentTab && chrome?.tabs?.query) {
+          try {
+            const [activeTab] = await chrome.tabs.query({
+              active: true,
+              currentWindow: true
+            });
+            currentTab = activeTab;
+            if (currentTab) {
+              currentTabRef.current = currentTab;
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        // 3. Case A: Arctic Bookmark is ALREADY open in another tab
+        if (isArctic && bookmarkId && bindings[bookmarkId]) {
+          const boundTabId = bindings[bookmarkId].tabId;
+          try {
+            const boundTab = await chrome.tabs.get(boundTabId);
+            if (boundTab) {
+              // Switch sidebar space if bookmark belongs to a space
               if (bookmarkInfo?.spaceId) {
                 await chrome?.storage?.local?.set({
                   activeSpaceId: bookmarkInfo.spaceId
                 });
               }
+              // Activate the existing tab
+              await chrome.tabs.update(boundTabId, { active: true });
+              if (boundTab.windowId) {
+                try {
+                  await chrome.windows.update(boundTab.windowId, { focused: true });
+                } catch {}
+              }
+              // Notify sidebar
+              try {
+                chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+              } catch {}
+              // Close the temporary launcher tab
+              if (currentTab?.id && currentTab.id !== boundTabId) {
+                await chrome.tabs.remove(currentTab.id);
+              } else {
+                window.close();
+              }
+              return;
             }
-            await chrome.tabs.update(matchedTabId, { active: true });
-            try {
-              chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
-            } catch {}
-            if (currentTab?.id && currentTab.id !== matchedTabId) {
-              await chrome.tabs.remove(currentTab.id);
-            }
-            return;
+          } catch {
+            // Tab was closed, fall through to re-bind
           }
-        } catch {
-          // ignore
         }
-      }
 
-      // 5. Case C: Open in currentTab (or fallback to window.location.href)
-      if (isArctic && bookmarkId && currentTab?.id && chrome?.storage?.session?.set) {
-        const newBinding: TabBinding = {
-          bookmarkId,
-          tabId: currentTab.id,
-          windowId: currentTab.windowId,
-          originalUrl: targetUrl,
-          currentUrl: targetUrl,
-          currentTitle: bookmarkInfo?.title || targetUrl,
-          isNavigatedAway: false
-        };
-        const nextBindings = { ...bindings, [bookmarkId]: newBinding };
-        const nextByTab = { ...byTab, [currentTab.id]: bookmarkId };
-        await chrome.storage.session.set({
-          bindingsByBookmarkId: nextBindings,
-          bookmarkIdByTabId: nextByTab
-        });
-        if (bookmarkInfo?.spaceId) {
-          await chrome?.storage?.local?.set({
-            activeSpaceId: bookmarkInfo.spaceId
-          });
+        // 4. Case B: An existing tab in current window already matches target URL
+        if (chrome?.tabs?.query) {
+          try {
+            const currentTabs = await chrome.tabs.query({ currentWindow: true });
+            const otherMatch = currentTabs.find(
+              (t) =>
+                typeof t.id === 'number' &&
+                t.id !== currentTab?.id &&
+                t.url &&
+                normalizeUrl(t.url) === targetNormalized
+            );
+            if (otherMatch && typeof otherMatch.id === 'number') {
+              const matchedTabId = otherMatch.id;
+              if (isArctic && bookmarkId && chrome?.storage?.session?.set) {
+                const newBinding: TabBinding = {
+                  bookmarkId,
+                  tabId: matchedTabId,
+                  windowId: otherMatch.windowId,
+                  originalUrl: targetUrl,
+                  currentUrl: otherMatch.url || targetUrl,
+                  currentTitle: otherMatch.title || bookmarkInfo?.title || '',
+                  isNavigatedAway: false
+                };
+                const nextBindings = { ...bindings, [bookmarkId]: newBinding };
+                const nextByTab = { ...byTab, [matchedTabId]: bookmarkId };
+                await chrome.storage.session.set({
+                  bindingsByBookmarkId: nextBindings,
+                  bookmarkIdByTabId: nextByTab
+                });
+                if (bookmarkInfo?.spaceId) {
+                  await chrome?.storage?.local?.set({
+                    activeSpaceId: bookmarkInfo.spaceId
+                  });
+                }
+              }
+              await chrome.tabs.update(matchedTabId, { active: true });
+              try {
+                chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+              } catch {}
+              if (currentTab?.id && currentTab.id !== matchedTabId) {
+                await chrome.tabs.remove(currentTab.id);
+              }
+              return;
+            }
+          } catch {
+            // ignore
+          }
         }
-      }
 
-      if (currentTab?.id && chrome?.tabs?.update) {
-        try {
-          await chrome.tabs.update(currentTab.id, {
-            url: targetUrl,
-            active: true
+        // 5. Case C: Open in currentTab (or fallback to window.location.href)
+        if (isArctic && bookmarkId && currentTab?.id && chrome?.storage?.session?.set) {
+          const newBinding: TabBinding = {
+            bookmarkId,
+            tabId: currentTab.id,
+            windowId: currentTab.windowId,
+            originalUrl: targetUrl,
+            currentUrl: targetUrl,
+            currentTitle: bookmarkInfo?.title || targetUrl,
+            isNavigatedAway: false
+          };
+          const nextBindings = { ...bindings, [bookmarkId]: newBinding };
+          const nextByTab = { ...byTab, [currentTab.id]: bookmarkId };
+          await chrome.storage.session.set({
+            bindingsByBookmarkId: nextBindings,
+            bookmarkIdByTabId: nextByTab
           });
-        } catch {
+          if (bookmarkInfo?.spaceId) {
+            await chrome?.storage?.local?.set({
+              activeSpaceId: bookmarkInfo.spaceId
+            });
+          }
+        }
+
+        if (currentTab?.id && chrome?.tabs?.update) {
+          try {
+            await chrome.tabs.update(currentTab.id, {
+              url: targetUrl,
+              active: true
+            });
+          } catch {
+            window.location.href = targetUrl;
+          }
+        } else {
           window.location.href = targetUrl;
         }
-      } else {
-        window.location.href = targetUrl;
-      }
 
-      try {
-        chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
-      } catch {}
+        try {
+          chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+        } catch {}
+      } catch (err) {
+        console.warn('[Arctic] Navigation error:', err);
+        if (navTimeoutRef.current) clearTimeout(navTimeoutRef.current);
+        isNavigatingRef.current = false;
+        setIsNavigating(false);
+        inputRef.current?.focus();
+        showToast('Could not open page');
+      }
     },
-    []
+    [showToast]
   );
 
   // Handle selection (URL navigation, Bookmark activation, or Command action)
   const handleSelect = useCallback(
     async (item: SuggestionItem) => {
+      if (isNavigatingRef.current) return;
+
       if (item.type === 'command') {
         if (item.action) {
           await item.action();
@@ -1084,6 +1140,11 @@ export const App: React.FC = () => {
 
   // Handle keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (isNavigatingRef.current) {
+      e.preventDefault();
+      return;
+    }
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (suggestions.length === 0) return;
@@ -1111,13 +1172,35 @@ export const App: React.FC = () => {
       style={{
         background: 'var(--theme-bg-gradient)'
       }}
-      onClick={() => inputRef.current?.focus()}
-      className="min-h-screen w-full flex flex-col items-center justify-center p-6 text-zinc-900 dark:text-zinc-100 select-none transition-colors duration-300"
+      onClick={() => {
+        if (!isNavigatingRef.current) {
+          inputRef.current?.focus();
+        }
+      }}
+      className="min-h-screen w-full flex flex-col items-center justify-center p-6 text-zinc-900 dark:text-zinc-100 select-none transition-colors duration-300 relative overflow-hidden"
     >
+      {/* Top Navigation Progress Bar */}
+      {isNavigating && (
+        <div
+          role="progressbar"
+          aria-label="Loading page"
+          className="fixed top-0 left-0 right-0 h-[3px] z-50 overflow-hidden bg-black/5 dark:bg-white/5"
+        >
+          <div
+            style={{ backgroundColor: 'var(--theme-accent)' }}
+            className="h-full w-full arctic-nav-progress"
+          />
+        </div>
+      )}
+
       {/* Center Command Palette Container */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-[620px] flex flex-col space-y-4 animate-in fade-in zoom-in-95 duration-150"
+        className={`w-full max-w-[620px] flex flex-col space-y-4 transition-all duration-150 ease-out ${
+          isNavigating
+            ? 'opacity-0 scale-95 -translate-y-2 pointer-events-none'
+            : 'animate-in fade-in zoom-in-95 duration-150'
+        }`}
       >
         {/* Brand Header */}
         <div className="flex items-center justify-center space-x-2 pb-1">
@@ -1152,7 +1235,8 @@ export const App: React.FC = () => {
               onKeyDown={handleKeyDown}
               placeholder="Search Google, enter URL, or type > for commands..."
               autoFocus
-              className="flex-1 bg-transparent text-[16px] leading-normal text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 outline-none font-normal"
+              disabled={isNavigating}
+              className="flex-1 bg-transparent text-[16px] leading-normal text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 outline-none font-normal disabled:opacity-40"
             />
             {query ? (
               <button
