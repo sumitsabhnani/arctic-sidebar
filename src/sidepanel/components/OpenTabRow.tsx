@@ -412,7 +412,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           </button>
         )}
 
-        {/* Quick Pin to Bookmarks Button */}
+        {/* Quick Pin to Bookmarks Button (visible on hover) */}
         {!isNewTab && (
           <button
             type="button"
@@ -422,9 +422,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               e.stopPropagation();
               onPinToWorkspace(tab);
             }}
-            className={`items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100 ${
-              isActive ? 'flex' : 'hidden group-hover:flex'
-            }`}
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100"
           >
             <Pin className="w-3 h-3 stroke-[2.2]" />
           </button>

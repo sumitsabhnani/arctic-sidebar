@@ -71,4 +71,14 @@ describe('OpenTabsSection component', () => {
     fireEvent.click(secondTab);
     expect(defaultProps.onFocusTab).toHaveBeenCalledWith(102);
   });
+
+  it('keeps Pin to Bookmarks button hidden on unhovered tabs (including active tab) to avoid layout shift', () => {
+    const { container } = render(<OpenTabsSection {...defaultProps} />);
+    const pinButtons = container.querySelectorAll('button[data-tooltip="Pin to Bookmarks"]');
+    expect(pinButtons.length).toBe(2);
+    pinButtons.forEach((btn) => {
+      expect(btn.className).toContain('hidden');
+      expect(btn.className).toContain('group-hover:flex');
+    });
+  });
 });
