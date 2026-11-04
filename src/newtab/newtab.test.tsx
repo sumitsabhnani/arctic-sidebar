@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { isLikelyUrl, formatNavigationUrl, App } from './App';
+import { isLikelyUrl, formatNavigationUrl, getArcticBookmarks, App } from './App';
 
 describe('newtab url detection and formatting', () => {
   describe('isLikelyUrl', () => {
@@ -281,6 +281,98 @@ describe('newtab url detection and formatting', () => {
         url: 'https://apple.com',
         active: true
       });
+    });
+  });
+
+  describe('getArcticBookmarks with nested Quick Access folders', () => {
+    it('properly indexes nested Quick Access under Home and other Spaces', async () => {
+      const otherNode = (await chrome.bookmarks.getSubTree('2'))[0];
+      const arcticRoot = await chrome.bookmarks.create({
+        parentId: otherNode.id,
+        title: 'Arctic'
+      });
+
+      // 1. Home space with nested Quick Access and regular folder
+      const homeFolder = await chrome.bookmarks.create({
+        parentId: arcticRoot.id,
+        title: 'Home'
+      });
+      const homeQa = await chrome.bookmarks.create({
+        parentId: homeFolder.id,
+        title: 'Quick Access'
+      });
+      await chrome.bookmarks.create({
+        parentId: homeQa.id,
+        title: 'Gmail',
+        url: 'https://mail.google.com'
+      });
+      await chrome.bookmarks.create({
+        parentId: homeFolder.id,
+        title: 'Home Bookmark',
+        url: 'https://home.example.com'
+      });
+
+      // 2. Learning space with nested Quick Access and subfolder
+      const learningFolder = await chrome.bookmarks.create({
+        parentId: arcticRoot.id,
+        title: 'Learning'
+      });
+      const learningQa = await chrome.bookmarks.create({
+        parentId: learningFolder.id,
+        title: 'Quick Access'
+      });
+      await chrome.bookmarks.create({
+        parentId: learningQa.id,
+        title: 'Coursera',
+        url: 'https://coursera.org'
+      });
+      const learningSub = await chrome.bookmarks.create({
+        parentId: learningFolder.id,
+        title: 'AI Courses'
+      });
+      await chrome.bookmarks.create({
+        parentId: learningSub.id,
+        title: 'DeepLearning.AI',
+        url: 'https://deeplearning.ai'
+      });
+
+      // 3. Stored spaces configuration
+      await chrome.storage.local.set({
+        spaces: [
+          { id: 'home', name: 'Home', folderId: homeFolder.id, quickAccessFolderId: homeQa.id },
+          { id: 'space-learning', name: 'Learning', folderId: learningFolder.id, quickAccessFolderId: learningQa.id }
+        ]
+      });
+
+      const indexed = await getArcticBookmarks();
+
+      // Check Gmail inside Home / Quick Access
+      const gmailItem = indexed.find((b) => b.title === 'Gmail');
+      expect(gmailItem).toBeDefined();
+      expect(gmailItem?.isQuickAccess).toBe(true);
+      expect(gmailItem?.spaceName).toBe('Quick Access');
+      expect(gmailItem?.spaceId).toBe('home');
+
+      // Check Coursera inside Learning / Quick Access
+      const courseraItem = indexed.find((b) => b.title === 'Coursera');
+      expect(courseraItem).toBeDefined();
+      expect(courseraItem?.isQuickAccess).toBe(true);
+      expect(courseraItem?.spaceName).toBe('Quick Access (Learning)');
+      expect(courseraItem?.spaceId).toBe('space-learning');
+
+      // Check DeepLearning.AI inside Learning subfolder
+      const dlItem = indexed.find((b) => b.title === 'DeepLearning.AI');
+      expect(dlItem).toBeDefined();
+      expect(dlItem?.isQuickAccess).toBe(false);
+      expect(dlItem?.spaceName).toBe('Learning');
+      expect(dlItem?.spaceId).toBe('space-learning');
+
+      // Check Home regular bookmark
+      const homeBm = indexed.find((b) => b.title === 'Home Bookmark');
+      expect(homeBm).toBeDefined();
+      expect(homeBm?.isQuickAccess).toBe(false);
+      expect(homeBm?.spaceName).toBe('Home');
+      expect(homeBm?.spaceId).toBe('home');
     });
   });
 });

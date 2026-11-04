@@ -249,6 +249,11 @@ export function createMockChrome() {
     },
     bookmarks: {
       getTree: vi.fn(async () => cloneTree(bookmarksTree)),
+      getChildren: vi.fn(async (id: string) => {
+        const node = findNode(bookmarksTree, id);
+        if (!node) throw new Error(`Bookmark node ${id} not found`);
+        return cloneTree(node.children || []) as chrome.bookmarks.BookmarkTreeNode[];
+      }),
       getSubTree: vi.fn(async (id: string) => {
         const node = findNode(bookmarksTree, id);
         if (!node) throw new Error(`Bookmark node ${id} not found`);

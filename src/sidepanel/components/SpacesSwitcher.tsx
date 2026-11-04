@@ -76,7 +76,7 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
   onToggleScratchpad,
   hasScratchpadText,
   onOpenSettings,
-  showMemorySaverBar = true,
+  showMemorySaverBar = false,
   discardedTabsCount = 0
 }) => {
   const [isAdding, setIsAdding] = useState(false);

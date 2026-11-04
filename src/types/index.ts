@@ -22,6 +22,8 @@ export type ColorThemeId =
   | 'slate-grey';
 export type ThemeMode = 'dark' | 'light';
 
+export const QUICK_ACCESS_FOLDER_NAME = 'Quick Access';
+
 export interface SpaceItem {
   id: string;
   name: string;
