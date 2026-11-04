@@ -469,7 +469,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               setEditTitle(bookmark.title || '');
               setIsEditing(true);
             }}
-            className={`truncate text-[12.5px] leading-tight transition-colors duration-150 cursor-text select-text ${
+            className={`truncate text-[12.5px] leading-tight transition-colors duration-150 select-none ${
               isNavAway
                 ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'
                 : isActive

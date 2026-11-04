@@ -81,4 +81,12 @@ describe('OpenTabsSection component', () => {
       expect(btn.className).toContain('group-hover:flex');
     });
   });
+
+  it('does not apply cursor-text or select-text to tab title so mouse pointer remains consistent', () => {
+    render(<OpenTabsSection {...defaultProps} />);
+    const titleElement = screen.getByText('Hacker News');
+    expect(titleElement.className).not.toContain('cursor-text');
+    expect(titleElement.className).not.toContain('select-text');
+    expect(titleElement.className).toContain('select-none');
+  });
 });

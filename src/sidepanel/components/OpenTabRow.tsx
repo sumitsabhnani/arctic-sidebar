@@ -363,7 +363,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
                 setEditTitle(tab.title || '');
                 setIsEditing(true);
               }}
-              className={`truncate text-[12.5px] leading-tight transition-colors duration-150 cursor-text select-text ${
+              className={`truncate text-[12.5px] leading-tight transition-colors duration-150 select-none ${
                 isActive
                   ? 'font-semibold text-zinc-900 dark:text-white'
                   : isDiscarded

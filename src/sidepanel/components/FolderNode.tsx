@@ -419,7 +419,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             </div>
 
             <span
-              className="truncate text-[13.5px] font-medium text-zinc-700 dark:text-zinc-200 group-hover:text-zinc-950 dark:group-hover:text-white cursor-text select-text"
+              className="truncate text-[13.5px] font-medium text-zinc-700 dark:text-zinc-200 group-hover:text-zinc-950 dark:group-hover:text-white select-none"
             >
               {node.title || 'Untitled Folder'}
             </span>

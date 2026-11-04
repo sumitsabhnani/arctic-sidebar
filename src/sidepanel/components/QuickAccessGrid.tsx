@@ -343,7 +343,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       onContextMenu={handleContextMenu}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`group relative flex flex-col items-center justify-center rounded-xl transition-all duration-150 select-none outline-none ${
+      className={`group relative flex flex-col items-center justify-center rounded-xl transition-all duration-150 select-none outline-none cursor-pointer ${
         isRelaxed ? 'min-h-[58px] py-2 px-1.5 gap-1.5' : 'h-12'
       } ${
         isDragging ? 'opacity-30 scale-95' : ''

@@ -749,7 +749,7 @@ export const App: React.FC = () => {
                     setIsRenamingWorkspace(true);
                   }
                 }}
-                className="text-[15.5px] font-bold tracking-tight text-zinc-900 dark:text-zinc-100 cursor-text select-text"
+                className="text-[15.5px] font-bold tracking-tight text-zinc-900 dark:text-zinc-100 select-none cursor-default"
               >
                 {spaceDisplayTitle}
               </span>
