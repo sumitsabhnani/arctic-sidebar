@@ -21,6 +21,7 @@ interface ContextMenuProps {
 
 export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
+  const focusTrapRef = useRef<HTMLInputElement>(null);
   const [expandedSubmenuIdx, setExpandedSubmenuIdx] = useState<number | null>(null);
 
   // Initial smart positioning using conservative estimates
@@ -57,19 +58,22 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     setCoords({ x: adjustedX, y: adjustedY });
   }, [x, y, items, expandedSubmenuIdx]);
 
-  // Ensure sidepanel window and menu container have active focus immediately on mount
-  // so that clicking anywhere on the webpage outside the sidepanel reliably triggers window.blur
+  // Ensure sidepanel window and an actual input have active focus immediately on mount
+  // so that Chromium activates the WebContents and reliably triggers blur/focusout when clicking the webpage
   useEffect(() => {
     try {
       window.focus();
     } catch {
       // ignore
     }
-    menuRef.current?.focus({ preventScroll: true });
+    focusTrapRef.current?.focus({ preventScroll: true });
   }, []);
 
   useEffect(() => {
+    let isClosed = false;
     const handleClose = () => {
+      if (isClosed) return;
+      isClosed = true;
       onClose();
     };
 
@@ -83,6 +87,14 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         handleClose();
       }
+    };
+
+    const handleFocusOut = (e: FocusEvent) => {
+      // If focus moved to another element inside our menu, do not close
+      if (menuRef.current && e.relatedTarget && menuRef.current.contains(e.relatedTarget as Node)) {
+        return;
+      }
+      handleClose();
     };
 
     const handleVisibilityChange = () => {
@@ -112,6 +124,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('blur', handleClose);
+    window.addEventListener('focusout', handleFocusOut);
     window.addEventListener('resize', handleClose);
     window.addEventListener('scroll', handleClose, true);
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -138,6 +151,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('blur', handleClose);
+      window.removeEventListener('focusout', handleFocusOut);
       window.removeEventListener('resize', handleClose);
       window.removeEventListener('scroll', handleClose, true);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -166,6 +180,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       style={{ top: `${coords.y}px`, left: `${coords.x}px` }}
       className="fixed z-[99999] min-w-[196px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-y-auto p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in zoom-in-95 duration-100 outline-none"
     >
+      <input
+        ref={focusTrapRef}
+        type="text"
+        aria-hidden="true"
+        tabIndex={-1}
+        className="sr-only opacity-0 w-0 h-0 absolute pointer-events-none"
+      />
       {items.map((item, idx) => {
         const hasSubmenu = Boolean(item.submenu && item.submenu.length > 0);
         const isSubmenuOpen = expandedSubmenuIdx === idx;

@@ -314,6 +314,26 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [createNewTab, reloadActiveTab]);
 
+  // Ensure the sidepanel window explicitly captures focus on any pointer down or right-click
+  // so that clicks outside the sidepanel reliably trigger blur and dismiss floating overlays
+  useEffect(() => {
+    const handleCaptureFocus = () => {
+      try {
+        window.focus();
+      } catch {
+        // ignore
+      }
+    };
+
+    window.addEventListener('pointerdown', handleCaptureFocus, true);
+    window.addEventListener('contextmenu', handleCaptureFocus, true);
+
+    return () => {
+      window.removeEventListener('pointerdown', handleCaptureFocus, true);
+      window.removeEventListener('contextmenu', handleCaptureFocus, true);
+    };
+  }, []);
+
   const handleOpenContextMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
     try {

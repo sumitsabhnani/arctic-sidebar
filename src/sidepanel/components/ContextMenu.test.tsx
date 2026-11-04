@@ -111,4 +111,12 @@ describe('ContextMenu component', () => {
     fireEvent.scroll(window);
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
+
+  it('closes menu on focusout when focus leaves menu container', () => {
+    const handleClose = vi.fn();
+    render(<ContextMenu x={50} y={50} items={[{ label: 'Item 1', action: vi.fn() }]} onClose={handleClose} />);
+
+    fireEvent.focusOut(window, { relatedTarget: null });
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
 });
