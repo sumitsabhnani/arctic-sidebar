@@ -445,7 +445,7 @@ export function createMockChrome() {
           }
         }
       }),
-      reload: vi.fn(async (tabId?: number) => {
+      reload: vi.fn(async (tabId?: number, _reloadProperties?: { bypassCache?: boolean }) => {
         const targetId = tabId || tabsState.find((t) => t.active)?.id;
         const tab = tabsState.find((t) => t.id === targetId);
         if (tab) {

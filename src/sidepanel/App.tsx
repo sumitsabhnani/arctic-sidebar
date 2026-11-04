@@ -306,7 +306,7 @@ export const App: React.FC = () => {
         createNewTab();
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
         e.preventDefault();
-        reloadActiveTab();
+        reloadActiveTab(e.shiftKey);
       }
     };
 
@@ -659,31 +659,31 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {/* Fixed Quick Access Links (Pinned Favorites Grid) */}
+      {quickAccessBookmarks.length > 0 && (
+        <div className="px-2.5 pt-2 pb-2 flex-shrink-0 border-b border-black/[0.06] dark:border-white/[0.06] max-h-[35vh] overflow-y-auto no-scrollbar">
+          <QuickAccessGrid
+            bookmarks={quickAccessBookmarks}
+            bindingsByBookmarkId={bindingsByBookmarkId}
+            tabsByTabId={tabsByTabId}
+            activeTabId={activeTabId}
+            densityMode={quickAccessDensity}
+            onTileClick={handleQuickAccessClick}
+            onTileDoubleClick={handleFaviconDoubleClick}
+            onOpenContextMenu={handleOpenContextMenu}
+            onCloseTab={handleCloseTab}
+            onToggleMuteTab={toggleMuteTab}
+            onMoveToWorkspace={handleMoveBookmarkToWorkspace}
+            onReplaceUrl={handleReplaceBookmarkUrl}
+            onRenameBookmark={renameBookmarkOrFolder}
+            onRemoveBookmark={handleDeleteBookmark}
+            onReorderQuickAccess={handleReorderQuickAccess}
+          />
+        </div>
+      )}
+
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 space-y-4">
-        {/* Section 1: Quick Access Favorites */}
-        {quickAccessBookmarks.length > 0 && (
-          <div className="flex flex-col">
-            <QuickAccessGrid
-              bookmarks={quickAccessBookmarks}
-              bindingsByBookmarkId={bindingsByBookmarkId}
-              tabsByTabId={tabsByTabId}
-              activeTabId={activeTabId}
-              densityMode={quickAccessDensity}
-              onTileClick={handleQuickAccessClick}
-              onTileDoubleClick={handleFaviconDoubleClick}
-              onOpenContextMenu={handleOpenContextMenu}
-              onCloseTab={handleCloseTab}
-              onToggleMuteTab={toggleMuteTab}
-              onMoveToWorkspace={handleMoveBookmarkToWorkspace}
-              onReplaceUrl={handleReplaceBookmarkUrl}
-              onRenameBookmark={renameBookmarkOrFolder}
-              onRemoveBookmark={handleDeleteBookmark}
-              onReorderQuickAccess={handleReorderQuickAccess}
-            />
-          </div>
-        )}
-
         {/* Section 2: Active Space / Home Vertical Tabs Tree (Permanent Bookmarks & Folders) */}
         <div
           onDragOver={(e) => {

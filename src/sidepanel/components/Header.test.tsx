@@ -78,6 +78,64 @@ describe('Header component', () => {
     fireEvent.click(reloadBtn);
 
     expect(defaultProps.onReloadActiveTab).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onReloadActiveTab).toHaveBeenCalledWith(false);
+  });
+
+  it('renders dropdown arrow next to reload button and toggles reload menu with hard reload option', () => {
+    render(<Header {...defaultProps} />);
+    const dropdownBtn = screen.getByLabelText('Reload options');
+    expect(dropdownBtn).toBeInTheDocument();
+
+    // Menu not visible initially
+    expect(screen.queryByText('Hard Reload')).not.toBeInTheDocument();
+
+    // Click dropdown button to open
+    fireEvent.click(dropdownBtn);
+    expect(screen.getByText('Hard Reload')).toBeInTheDocument();
+    expect(screen.getByText('Clear cache & reload')).toBeInTheDocument();
+    expect(screen.getByText('Normal Reload')).toBeInTheDocument();
+
+    // Click Hard Reload -> calls onReloadActiveTab(true)
+    const hardReloadBtn = screen.getByText('Hard Reload').closest('button')!;
+    fireEvent.click(hardReloadBtn);
+    expect(defaultProps.onReloadActiveTab).toHaveBeenCalledWith(true);
+
+    // Menu closes after selection
+    expect(screen.queryByText('Hard Reload')).not.toBeInTheDocument();
+  });
+
+  it('allows normal reload from the dropdown menu', () => {
+    render(<Header {...defaultProps} />);
+    const dropdownBtn = screen.getByLabelText('Reload options');
+    fireEvent.click(dropdownBtn);
+
+    const normalReloadBtn = screen.getByText('Normal Reload').closest('button')!;
+    fireEvent.click(normalReloadBtn);
+    expect(defaultProps.onReloadActiveTab).toHaveBeenCalledWith(false);
+    expect(screen.queryByText('Hard Reload')).not.toBeInTheDocument();
+  });
+
+  it('opens reload dropdown on contextmenu right-click on reload button and closes on Escape', () => {
+    const { container } = render(<Header {...defaultProps} />);
+    const reloadBtn = container.querySelector('[data-tooltip="Reload (Cmd+R)"]') as HTMLElement;
+
+    fireEvent.contextMenu(reloadBtn);
+    expect(screen.getByText('Hard Reload')).toBeInTheDocument();
+
+    // Press Escape to close
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByText('Hard Reload')).not.toBeInTheDocument();
+  });
+
+  it('closes reload dropdown when window loses focus (e.g. clicking on webpage)', () => {
+    render(<Header {...defaultProps} />);
+    const dropdownBtn = screen.getByLabelText('Reload options');
+    fireEvent.click(dropdownBtn);
+    expect(screen.getByText('Hard Reload')).toBeInTheDocument();
+
+    // Click outside on the webpage triggers window blur
+    fireEvent.blur(window);
+    expect(screen.queryByText('Hard Reload')).not.toBeInTheDocument();
   });
 
   it('does NOT render the top + (new tab) button', () => {

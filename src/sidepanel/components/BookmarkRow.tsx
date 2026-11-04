@@ -495,7 +495,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         {isRunning && binding && (isAudible || isMuted) && (
           <button
             type="button"
-            title={isMuted ? 'Tab is muted (Click to unmute)' : 'Tab is playing audio (Click to mute)'}
+            data-tooltip={isMuted ? 'Tab is muted (Click to unmute)' : 'Tab is playing audio (Click to mute)'}
             onClick={(e) => {
               e.stopPropagation();
               onToggleMuteTab?.(binding.tabId);

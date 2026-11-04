@@ -378,11 +378,11 @@ html:not(.dark) body {
   max-width: min(210px, calc(100vw - 70px));
   word-break: break-word;
   text-align: left;
-  pointer-events: none;
+  pointer-events: none !important;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 0.12s ease-out, transform 0.12s ease-out, visibility 0.12s ease-out;
-  transition-delay: 0.3s;
+  transition: opacity 0.15s ease-out, transform 0.15s ease-out, visibility 0.15s ease-out;
+  transition-delay: 0s;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   border: 1px solid rgba(255, 255, 255, 0.12);
   z-index: 100;
@@ -399,6 +399,7 @@ html:not(.dark) [data-tooltip]::before {
   opacity: 1;
   visibility: visible;
   transform: translateY(-50%) translateX(0);
+  transition-delay: 0.7s;
 }
 
 /* Tooltip positioned below (for top header buttons) */
@@ -411,6 +412,7 @@ html:not(.dark) [data-tooltip]::before {
 
 [data-tooltip-pos="bottom"]:hover::before {
   transform: translateX(-50%) translateY(0);
+  transition-delay: 0.7s;
 }
 
 /* Tooltip positioned below and aligned left (prevents clipping on left edge) */
@@ -423,6 +425,7 @@ html:not(.dark) [data-tooltip]::before {
 
 [data-tooltip-pos="bottom-left"]:hover::before {
   transform: translateY(0);
+  transition-delay: 0.7s;
 }
 
 /* Tooltip positioned below and aligned right (prevents clipping on right edge) */
@@ -435,4 +438,16 @@ html:not(.dark) [data-tooltip]::before {
 
 [data-tooltip-pos="bottom-right"]:hover::before {
   transform: translateY(0);
+  transition-delay: 0.7s;
+}
+
+/* Reload Dropdown Menu - solid opaque with high contrast */
+.reload-dropdown-menu {
+  background-color: #ffffff !important;
+  opacity: 1 !important;
+}
+
+html.dark .reload-dropdown-menu {
+  background-color: #18181b !important;
+  opacity: 1 !important;
 }

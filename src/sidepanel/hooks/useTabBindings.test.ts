@@ -267,4 +267,35 @@ describe('useTabBindings hook', () => {
     expect(remainingTabs.length).toBe(1);
     expect(remainingTabs[0].active).toBe(true);
   });
+
+  it('reloads active tab with and without cache bypass', async () => {
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Normal reload
+    await act(async () => {
+      await result.current.reloadActiveTab(false);
+    });
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(1, { bypassCache: false });
+
+    // Hard reload (clear cache)
+    await act(async () => {
+      await result.current.reloadActiveTab(true);
+    });
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(1, { bypassCache: true });
+  });
+
+  it('reloads specific tab with and without cache bypass via reloadTab', async () => {
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.reloadTab(42, true);
+    });
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(42, { bypassCache: true });
+  });
 });

@@ -393,7 +393,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         {(isAudible || isMuted) && (
           <button
             type="button"
-            title={isMuted ? 'Tab is muted' : 'Tab is playing audio'}
+            data-tooltip={isMuted ? 'Tab is muted (Click to unmute)' : 'Tab is playing audio (Click to mute)'}
             onClick={(e) => {
               e.stopPropagation();
               onToggleMute(tab);

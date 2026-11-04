@@ -584,9 +584,9 @@ export function useTabBindings() {
   /**
    * Reload a tab
    */
-  const reloadTab = useCallback(async (tabId: number) => {
+  const reloadTab = useCallback(async (tabId: number, bypassCache: boolean = false) => {
     try {
-      await chrome.tabs.reload(tabId);
+      await chrome.tabs.reload(tabId, { bypassCache });
     } catch (err) {
       console.warn('[Arctic] Could not reload tab:', err);
     }
@@ -595,10 +595,10 @@ export function useTabBindings() {
   /**
    * Reload currently active tab
    */
-  const reloadActiveTab = useCallback(async () => {
+  const reloadActiveTab = useCallback(async (bypassCache: boolean = false) => {
     if (typeof activeTabId === 'number') {
       try {
-        await chrome.tabs.reload(activeTabId);
+        await chrome.tabs.reload(activeTabId, { bypassCache });
       } catch (err) {
         console.warn('[Arctic] Could not reload active tab:', err);
       }
@@ -606,7 +606,7 @@ export function useTabBindings() {
       try {
         const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (currentTab?.id) {
-          await chrome.tabs.reload(currentTab.id);
+          await chrome.tabs.reload(currentTab.id, { bypassCache });
         }
       } catch (err) {
         console.warn('[Arctic] Could not query and reload tab:', err);
