@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronRight } from 'lucide-react';
 
 export interface ContextMenuItem {
@@ -56,41 +57,76 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     setCoords({ x: adjustedX, y: adjustedY });
   }, [x, y, items, expandedSubmenuIdx]);
 
+  // Ensure sidepanel window and menu container have active focus immediately on mount
+  // so that clicking anywhere on the webpage outside the sidepanel reliably triggers window.blur
   useEffect(() => {
+    try {
+      window.focus();
+    } catch {
+      // ignore
+    }
+    menuRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    const handleClose = () => {
+      onClose();
+    };
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose();
+        handleClose();
       }
     };
 
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        onClose();
+        handleClose();
       }
     };
 
     const handleVisibilityChange = () => {
-      if (document.hidden) onClose();
+      if (document.hidden) handleClose();
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('blur', onClose);
-    window.addEventListener('resize', onClose);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
     const handleTabActivated = () => {
-      onClose();
+      handleClose();
     };
 
     const handleWindowFocus = () => {
-      onClose();
+      handleClose();
     };
+
+    const handleTabHighlighted = () => {
+      handleClose();
+    };
+
+    const handleTabUpdated = (
+      _tabId: number,
+      changeInfo: chrome.tabs.TabChangeInfo
+    ) => {
+      if (changeInfo.status || changeInfo.url) {
+        handleClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('blur', handleClose);
+    window.addEventListener('resize', handleClose);
+    window.addEventListener('scroll', handleClose, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     if (chrome?.tabs?.onActivated) {
       chrome.tabs.onActivated.addListener(handleTabActivated);
     }
     if (chrome?.windows?.onFocusChanged) {
       chrome.windows.onFocusChanged.addListener(handleWindowFocus);
+    }
+    if (chrome?.tabs?.onHighlighted) {
+      chrome.tabs.onHighlighted.addListener(handleTabHighlighted);
+    }
+    if (chrome?.tabs?.onUpdated) {
+      chrome.tabs.onUpdated.addListener(handleTabUpdated);
     }
 
     // Use capture or slight timeout so triggering right-click doesn't instantly dismiss
@@ -101,8 +137,9 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('blur', onClose);
-      window.removeEventListener('resize', onClose);
+      window.removeEventListener('blur', handleClose);
+      window.removeEventListener('resize', handleClose);
+      window.removeEventListener('scroll', handleClose, true);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('mousedown', handleClickOutside);
       window.removeEventListener('contextmenu', handleClickOutside);
@@ -112,15 +149,22 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       if (chrome?.windows?.onFocusChanged) {
         chrome.windows.onFocusChanged.removeListener(handleWindowFocus);
       }
+      if (chrome?.tabs?.onHighlighted) {
+        chrome.tabs.onHighlighted.removeListener(handleTabHighlighted);
+      }
+      if (chrome?.tabs?.onUpdated) {
+        chrome.tabs.onUpdated.removeListener(handleTabUpdated);
+      }
       clearTimeout(timer);
     };
   }, [onClose]);
 
-  return (
+  return createPortal(
     <div
       ref={menuRef}
+      tabIndex={-1}
       style={{ top: `${coords.y}px`, left: `${coords.x}px` }}
-      className="fixed z-50 min-w-[196px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-y-auto p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in zoom-in-95 duration-100"
+      className="fixed z-[99999] min-w-[196px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-y-auto p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in zoom-in-95 duration-100 outline-none"
     >
       {items.map((item, idx) => {
         const hasSubmenu = Boolean(item.submenu && item.submenu.length > 0);
@@ -213,6 +257,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
           </React.Fragment>
         );
       })}
-    </div>
+    </div>,
+    document.body
   );
 };

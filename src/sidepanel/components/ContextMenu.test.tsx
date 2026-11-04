@@ -95,4 +95,20 @@ describe('ContextMenu component', () => {
     const dangerIconContainer = screen.getByTestId('danger-icon').parentElement!;
     expect(dangerIconContainer.className).toContain('text-rose-500');
   });
+
+  it('closes menu when window blurs (e.g. clicking on webpage outside sidepanel)', () => {
+    const handleClose = vi.fn();
+    render(<ContextMenu x={50} y={50} items={[{ label: 'Item 1', action: vi.fn() }]} onClose={handleClose} />);
+
+    fireEvent.blur(window);
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes menu when window scrolls', () => {
+    const handleClose = vi.fn();
+    render(<ContextMenu x={50} y={50} items={[{ label: 'Item 1', action: vi.fn() }]} onClose={handleClose} />);
+
+    fireEvent.scroll(window);
+    expect(handleClose).toHaveBeenCalledTimes(1);
+  });
 });

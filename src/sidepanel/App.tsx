@@ -316,6 +316,11 @@ export const App: React.FC = () => {
 
   const handleOpenContextMenu = (e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
+    try {
+      window.focus();
+    } catch {
+      // ignore
+    }
     setContextMenu({
       x: e.clientX,
       y: e.clientY,
