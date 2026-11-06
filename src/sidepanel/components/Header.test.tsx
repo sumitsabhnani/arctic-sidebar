@@ -176,4 +176,17 @@ describe('Header component', () => {
 
     expect(defaultProps.onGoBackActiveTab).toHaveBeenCalledTimes(1);
   });
+
+  it('renders progress bar and reloading badge without spinning reload button when isActiveTabLoading is true', () => {
+    const { container } = render(<Header {...defaultProps} isActiveTabLoading={true} />);
+
+    // Glowing progress bar rendered at top
+    expect(container.querySelector('.arctic-nav-progress')).toBeInTheDocument();
+
+    // Reloading indicator badge rendered
+    expect(screen.getByText('Reloading')).toBeInTheDocument();
+
+    // Reload button should not have animate-spin
+    expect(container.querySelector('.animate-spin')).not.toBeInTheDocument();
+  });
 });

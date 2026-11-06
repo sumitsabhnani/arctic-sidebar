@@ -18,6 +18,7 @@ interface OpenTabsSectionProps {
   onPinToQuickAccess: (tab: chrome.tabs.Tab) => void;
   onPinToWorkspace: (tab: chrome.tabs.Tab) => void;
   onPinToSpace?: (tab: chrome.tabs.Tab, targetSpaceFolderId: string) => void;
+  onMoveTabToSpace?: (tabId: number, targetSpaceId: string) => void;
   onDuplicateTab: (tabId: number) => void;
   onReloadTab: (tabId: number) => void;
   onDiscardTab?: (tabId: number) => void;
@@ -33,6 +34,7 @@ interface OpenTabsSectionProps {
   onCloseMultipleTabs?: (tabIds: number[]) => void;
   onPinMultipleTabsToWorkspace?: (tabs: chrome.tabs.Tab[]) => void;
   onPinMultipleTabsToSpace?: (tabs: chrome.tabs.Tab[], targetSpaceFolderId: string) => void;
+  onMoveMultipleTabsToSpace?: (tabIds: number[], targetSpaceId: string) => void;
   onDiscardMultipleTabs?: (tabIds: number[]) => void;
   editingTabId?: number | null;
   editingTitle?: string;
@@ -56,6 +58,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onPinToQuickAccess,
   onPinToWorkspace,
   onPinToSpace,
+  onMoveTabToSpace,
   onDuplicateTab,
   onReloadTab,
   onDiscardTab,
@@ -71,6 +74,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onCloseMultipleTabs,
   onPinMultipleTabsToWorkspace,
   onPinMultipleTabsToSpace,
+  onMoveMultipleTabsToSpace,
   onDiscardMultipleTabs,
   editingTabId: controlledEditingTabId,
   editingTitle: controlledEditingTitle,
@@ -424,6 +428,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   onCloseMultipleTabs={onCloseMultipleTabs}
                   onPinMultipleTabsToWorkspace={onPinMultipleTabsToWorkspace}
                   onPinMultipleTabsToSpace={onPinMultipleTabsToSpace}
+                  onMoveTabToSpace={onMoveTabToSpace}
+                  onMoveMultipleTabsToSpace={onMoveMultipleTabsToSpace}
                   onDiscardMultipleTabs={onDiscardMultipleTabs}
                   isEditing={isEditing}
                   editTitle={isEditing ? (effectiveEditingTitle || '') : (tab.title || '')}

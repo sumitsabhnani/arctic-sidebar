@@ -140,6 +140,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const isRunning = Boolean(binding);
   const isAudible = Boolean(boundTab?.audible);
   const isMuted = Boolean(boundTab?.mutedInfo?.muted);
+  const isBoundTabLoading = boundTab?.status === 'loading';
   const titleText = bookmark.title || (isNote ? 'Scratchpad Note' : bookmark.url || 'Untitled Bookmark');
 
   let tooltip = titleText;
@@ -672,6 +673,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             <StickyNote className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-opacity duration-150 flex-shrink-0" />
           ) : isGoogleDoc ? (
             <FileText className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-opacity duration-150 flex-shrink-0" />
+          ) : isBoundTabLoading ? (
+            <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text flex-shrink-0" />
           ) : !faviconError && faviconSrc ? (
             <img
               src={faviconSrc}
@@ -691,12 +694,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           )}
 
           {/* Sleep icon overlay on favicon if hibernated */}
-          {isDiscarded && !isNote && (
+          {isDiscarded && !isNote && !isBoundTabLoading && (
             <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
           )}
 
           {/* Reset Icon Overlay on Favicon Hover when Navigated Away */}
-          {isNavAway && !isNote && (
+          {isNavAway && !isNote && !isBoundTabLoading && (
             <div
               className={`absolute inset-0 flex items-center justify-center rounded-sm transition-all duration-150 ${
                 isHoveringFavicon

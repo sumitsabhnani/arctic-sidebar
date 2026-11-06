@@ -177,6 +177,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const isActive = Boolean(binding && binding.tabId === activeTabId);
   const isRunningInBackground = Boolean(binding && binding.tabId !== activeTabId);
   const isNavAway = binding?.isNavigatedAway ?? false;
+  const isBoundTabLoading = boundTab?.status === 'loading';
   const isAudible = Boolean(boundTab?.audible);
   const isMuted = Boolean(boundTab?.mutedInfo?.muted);
   const isRelaxed = densityMode === 'relaxed';
@@ -465,6 +466,8 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         {/* Reset Icon when Active and Navigated Away (on hover) */}
         {isActive && isNavAway && isHovered ? (
           <RotateCcw className="w-4 h-4 text-amber-500 dark:text-amber-300 animate-spin-reverse stroke-[2.5]" />
+        ) : isBoundTabLoading ? (
+          <RotateCw className="w-4 h-4 animate-spin theme-accent-text" />
         ) : isNote ? (
           <StickyNote className="w-4 h-4 text-zinc-400 dark:text-zinc-400 group-hover:text-zinc-600 dark:group-hover:text-zinc-200" />
         ) : isGoogleDoc ? (

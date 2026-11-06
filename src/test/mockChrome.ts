@@ -335,8 +335,8 @@ export function createMockChrome() {
           }
         }
       }),
-      search: vi.fn(async (query: string) => {
-        const q = query.toLowerCase();
+      search: vi.fn(async (query: string | { query?: string; url?: string; title?: string }) => {
+        const q = (typeof query === 'string' ? query : (query && (query.query || query.url || query.title)) || '').toLowerCase();
         const matches: MockBookmarkNode[] = [];
         function traverse(node: MockBookmarkNode) {
           if (node.title?.toLowerCase().includes(q) || node.url?.toLowerCase().includes(q)) {

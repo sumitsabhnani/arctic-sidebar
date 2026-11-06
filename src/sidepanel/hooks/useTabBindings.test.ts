@@ -425,4 +425,128 @@ describe('useTabBindings hook', () => {
       title: 'Sprint Planning'
     });
   });
+
+  it('reconciles open browser tabs with bookmarks on startup when session is empty (reinstall scenario)', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 77,
+        windowId: 10,
+        url: 'https://github.com/my-repo',
+        title: 'My Repo',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 88,
+        windowId: 10,
+        url: 'https://random-article.com',
+        title: 'Random Article',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Before reconciliation, both tabs are unpinned
+    expect(result.current.unpinnedTabs.length).toBe(2);
+
+    const mockBookmarkTree: chrome.bookmarks.BookmarkTreeNode[] = [
+      {
+        id: 'folder-qa',
+        title: 'Quick Access',
+        children: [
+          {
+            id: 'bm-github',
+            title: 'My GitHub Repo',
+            url: 'https://github.com/my-repo/'
+          }
+        ]
+      }
+    ];
+
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks(mockBookmarkTree);
+    });
+
+    // Tab 77 is now bound to 'bm-github'
+    expect(result.current.bookmarkIdByTabId[77]).toBe('bm-github');
+    expect(result.current.bindingsByBookmarkId['bm-github']).toBeDefined();
+    expect(result.current.bindingsByBookmarkId['bm-github'].tabId).toBe(77);
+
+    // Only tab 88 remains in unpinnedTabs
+    expect(result.current.unpinnedTabs.length).toBe(1);
+    expect(result.current.unpinnedTabs[0].id).toBe(88);
+  });
+
+  it('manages space scoping with setTabSpace and moveTabsToSpace', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 101,
+        windowId: 10,
+        url: 'https://work.slack.com',
+        title: 'Slack',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 102,
+        windowId: 10,
+        url: 'https://youtube.com',
+        title: 'YouTube',
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+
+    const { result } = renderHook(() => useTabBindings('space-work'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Explicitly set space for tab 101
+    await act(async () => {
+      await result.current.setTabSpace(101, 'space-work');
+    });
+
+    expect(result.current.tabSpaceByTabId[101]).toBe('space-work');
+
+    // Move multiple tabs to personal space
+    await act(async () => {
+      await result.current.moveTabsToSpace([101, 102], 'space-personal');
+    });
+
+    expect(result.current.tabSpaceByTabId[101]).toBe('space-personal');
+    expect(result.current.tabSpaceByTabId[102]).toBe('space-personal');
+  });
+
+  it('closes only the specified space unpinned tabs via closeSpaceUnpinnedTabs', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 201,
+        windowId: 10,
+        url: 'https://tab1.com',
+        title: 'Tab 1',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 202,
+        windowId: 10,
+        url: 'https://tab2.com',
+        title: 'Tab 2',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Close only tab 201
+    await act(async () => {
+      await result.current.closeSpaceUnpinnedTabs([201]);
+    });
+
+    expect(mockChrome.tabs.remove).toHaveBeenCalledWith([201]);
+  });
 });

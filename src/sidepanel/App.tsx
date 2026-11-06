@@ -15,7 +15,12 @@ import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
 import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft } from 'lucide-react';
-import { isScratchpadUrl, getScratchpadNoteId } from './utils/url';
+import {
+  isScratchpadUrl,
+  getScratchpadNoteId,
+  encodeNoteHash,
+  extractNoteContentFromUrl
+} from './utils/url';
 
 export const App: React.FC = () => {
   const {
@@ -49,6 +54,11 @@ export const App: React.FC = () => {
     tabsByTabId,
     activeTabId,
     unpinnedTabs,
+    tabSpaceByTabId,
+    setTabSpace,
+    moveTabsToSpace,
+    closeSpaceUnpinnedTabs,
+    reconcileTabsWithBookmarks,
     createNewTab,
     focusTab,
     handleRowClick,
@@ -56,7 +66,6 @@ export const App: React.FC = () => {
     handleFaviconDoubleClick,
     handleQuickAccessClick,
     handleCloseTab,
-    closeAllUnpinnedTabs,
     closeAllWindowTabs,
     pinTab,
     pinMultipleTabs,
@@ -76,7 +85,7 @@ export const App: React.FC = () => {
     autoArchiveInterval,
     setAutoArchiveInterval,
     updateBookmarkBindingUrl
-  } = useTabBindings();
+  } = useTabBindings(activeSpaceId);
 
   // Cross-Device Scratchpad
   const {
@@ -459,34 +468,25 @@ export const App: React.FC = () => {
     );
   }, [workspaceNode?.children, activeFolderIds.quickAccessId]);
 
-  const activeBookmarkIds = useMemo(() => {
-    const ids = new Set<string>();
-    const collect = (node?: chrome.bookmarks.BookmarkTreeNode | null) => {
-      if (!node) return;
-      if (node.url && node.id) {
-        ids.add(node.id);
-      }
-      if (node.children) {
-        for (const child of node.children) {
-          collect(child);
-        }
-      }
-    };
-    collect(quickAccessNode);
-    collect(workspaceNode);
-    return ids;
-  }, [quickAccessNode, workspaceNode]);
+  // Auto-reconcile open tabs with bookmarks on startup/reload
+  useEffect(() => {
+    if (quickAccessNode || workspaceNode) {
+      const allNodes: chrome.bookmarks.BookmarkTreeNode[] = [];
+      if (quickAccessNode) allNodes.push(quickAccessNode);
+      if (workspaceNode) allNodes.push(workspaceNode);
+      reconcileTabsWithBookmarks(allNodes);
+    }
+  }, [quickAccessNode, workspaceNode, reconcileTabsWithBookmarks]);
 
   const visibleUnpinnedTabs = useMemo(() => {
-    return unpinnedTabs.concat(
-      Object.values(tabsByTabId).filter((tab) => {
+    return unpinnedTabs
+      .filter((tab) => {
         if (typeof tab.id !== 'number') return false;
-        const boundId = bookmarkIdByTabId[tab.id];
-        // If tab is bound to a bookmark that is NOT in the active space's Quick Access or Workspace, show it in Today's Tabs so it is never hidden
-        return Boolean(boundId && !activeBookmarkIds.has(boundId));
+        const space = tabSpaceByTabId[tab.id] || 'home';
+        return space === activeSpaceId;
       })
-    ).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  }, [unpinnedTabs, tabsByTabId, bookmarkIdByTabId, activeBookmarkIds]);
+      .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  }, [unpinnedTabs, tabSpaceByTabId, activeSpaceId]);
 
   // Inline Space / Home Root Folder Renaming
   const [isRenamingWorkspace, setIsRenamingWorkspace] = useState(false);
@@ -730,7 +730,17 @@ export const App: React.FC = () => {
 
       try {
         const data = await chrome.storage.local.get([`arctic_note_${noteId}`]);
-        const text = (data[`arctic_note_${noteId}`] as string) || '';
+        let text = (data[`arctic_note_${noteId}`] as string) || '';
+
+        // If local storage was wiped (e.g. extension reinstall), restore from bookmark URL hash
+        if (!text && bookmark.url) {
+          const fromUrl = extractNoteContentFromUrl(bookmark.url);
+          if (fromUrl) {
+            text = fromUrl;
+            await chrome.storage.local.set({ [`arctic_note_${noteId}`]: fromUrl });
+          }
+        }
+
         setActiveNote({
           id: noteId,
           bookmarkId: bookmark.id,
@@ -757,6 +767,13 @@ export const App: React.FC = () => {
       noteDebounceTimerRef.current = setTimeout(async () => {
         try {
           await chrome.storage.local.set({ [`arctic_note_${activeNote.id}`]: newText });
+          // Mirror to bookmark URL hash for reinstall retention
+          if (activeNote.bookmarkId && chrome.bookmarks?.update) {
+            const newUrl = newText
+              ? `https://arctic.local/note/${activeNote.id}#${encodeNoteHash(newText)}`
+              : `https://arctic.local/note/${activeNote.id}`;
+            await chrome.bookmarks.update(activeNote.bookmarkId, { url: newUrl });
+          }
           setNoteSyncStatus('Synced');
         } catch {
           setNoteSyncStatus('Offline - Saved locally');
@@ -771,6 +788,9 @@ export const App: React.FC = () => {
     if (!activeNote) return;
     if (noteDebounceTimerRef.current) clearTimeout(noteDebounceTimerRef.current);
     await chrome.storage.local.set({ [`arctic_note_${activeNote.id}`]: '' });
+    if (activeNote.bookmarkId && chrome.bookmarks?.update) {
+      await chrome.bookmarks.update(activeNote.bookmarkId, { url: `https://arctic.local/note/${activeNote.id}` });
+    }
     setNoteSyncStatus('Synced');
   }, [activeNote]);
 
@@ -1712,12 +1732,19 @@ export const App: React.FC = () => {
           onToggleCollapse={() => toggleSectionCollapse('todayTabs')}
           onFocusTab={focusTab}
           onCloseTab={handleCloseTab}
-          onCloseAll={closeAllUnpinnedTabs}
+          onCloseAll={() => {
+            const ids = visibleUnpinnedTabs
+              .map((t) => t.id)
+              .filter((id): id is number => typeof id === 'number');
+            closeSpaceUnpinnedTabs(ids);
+          }}
           onCloseAllWindowTabs={closeAllWindowTabs}
-          onNewTab={() => createNewTab()}
+          onNewTab={() => createNewTab(undefined, activeSpaceId)}
           onPinToQuickAccess={handlePinTabToQuickAccess}
           onPinToWorkspace={handlePinTabToWorkspace}
           onPinToSpace={handlePinTabToSpace}
+          onMoveTabToSpace={setTabSpace}
+          onMoveMultipleTabsToSpace={moveTabsToSpace}
           onDuplicateTab={duplicateTab}
           onReloadTab={reloadTab}
           onDiscardTab={discardTab}
@@ -1775,7 +1802,20 @@ export const App: React.FC = () => {
         onCreateSpace={createSpace}
         onRenameSpace={renameSpace}
         onDeleteSpace={deleteSpace}
-        onDropItemToSpace={(data, targetFolderId) => handleDropItemToFolder(data, targetFolderId)}
+        onDropItemToSpace={(data, targetFolderId) => {
+          if (data.type === 'openTab') {
+            const targetSpace = spaces.find((s) => s.folderId === targetFolderId || s.id === targetFolderId);
+            if (targetSpace) {
+              if (Array.isArray(data.tabIds) && data.tabIds.length > 0) {
+                moveTabsToSpace(data.tabIds as number[], targetSpace.id);
+              } else if (typeof data.tabId === 'number') {
+                setTabSpace(data.tabId as number, targetSpace.id);
+              }
+              return;
+            }
+          }
+          handleDropItemToFolder(data, targetFolderId);
+        }}
         onOpenContextMenu={handleOpenContextMenu}
         isScratchpadOpen={isScratchpadOpen}
         onToggleScratchpad={handleToggleBottomScratchpad}

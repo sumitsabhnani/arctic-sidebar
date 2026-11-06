@@ -58,6 +58,8 @@ interface OpenTabRowProps {
   onCloseMultipleTabs?: (tabIds: number[]) => void;
   onPinMultipleTabsToWorkspace?: (tabs: chrome.tabs.Tab[]) => void;
   onPinMultipleTabsToSpace?: (tabs: chrome.tabs.Tab[], targetSpaceFolderId: string) => void;
+  onMoveTabToSpace?: (tabId: number, targetSpaceId: string) => void;
+  onMoveMultipleTabsToSpace?: (tabIds: number[], targetSpaceId: string) => void;
   onDiscardMultipleTabs?: (tabIds: number[]) => void;
   isEditing?: boolean;
   editTitle?: string;
@@ -92,6 +94,8 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onCloseMultipleTabs,
   onPinMultipleTabsToWorkspace,
   onPinMultipleTabsToSpace,
+  onMoveTabToSpace,
+  onMoveMultipleTabsToSpace,
   onDiscardMultipleTabs,
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
@@ -123,6 +127,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const isAudible = Boolean(tab.audible);
   const isMuted = Boolean(tab.mutedInfo?.muted);
   const isDiscarded = Boolean(tab.discarded);
+  const isLoading = tab.status === 'loading';
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -133,6 +138,19 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     if (isMultiSelected) {
       const selectedIds = Array.from(selectedTabIds!);
       const multiItems: ContextMenuItem[] = [
+        ...(onMoveMultipleTabsToSpace && spaces.length > 1
+          ? [
+              {
+                label: `Move ${selectedIds.length} Tabs to Space`,
+                icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
+                submenu: spaces.map((sp) => ({
+                  label: sp.name,
+                  icon: <Folder className="w-3.5 h-3.5" />,
+                  action: () => onMoveMultipleTabsToSpace(selectedIds, sp.id)
+                }))
+              }
+            ]
+          : []),
         ...(onPinMultipleTabsToWorkspace
           ? [
               {
@@ -193,6 +211,19 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         action: () => onPinToWorkspace(tab),
         disabled: !tab.url || isNewTab
       },
+      ...(onMoveTabToSpace && spaces.length > 1
+        ? [
+            {
+              label: 'Move Tab to Space',
+              icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
+              submenu: spaces.map((sp) => ({
+                label: sp.name,
+                icon: <Folder className="w-3.5 h-3.5" />,
+                action: () => onMoveTabToSpace(tabId, sp.id)
+              }))
+            }
+          ]
+        : []),
       ...(onPinToSpace && spaces.length > 0 && tab.url && !isNewTab
         ? [
             {
@@ -476,7 +507,9 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       {/* Left: Favicon & Title */}
       <div className="flex items-center min-w-0 flex-1 space-x-2 mr-2">
         <div className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center">
-          {!faviconError && faviconSrc ? (
+          {isLoading ? (
+            <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text" />
+          ) : !faviconError && faviconSrc ? (
             <img
               src={faviconSrc}
               alt=""
@@ -491,7 +524,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           )}
 
           {/* Sleep icon overlay on favicon if hibernated */}
-          {isDiscarded && (
+          {isDiscarded && !isLoading && (
             <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
           )}
         </div>

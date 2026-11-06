@@ -173,4 +173,21 @@ describe('BookmarkRow component', () => {
     expect(docSvg).toBeInTheDocument();
     expect(docSvg?.getAttribute('class') || '').toContain('text-zinc-400');
   });
+
+  it('renders spinning loader icon when bound tab status is loading', () => {
+    const loadingTab = {
+      id: 501,
+      status: 'loading'
+    } as chrome.tabs.Tab;
+
+    const { container } = render(
+      <BookmarkRow
+        {...defaultProps}
+        boundTab={loadingTab}
+      />
+    );
+
+    const spinSvg = container.querySelector('svg.lucide-rotate-cw.animate-spin');
+    expect(spinSvg).toBeInTheDocument();
+  });
 });

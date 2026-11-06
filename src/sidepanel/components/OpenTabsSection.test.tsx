@@ -239,4 +239,57 @@ describe('OpenTabsSection component', () => {
     expect(inputsAfterSecond.length).toBe(1);
     expect(inputsAfterSecond[0]).toHaveValue('GitHub Trending');
   });
+
+  it('renders spinning loader icon when tab status is loading', () => {
+    const loadingTabs: chrome.tabs.Tab[] = [
+      {
+        id: 301,
+        index: 0,
+        windowId: 1,
+        highlighted: false,
+        active: true,
+        pinned: false,
+        incognito: false,
+        url: 'https://loading-site.com',
+        title: 'Loading Site',
+        status: 'loading'
+      } as chrome.tabs.Tab
+    ];
+
+    const { container } = render(
+      <OpenTabsSection {...defaultProps} unpinnedTabs={loadingTabs} activeTabId={301} />
+    );
+
+    const spinSvg = container.querySelector('svg.lucide-rotate-cw.animate-spin');
+    expect(spinSvg).toBeInTheDocument();
+  });
+
+  it('provides Move Tab to Space in context menu when multiple spaces are available', () => {
+    const onMoveTabToSpace = vi.fn();
+    const mockSpaces = [
+      { id: 'home', name: 'Home', folderId: 'f-home', colorTheme: 'glacier-blue' },
+      { id: 'work', name: 'Work', folderId: 'f-work', colorTheme: 'emerald' }
+    ];
+
+    render(
+      <OpenTabsSection
+        {...defaultProps}
+        spaces={mockSpaces}
+        onMoveTabToSpace={onMoveTabToSpace}
+      />
+    );
+
+    const firstTab = screen.getByText('Hacker News').closest('[role="button"]')!;
+    fireEvent.contextMenu(firstTab);
+
+    expect(defaultProps.onOpenContextMenu).toHaveBeenCalled();
+    const menuItems = defaultProps.onOpenContextMenu.mock.calls[0][1];
+    const moveItem = menuItems.find((item: { label: string }) => item.label === 'Move Tab to Space');
+    expect(moveItem).toBeDefined();
+    expect(moveItem.submenu).toHaveLength(2);
+
+    // Trigger submenu move to Work space
+    moveItem.submenu[1].action();
+    expect(onMoveTabToSpace).toHaveBeenCalledWith(101, 'work');
+  });
 });
