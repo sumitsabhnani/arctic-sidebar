@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { isLikelyUrl, formatNavigationUrl, getArcticBookmarks, App } from './App';
+import {
+  findMatchingSiteEngine,
+  getGhostAutocomplete,
+  buildSiteSearchUrl
+} from './utils/siteSearch';
 
 describe('newtab url detection and formatting', () => {
   describe('isLikelyUrl', () => {
@@ -373,6 +378,238 @@ describe('newtab url detection and formatting', () => {
       expect(homeBm?.isQuickAccess).toBe(false);
       expect(homeBm?.spaceName).toBe('Home');
       expect(homeBm?.spaceId).toBe('home');
+    });
+  });
+
+  describe('Arc-style Tab to Search (Site Search Mode)', () => {
+    it('matches site search engines by prefix and alias and computes ghost text', () => {
+      const yt = findMatchingSiteEngine('you');
+      expect(yt?.id).toBe('youtube');
+      expect(getGhostAutocomplete('you', yt)).toBe('tube');
+
+      const gh = findMatchingSiteEngine('gh');
+      expect(gh?.id).toBe('github');
+      expect(buildSiteSearchUrl(gh!, 'arctic sidebar')).toBe(
+        'https://github.com/search?q=arctic%20sidebar'
+      );
+
+      // Multi-word queries or command queries do not trigger site match
+      expect(findMatchingSiteEngine('you tube')).toBeNull();
+      expect(findMatchingSiteEngine('>you')).toBeNull();
+    });
+
+    it('suggests YouTube on typing "you", activates site search pill on Tab, and searches YouTube on Enter', async () => {
+      vi.mocked(chrome.tabs.update).mockClear();
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      // 1. Type "you"
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'you' } });
+      });
+
+      // Verify ghost autocomplete ("tube") and Tab hint badge appear
+      expect(screen.getByTestId('ghost-autocomplete')).toHaveTextContent('youtube');
+      const tabHint = screen.getByTestId('tab-to-search-hint');
+      expect(tabHint).toHaveTextContent('Search YouTube');
+
+      // 2. Press Tab to enter YouTube Site Search Mode
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Tab', code: 'Tab' });
+      });
+
+      // Input clears, active site pill appears, placeholder updates
+      expect(input.value).toBe('');
+      expect(screen.getByTestId('active-site-pill')).toHaveTextContent('Search YouTube');
+      expect(input.placeholder).toBe('Search YouTube...');
+
+      // 3. Type search query for YouTube and press Enter
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'veritasium' } });
+      });
+
+      expect(await screen.findByText('Search YouTube for "veritasium"')).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      });
+
+      expect(chrome.tabs.update).toHaveBeenCalledWith(1, {
+        url: 'https://www.youtube.com/results?search_query=veritasium',
+        active: true
+      });
+    });
+
+    it('exits site search mode when pressing Backspace on empty input', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'you' } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Tab', code: 'Tab' });
+      });
+
+      expect(screen.getByTestId('active-site-pill')).toBeInTheDocument();
+
+      // Press Backspace while query is empty
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Backspace', code: 'Backspace' });
+      });
+
+      expect(screen.queryByTestId('active-site-pill')).not.toBeInTheDocument();
+      expect(input.placeholder).toMatch(/type > for commands/i);
+    });
+
+    it('dismisses the Tab-to-search suggestion pill and keeps "you" when pressing Escape before Tab', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'you' } });
+      });
+
+      expect(screen.getByTestId('tab-to-search-hint')).toBeInTheDocument();
+      expect(screen.getByTestId('ghost-autocomplete')).toBeInTheDocument();
+
+      // Press Escape to dismiss the suggestion pill without clearing "you"
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+      });
+
+      expect(screen.queryByTestId('tab-to-search-hint')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('ghost-autocomplete')).not.toBeInTheDocument();
+      expect(input.value).toBe('you');
+    });
+
+    it('restores "you" and removes the site pill when pressing Escape right after pressing Tab', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'you' } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Tab', code: 'Tab' });
+      });
+
+      expect(screen.getByTestId('active-site-pill')).toBeInTheDocument();
+      expect(input.value).toBe('');
+
+      // Press Escape immediately -> removes pill and restores "you"
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+      });
+
+      expect(screen.queryByTestId('active-site-pill')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('tab-to-search-hint')).not.toBeInTheDocument();
+      expect(input.value).toBe('you');
+    });
+
+    it('removes only the site pill and preserves entered text when pressing Escape in site search mode', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'you' } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Tab', code: 'Tab' });
+      });
+
+      expect(screen.getByTestId('active-site-pill')).toBeInTheDocument();
+
+      // Type text in YouTube search mode
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'lofi hip hop' } });
+      });
+      expect(input.value).toBe('lofi hip hop');
+
+      // First Escape removes the site pill but keeps "lofi hip hop"
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Escape', code: 'Escape' });
+      });
+
+      expect(screen.queryByTestId('active-site-pill')).not.toBeInTheDocument();
+      expect(input.value).toBe('lofi hip hop');
+    });
+
+    it('shows full URLs on second line and loads selected URL into input with cursor at end on ArrowDown + Tab', async () => {
+      const otherNode = (await chrome.bookmarks.getSubTree('2'))[0];
+      const arcticRoot = await chrome.bookmarks.create({
+        parentId: otherNode.id,
+        title: 'Arctic'
+      });
+      const homeFolder = await chrome.bookmarks.create({
+        parentId: arcticRoot.id,
+        title: 'Home'
+      });
+      await chrome.bookmarks.create({
+        parentId: homeFolder.id,
+        title: 'Deep Link Page',
+        url: 'https://docs.example.com/guides/getting-started?tab=1'
+      });
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'deep link' } });
+      });
+
+      // Full URL is rendered on the second line
+      const fullUrlText = await screen.findByText(
+        'https://docs.example.com/guides/getting-started?tab=1'
+      );
+      expect(fullUrlText).toBeInTheDocument();
+
+      // Navigate with ArrowDown / ArrowUp and verify the row Tab hint is shown
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'ArrowDown', code: 'ArrowDown' });
+        fireEvent.keyDown(input, { key: 'ArrowUp', code: 'ArrowUp' });
+      });
+
+      const rowTabHint = screen.getByTestId('row-tab-to-edit-hint');
+      expect(rowTabHint).toHaveTextContent('Tab ⇥');
+
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Tab', code: 'Tab' });
+      });
+
+      const expectedUrl = 'https://docs.example.com/guides/getting-started?tab=1';
+      expect(input.value).toBe(expectedUrl);
+      expect(input.selectionStart).toBe(expectedUrl.length);
+      expect(input.selectionEnd).toBe(expectedUrl.length);
+    });
+
+    it('does not render redundant Arctic Command header title above the command bar', () => {
+      render(<App />);
+      expect(screen.queryByText('Arctic Command')).not.toBeInTheDocument();
+    });
+
+    it('debounces suggestion updates when debounceMs is configured', async () => {
+      vi.useFakeTimers();
+      try {
+        render(<App debounceMs={120} />);
+        const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+        await act(async () => {
+          fireEvent.change(input, { target: { value: '> sleep' } });
+        });
+
+        // Before 120ms debounce elapses, Action Commands are not yet shown
+        expect(screen.queryByText('Sleep Inactive Background Tabs')).not.toBeInTheDocument();
+
+        // Advance timers by 120ms
+        await act(async () => {
+          vi.advanceTimersByTime(125);
+        });
+
+        expect(screen.getByText('Sleep Inactive Background Tabs')).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

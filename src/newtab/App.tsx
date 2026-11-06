@@ -6,7 +6,6 @@ import {
   History,
   CornerDownLeft,
   X,
-  Sparkles,
   Moon,
   Sun,
   Palette,
@@ -20,8 +19,14 @@ import {
   ExternalLink,
   Check
 } from 'lucide-react';
-import type { ColorThemeId, ThemeMode, SpaceItem, TabBinding } from '../types';
+import type { ColorThemeId, ThemeMode, SpaceItem, TabBinding, SiteSearchEngine } from '../types';
 import { getFaviconUrl, getDomainFromUrl, normalizeUrl } from '../sidepanel/utils/url';
+import {
+  findMatchingSiteEngine,
+  getGhostAutocomplete,
+  buildSiteSearchUrl,
+  doesUrlMatchEngineDomain
+} from './utils/siteSearch';
 
 export interface SuggestionItem {
   id: string;
@@ -233,15 +238,61 @@ export async function getArcticBookmarks(): Promise<ArcticBookmarkItem[]> {
   }
 }
 
-export const App: React.FC = () => {
+export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
+  const isJsdom =
+    typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+  const effectiveDebounceMs =
+    typeof debounceMs === 'number' ? debounceMs : isJsdom ? 0 : 120;
+
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
+  const [hasArrowNavigated, setHasArrowNavigated] = useState(false);
   const [theme, setTheme] = useState<ThemeMode>('light');
   const [colorTheme, setColorTheme] = useState<ColorThemeId>('pure-monochrome');
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
+  const [activeSiteEngine, setActiveSiteEngine] = useState<SiteSearchEngine | null>(null);
+  const [siteTriggerQuery, setSiteTriggerQuery] = useState<string>('');
+  const [dismissedEngineId, setDismissedEngineId] = useState<string | null>(null);
+  const [customSearchEngines, setCustomSearchEngines] = useState<SiteSearchEngine[]>([]);
+
+  // Smoothly debounce query changes so the command bar doesn't feel jumpy while typing
+  useEffect(() => {
+    if (effectiveDebounceMs <= 0 || !query.trim()) {
+      setDebouncedQuery(query);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query);
+    }, effectiveDebounceMs);
+    return () => clearTimeout(timer);
+  }, [query, effectiveDebounceMs]);
+
+  const activeQuery = effectiveDebounceMs <= 0 ? query : debouncedQuery;
+
+  const candidateSiteEngine = activeSiteEngine
+    ? null
+    : findMatchingSiteEngine(query, customSearchEngines);
+  const matchedSiteEngine =
+    candidateSiteEngine && candidateSiteEngine.id !== dismissedEngineId
+      ? candidateSiteEngine
+      : null;
+
+  const visualCandidateSiteEngine = activeSiteEngine
+    ? null
+    : findMatchingSiteEngine(activeQuery, customSearchEngines);
+  const visualMatchedSiteEngine =
+    visualCandidateSiteEngine &&
+    visualCandidateSiteEngine.id !== dismissedEngineId &&
+    activeQuery === query
+      ? visualCandidateSiteEngine
+      : null;
+  const ghostSuffix = activeSiteEngine
+    ? ''
+    : getGhostAutocomplete(query, visualMatchedSiteEngine);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -286,9 +337,9 @@ export const App: React.FC = () => {
     }, 2400);
   }, []);
 
-  // Sync theme and palettes with Arctic storage
+  // Sync theme, palettes, and custom search engines with Arctic storage
   useEffect(() => {
-    chrome.storage.local.get(['theme', 'colorTheme'], (res) => {
+    chrome.storage.local.get(['theme', 'colorTheme', 'customSearchEngines'], (res) => {
       if (res.theme === 'light' || res.theme === 'dark') {
         setTheme(res.theme as ThemeMode);
       }
@@ -305,6 +356,9 @@ export const App: React.FC = () => {
       ) {
         setColorTheme(res.colorTheme as ColorThemeId);
       }
+      if (Array.isArray(res.customSearchEngines)) {
+        setCustomSearchEngines(res.customSearchEngines as SiteSearchEngine[]);
+      }
     });
 
     const handleStorageChange = (
@@ -317,6 +371,13 @@ export const App: React.FC = () => {
         }
         if (changes.colorTheme) {
           setColorTheme(changes.colorTheme.newValue as ColorThemeId);
+        }
+        if (changes.customSearchEngines) {
+          setCustomSearchEngines(
+            Array.isArray(changes.customSearchEngines.newValue)
+              ? (changes.customSearchEngines.newValue as SiteSearchEngine[])
+              : []
+          );
         }
       }
     };
@@ -700,7 +761,126 @@ export const App: React.FC = () => {
   // Load suggestions from commands, history, bookmarks, and search
   useEffect(() => {
     let isCancelled = false;
-    const trimmed = query.trim();
+    const trimmed = activeQuery.trim();
+
+    // SITE SEARCH MODE (activated via Tab on a matched site engine)
+    if (activeSiteEngine) {
+      const fetchSiteResults = async () => {
+        const results: SuggestionItem[] = [];
+        const seenUrls = new Set<string>();
+        const lowerTrimmed = trimmed.toLowerCase();
+
+        // 1. Primary Site Search or Open Site action
+        if (trimmed) {
+          const siteSearchUrl = buildSiteSearchUrl(activeSiteEngine, trimmed);
+          results.push({
+            id: `site-search-${activeSiteEngine.id}`,
+            type: 'search',
+            title: `Search ${activeSiteEngine.name} for "${trimmed}"`,
+            url: siteSearchUrl,
+            domain: activeSiteEngine.domain
+          });
+          seenUrls.add(siteSearchUrl.toLowerCase());
+        } else {
+          const siteHomeUrl = `https://${activeSiteEngine.domain}`;
+          results.push({
+            id: `site-open-${activeSiteEngine.id}`,
+            type: 'url',
+            title: `Open ${activeSiteEngine.name}`,
+            url: siteHomeUrl,
+            domain: activeSiteEngine.domain
+          });
+          seenUrls.add(siteHomeUrl.toLowerCase());
+          seenUrls.add(normalizeUrl(siteHomeUrl).toLowerCase());
+        }
+
+        // 2. Domain-scoped Arctic Bookmarks
+        try {
+          const arcticBm = await getArcticBookmarks();
+          arcticBookmarksRef.current = arcticBm;
+          const matchingArctic = arcticBm.filter(
+            (bm) =>
+              doesUrlMatchEngineDomain(bm.url, activeSiteEngine) &&
+              (!lowerTrimmed ||
+                bm.title.toLowerCase().includes(lowerTrimmed) ||
+                bm.url.toLowerCase().includes(lowerTrimmed))
+          );
+
+          for (const bm of matchingArctic) {
+            const norm = normalizeUrl(bm.url).toLowerCase();
+            if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
+              seenUrls.add(bm.url.toLowerCase());
+              seenUrls.add(norm);
+              results.push({
+                id: `arctic-bm-${bm.id}`,
+                type: 'bookmark',
+                title: bm.title,
+                url: bm.url,
+                bookmarkId: bm.id,
+                spaceId: bm.spaceId,
+                spaceName: bm.spaceName,
+                isQuickAccess: bm.isQuickAccess,
+                isArctic: true,
+                domain:
+                  bm.spaceName.toLowerCase() === 'quick access'
+                    ? 'Quick Access'
+                    : `Space: ${bm.spaceName}`
+              });
+              if (results.length >= 6) break;
+            }
+          }
+        } catch {
+          // ignore
+        }
+
+        // 3. Domain-scoped History
+        try {
+          if (chrome?.history?.search) {
+            const historyItems = await chrome.history.search({
+              text: trimmed || activeSiteEngine.domain,
+              maxResults: 12,
+              startTime: 0
+            });
+            for (const item of historyItems) {
+              if (
+                item.url &&
+                doesUrlMatchEngineDomain(item.url, activeSiteEngine) &&
+                (!lowerTrimmed ||
+                  (item.title && item.title.toLowerCase().includes(lowerTrimmed)) ||
+                  item.url.toLowerCase().includes(lowerTrimmed))
+              ) {
+                const norm = normalizeUrl(item.url).toLowerCase();
+                if (!seenUrls.has(item.url.toLowerCase()) && !seenUrls.has(norm)) {
+                  seenUrls.add(item.url.toLowerCase());
+                  seenUrls.add(norm);
+                  results.push({
+                    id: `hist-${item.id}`,
+                    type: 'history',
+                    title: item.title || item.url,
+                    url: item.url,
+                    domain: getDomainFromUrl(item.url)
+                  });
+                  if (results.length >= 8) break;
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+
+        if (!isCancelled) {
+          setSuggestions(results);
+          setSelectedIndex(0);
+        }
+      };
+
+      fetchSiteResults();
+
+      return () => {
+        isCancelled = true;
+      };
+    }
 
     // EXPLICIT COMMAND MODE (starts with '>')
     if (trimmed.startsWith('>')) {
@@ -907,7 +1087,7 @@ export const App: React.FC = () => {
     return () => {
       isCancelled = true;
     };
-  }, [query, getActionCommands]);
+  }, [activeQuery, activeSiteEngine, getActionCommands]);
 
   // Navigate to destination (handling bookmark bindings and space switching)
   const openBookmarkOrUrl = useCallback(
@@ -1171,6 +1351,27 @@ export const App: React.FC = () => {
     [openBookmarkOrUrl]
   );
 
+  // Load a suggestion's URL into the input box and place cursor at the end for editing
+  const autocompleteUrlIntoInput = useCallback((fullUrl: string) => {
+    setActiveSiteEngine(null);
+    setSiteTriggerQuery('');
+    setDismissedEngineId(null);
+    setHasArrowNavigated(false);
+    setQuery(fullUrl);
+    setDebouncedQuery(fullUrl);
+    if (inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.value = fullUrl;
+      inputRef.current.setSelectionRange(fullUrl.length, fullUrl.length);
+    }
+    requestAnimationFrame(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.setSelectionRange(fullUrl.length, fullUrl.length);
+      }
+    });
+  }, []);
+
   // Handle keyboard navigation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (isNavigatingRef.current) {
@@ -1178,27 +1379,91 @@ export const App: React.FC = () => {
       return;
     }
 
+    const selectedItem =
+      selectedIndex >= 0 && selectedIndex < suggestions.length
+        ? suggestions[selectedIndex]
+        : null;
+    const canAutocompleteSelectedUrl =
+      Boolean(
+        selectedItem?.url &&
+          selectedItem.type !== 'command' &&
+          selectedItem.type !== 'search'
+      ) &&
+      (hasArrowNavigated || !matchedSiteEngine || Boolean(activeSiteEngine));
+
+    if (e.key === 'Tab' && !e.shiftKey) {
+      if (canAutocompleteSelectedUrl && selectedItem?.url) {
+        e.preventDefault();
+        autocompleteUrlIntoInput(selectedItem.url);
+        return;
+      }
+
+      if (!activeSiteEngine && matchedSiteEngine) {
+        e.preventDefault();
+        setActiveSiteEngine(matchedSiteEngine);
+        setSiteTriggerQuery(query);
+        setDismissedEngineId(null);
+        setHasArrowNavigated(false);
+        setQuery('');
+        setDebouncedQuery('');
+        setSelectedIndex(0);
+        return;
+      }
+    }
+
+    if (e.key === 'Backspace' && activeSiteEngine && query === '') {
+      e.preventDefault();
+      setActiveSiteEngine(null);
+      setSiteTriggerQuery('');
+      setHasArrowNavigated(false);
+      setSelectedIndex(-1);
+      return;
+    }
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (suggestions.length === 0) return;
+      setHasArrowNavigated(true);
       setSelectedIndex((prev) => (prev + 1) % suggestions.length);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       if (suggestions.length === 0) return;
+      setHasArrowNavigated(true);
       setSelectedIndex((prev) => (prev <= 0 ? suggestions.length - 1 : prev - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (selectedIndex >= 0 && selectedIndex < suggestions.length) {
+      const isDebouncePending = activeQuery.trim() !== query.trim();
+      if (!isDebouncePending && selectedIndex >= 0 && selectedIndex < suggestions.length) {
         handleSelect(suggestions[selectedIndex]);
+      } else if (activeSiteEngine) {
+        openBookmarkOrUrl(buildSiteSearchUrl(activeSiteEngine, query));
       } else if (query.trim() && !query.trim().startsWith('>')) {
         openBookmarkOrUrl(formatNavigationUrl(query));
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
-      setQuery('');
-      setSelectedIndex(-1);
+      setHasArrowNavigated(false);
+      if (activeSiteEngine) {
+        const restoredQuery = query || siteTriggerQuery;
+        setDismissedEngineId(activeSiteEngine.id);
+        setActiveSiteEngine(null);
+        setSiteTriggerQuery('');
+        setQuery(restoredQuery);
+        setDebouncedQuery(restoredQuery);
+      } else if (matchedSiteEngine) {
+        setDismissedEngineId(matchedSiteEngine.id);
+      } else {
+        setQuery('');
+        setDebouncedQuery('');
+        setDismissedEngineId(null);
+        setSelectedIndex(-1);
+      }
     }
   };
+
+  const activeSiteFavicon = activeSiteEngine
+    ? getFaviconUrl(`https://${activeSiteEngine.domain}`, 32)
+    : '';
 
   return (
     <div
@@ -1235,16 +1500,6 @@ export const App: React.FC = () => {
             : 'animate-in fade-in zoom-in-95 duration-150'
         }`}
       >
-        {/* Brand Header */}
-        <div className="flex items-center justify-center space-x-2 pb-1">
-          <div className="w-6 h-6 rounded-lg bg-[var(--theme-accent)] flex items-center justify-center shadow-md">
-            <Sparkles className="w-3.5 h-3.5 text-white" />
-          </div>
-          <span className="text-sm font-semibold tracking-wide text-zinc-500 dark:text-zinc-400">
-            Arctic Command
-          </span>
-        </div>
-
         {/* Command Card */}
         <div
           style={{
@@ -1255,39 +1510,128 @@ export const App: React.FC = () => {
         >
           {/* Top Search Input Box */}
           <div className="flex items-center px-4 py-3.5 space-x-3 border-b border-zinc-200/80 dark:border-white/10">
-            {query.trim().startsWith('>') ? (
+            {activeSiteEngine ? (
+              <div
+                data-testid="active-site-pill"
+                className="flex items-center space-x-1.5 pl-2.5 pr-1.5 py-1 rounded-lg theme-active-card border text-xs font-semibold text-zinc-900 dark:text-white flex-shrink-0 animate-in fade-in zoom-in-95 duration-100"
+              >
+                {activeSiteFavicon ? (
+                  <img
+                    src={activeSiteFavicon}
+                    alt=""
+                    className="w-3.5 h-3.5 object-contain rounded-xs"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <Search className="w-3.5 h-3.5 theme-accent-text" />
+                )}
+                <span>Search {activeSiteEngine.name}</span>
+                <button
+                  type="button"
+                  aria-label={`Exit ${activeSiteEngine.name} search`}
+                  onClick={() => {
+                    const restoredQuery = query || siteTriggerQuery;
+                    setDismissedEngineId(activeSiteEngine.id);
+                    setActiveSiteEngine(null);
+                    setSiteTriggerQuery('');
+                    setHasArrowNavigated(false);
+                    setQuery(restoredQuery);
+                    setDebouncedQuery(restoredQuery);
+                    inputRef.current?.focus();
+                  }}
+                  className="p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            ) : query.trim().startsWith('>') ? (
               <Command className="w-5 h-5 theme-accent-text flex-shrink-0 animate-in fade-in duration-100" />
             ) : (
               <Search className="w-5 h-5 text-zinc-400 flex-shrink-0" />
             )}
-            <input
-              ref={inputRef}
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Search Google, enter URL, or type > for commands..."
-              autoFocus
-              disabled={isNavigating}
-              className="flex-1 bg-transparent text-[16px] leading-normal text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 outline-none font-normal disabled:opacity-40"
-            />
+
+            <div className="relative flex-1 flex items-center min-w-0">
+              {ghostSuffix && (
+                <div
+                  aria-hidden="true"
+                  data-testid="ghost-autocomplete"
+                  className="pointer-events-none absolute inset-0 flex items-center text-[16px] leading-normal font-normal overflow-hidden whitespace-pre"
+                >
+                  <span className="invisible">{query}</span>
+                  <span className="text-zinc-400/70 dark:text-zinc-500/80">
+                    {ghostSuffix}
+                  </span>
+                </div>
+              )}
+              <input
+                ref={inputRef}
+                type="text"
+                value={query}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setQuery(val);
+                  setHasArrowNavigated(false);
+                  if (!val.trim()) {
+                    setDismissedEngineId(null);
+                  }
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder={
+                  activeSiteEngine
+                    ? `Search ${activeSiteEngine.name}...`
+                    : 'Search Google, enter URL, or type > for commands...'
+                }
+                autoFocus
+                disabled={isNavigating}
+                className="relative z-10 w-full bg-transparent text-[16px] leading-normal text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 outline-none font-normal disabled:opacity-40"
+              />
+            </div>
+
+            {visualMatchedSiteEngine && !activeSiteEngine && (
+              <button
+                type="button"
+                data-testid="tab-to-search-hint"
+                onClick={() => {
+                  setActiveSiteEngine(visualMatchedSiteEngine);
+                  setSiteTriggerQuery(query);
+                  setDismissedEngineId(null);
+                  setHasArrowNavigated(false);
+                  setQuery('');
+                  setDebouncedQuery('');
+                  setSelectedIndex(0);
+                  inputRef.current?.focus();
+                }}
+                className="flex items-center space-x-1.5 px-2 py-1 rounded-lg bg-zinc-200/70 dark:bg-white/10 hover:bg-zinc-300/70 dark:hover:bg-white/15 border border-black/10 dark:border-white/10 text-zinc-700 dark:text-zinc-200 text-[11px] font-medium transition-colors flex-shrink-0 animate-in fade-in duration-100"
+              >
+                <span className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/15 text-[10px] font-mono leading-none">
+                  Tab ⇥
+                </span>
+                <span>Search {visualMatchedSiteEngine.name}</span>
+              </button>
+            )}
+
             {query ? (
               <button
                 type="button"
                 onClick={() => {
                   setQuery('');
+                  setDebouncedQuery('');
+                  setHasArrowNavigated(false);
+                  setDismissedEngineId(null);
                   inputRef.current?.focus();
                 }}
-                className="p-1 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+                className="p-1 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors flex-shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
-            ) : (
-              <div className="flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-200/60 dark:bg-white/10 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+            ) : !activeSiteEngine ? (
+              <div className="flex items-center space-x-1 px-2 py-0.5 rounded bg-zinc-200/60 dark:bg-white/10 text-[11px] font-medium text-zinc-500 dark:text-zinc-400 flex-shrink-0">
                 <CornerDownLeft className="w-3 h-3 mr-0.5" />
                 <span>Jump</span>
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Suggestions Dropdown */}
@@ -1296,13 +1640,15 @@ export const App: React.FC = () => {
               ref={listRef}
               className="max-h-[360px] overflow-y-auto p-1.5 space-y-0.5"
             >
-              {!query.trim() && (
+              {!activeQuery.trim() && (
                 <div className="px-3 py-1.5 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
-                  Frequently Visited
+                  {activeSiteEngine
+                    ? `${activeSiteEngine.name} Search & Recent`
+                    : 'Frequently Visited'}
                 </div>
               )}
 
-              {query.trim().startsWith('>') && (
+              {activeQuery.trim().startsWith('>') && (
                 <div className="px-3 py-1.5 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider flex items-center justify-between">
                   <span>Action Commands</span>
                   <span className="text-[10px] text-zinc-400 font-normal">
@@ -1362,6 +1708,10 @@ export const App: React.FC = () => {
                           <span className="truncate text-[11.5px] text-zinc-400 dark:text-zinc-500 mt-0.5">
                             {item.description}
                           </span>
+                        ) : item.url && item.type !== 'search' ? (
+                          <span className="truncate text-[11.5px] text-zinc-400 dark:text-zinc-500 mt-0.5">
+                            {item.url}
+                          </span>
                         ) : item.domain ? (
                           <span className="truncate text-[11.5px] text-zinc-400 dark:text-zinc-500 mt-0.5">
                             {item.domain}
@@ -1392,6 +1742,23 @@ export const App: React.FC = () => {
                           Search
                         </span>
                       )}
+                      {isSelected &&
+                        item.url &&
+                        item.type !== 'command' &&
+                        item.type !== 'search' && (
+                          <button
+                            type="button"
+                            data-testid="row-tab-to-edit-hint"
+                            title="Press Tab or click to edit URL in search bar"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              autocompleteUrlIntoInput(item.url!);
+                            }}
+                            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-zinc-500 dark:text-zinc-400 border border-black/10 dark:border-white/10 transition-colors animate-in fade-in duration-100"
+                          >
+                            <span>Tab ⇥</span>
+                          </button>
+                        )}
                       {isSelected && (
                         <CornerDownLeft className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 animate-in fade-in duration-100" />
                       )}

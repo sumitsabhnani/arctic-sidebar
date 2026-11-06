@@ -2,6 +2,32 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TabBinding, LocalSettings } from '../../types';
 import { normalizeUrl, isUrlNavigatedAway, isScratchpadUrl } from '../utils/url';
 
+export function isArcticCommandTab(tab: chrome.tabs.Tab): boolean {
+  const rawUrl = (tab.url || tab.pendingUrl || '').trim().toLowerCase();
+  const pendingUrl = (tab.pendingUrl || '').trim().toLowerCase();
+  const rawTitle = (tab.title || '').trim();
+
+  const isCommandOrNewTabUrl = (u: string) =>
+    u.startsWith('chrome://newtab') ||
+    u.startsWith('edge://newtab') ||
+    u === 'about:newtab' ||
+    u.includes('/newtab.html') ||
+    u.includes('/command.html');
+
+  if (isCommandOrNewTabUrl(rawUrl) || isCommandOrNewTabUrl(pendingUrl)) {
+    return true;
+  }
+
+  if (
+    rawTitle === 'Arctic Command' &&
+    (!rawUrl || rawUrl === 'about:blank' || rawUrl.startsWith('chrome-extension://'))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function useTabBindings(activeSpaceId: string = 'home') {
   const [bindingsByBookmarkId, setBindingsByBookmarkId] = useState<Record<string, TabBinding>>({});
   const [bookmarkIdByTabId, setBookmarkIdByTabId] = useState<Record<number, string>>({});
@@ -296,16 +322,23 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     ) => {
       // Update in-place to avoid expensive query on every micro status event
       setWindowTabs((prev) =>
-        prev.map((t) =>
-          t.id === tabId
-            ? {
-                ...t,
-                ...tab,
-                ...changeInfo,
-                title: customTabTitlesRef.current[tabId] || changeInfo.title || tab.title || t.title
-              }
-            : t
-        )
+        prev.map((t) => {
+          if (t.id !== tabId) return t;
+          const merged = {
+            ...t,
+            ...tab,
+            ...changeInfo
+          };
+          const rawCandidateTitle = changeInfo.title || tab.title || t.title;
+          const cleanTitle =
+            !isArcticCommandTab(merged) && rawCandidateTitle === 'Arctic Command'
+              ? changeInfo.url || tab.url || 'Loading...'
+              : rawCandidateTitle;
+          return {
+            ...merged,
+            title: customTabTitlesRef.current[tabId] || cleanTitle
+          };
+        })
       );
 
       if (!changeInfo.url && changeInfo.status !== 'complete' && !changeInfo.title) {
@@ -481,9 +514,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
   /**
    * Filter window tabs that are NOT bound to any bookmark (unpinned / temp tabs)
+   * and exclude the Arctic Command / New Tab launcher until it navigates to a real page
    */
   const unpinnedTabs = windowTabs.filter(
-    (tab) => typeof tab.id === 'number' && !bookmarkIdByTabId[tab.id]
+    (tab) =>
+      typeof tab.id === 'number' &&
+      !bookmarkIdByTabId[tab.id] &&
+      !isArcticCommandTab(tab)
   );
 
   /**
