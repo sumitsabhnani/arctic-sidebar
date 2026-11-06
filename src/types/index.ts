@@ -32,6 +32,15 @@ export interface SpaceItem {
   quickAccessFolderId?: string;
 }
 
+export interface SiteSearchEngine {
+  id: string;
+  name: string;
+  domain: string;
+  shortcut: string;
+  aliases?: string[];
+  searchUrlTemplate: string;
+}
+
 export interface LocalSettings {
   quickAccessFolderId?: string;
   workspaceFolderId?: string;
@@ -53,6 +62,7 @@ export interface LocalSettings {
     workspace?: boolean;
     todayTabs?: boolean;
   };
+  customSearchEngines?: SiteSearchEngine[];
 }
 
 export interface BookmarkFolderOption {

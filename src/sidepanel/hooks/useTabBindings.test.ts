@@ -549,4 +549,42 @@ describe('useTabBindings hook', () => {
 
     expect(mockChrome.tabs.remove).toHaveBeenCalledWith([201]);
   });
+
+  it('excludes Arctic Command / newtab tabs from unpinnedTabs until the user searches or navigates', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 301,
+        windowId: 10,
+        url: 'https://news.ycombinator.com',
+        title: 'Hacker News',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 302,
+        windowId: 10,
+        url: 'chrome-extension://mock-extension-id/command.html',
+        title: 'Arctic Command',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // While Arctic Command is open, tab 302 is NOT in Today's Tabs (unpinnedTabs)
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([301]);
+
+    // Once user searches for something and tab 302 navigates to a search URL, it appears in Today's Tabs
+    await act(async () => {
+      await mockChrome.tabs.update(302, {
+        url: 'https://www.youtube.com/results?search_query=music',
+        title: 'music - YouTube'
+      } as any);
+    });
+
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([301, 302]);
+    expect(result.current.unpinnedTabs.find((t) => t.id === 302)?.title).toBe('music - YouTube');
+  });
 });
