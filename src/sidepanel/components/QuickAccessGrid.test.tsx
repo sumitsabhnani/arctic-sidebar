@@ -127,4 +127,29 @@ describe('QuickAccessGrid component', () => {
     duplicateItem.action();
     expect(defaultProps.onDuplicateTab).toHaveBeenCalledWith(101);
   });
+
+  it('renders Scratchpad and Google Doc tiles with monochrome icons', () => {
+    const specialBookmarks: chrome.bookmarks.BookmarkTreeNode[] = [
+      { id: 'qa-note', title: 'Daily Scratchpad', url: 'https://arctic.local/note/note_today', index: 0 },
+      { id: 'qa-doc', title: 'Roadmap Doc', url: 'https://docs.new', index: 1 }
+    ];
+
+    const { container } = render(
+      <QuickAccessGrid
+        {...defaultProps}
+        bookmarks={specialBookmarks}
+        bindingsByBookmarkId={{}}
+        tabsByTabId={{}}
+      />
+    );
+
+    const noteIcon = container.querySelector('svg.lucide-sticky-note');
+    const docIcon = container.querySelector('svg.lucide-file-text');
+
+    expect(noteIcon).toBeInTheDocument();
+    expect(noteIcon?.getAttribute('class') || '').toContain('text-zinc-400');
+
+    expect(docIcon).toBeInTheDocument();
+    expect(docIcon?.getAttribute('class') || '').toContain('text-zinc-400');
+  });
 });

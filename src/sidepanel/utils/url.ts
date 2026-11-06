@@ -132,3 +132,31 @@ export function getDomainFromUrl(url: string): string {
     return url;
   }
 }
+
+export const ARCTIC_SCRATCHPAD_PREFIX = 'https://arctic.local/note/';
+
+export function isScratchpadUrl(url?: string): boolean {
+  if (!url) return false;
+  return url.startsWith(ARCTIC_SCRATCHPAD_PREFIX) || url.startsWith('arctic://note/');
+}
+
+export function getScratchpadNoteId(url?: string): string {
+  if (!url) return '';
+  if (url.startsWith(ARCTIC_SCRATCHPAD_PREFIX)) {
+    return url.slice(ARCTIC_SCRATCHPAD_PREFIX.length);
+  }
+  if (url.startsWith('arctic://note/')) {
+    return url.slice('arctic://note/'.length);
+  }
+  return '';
+}
+
+export function isGoogleDocUrl(url?: string): boolean {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes('docs.new') ||
+    lower.includes('document.new') ||
+    lower.includes('docs.google.com/document')
+  );
+}

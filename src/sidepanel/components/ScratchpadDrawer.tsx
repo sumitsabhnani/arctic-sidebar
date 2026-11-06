@@ -20,6 +20,8 @@ interface ScratchpadDrawerProps {
   syncStatus: ScratchpadSyncStatus;
   onClear: () => void;
   maxChars?: number;
+  title?: string;
+  placeholder?: string;
 }
 
 export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
@@ -29,7 +31,9 @@ export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
   onChange,
   syncStatus,
   onClear,
-  maxChars = MAX_CHARS
+  maxChars = MAX_CHARS,
+  title = 'Scratchpad',
+  placeholder = 'Quick notes, URLs, or snippets (synced across devices)...'
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [copied, setCopied] = useState(false);
@@ -78,8 +82,8 @@ export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
         {/* Left: Icon & Title */}
         <div className="flex items-center space-x-2">
           <StickyNote className="w-3.5 h-3.5 theme-accent-text" />
-          <span className="text-xs font-semibold text-zinc-900 dark:text-white">
-            Scratchpad
+          <span className="text-xs font-semibold text-zinc-900 dark:text-white truncate max-w-[140px]">
+            {title}
           </span>
 
           {/* Sync Status Badge */}
@@ -181,7 +185,7 @@ export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
           maxLength={maxChars}
-          placeholder="Quick notes, URLs, or snippets (synced across devices)..."
+          placeholder={placeholder}
           className="w-full flex-1 bg-transparent text-xs text-zinc-800 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-500 font-mono resize-none focus:outline-none selection:bg-[var(--theme-accent-bg)] leading-relaxed custom-scrollbar select-text"
         />
       </div>

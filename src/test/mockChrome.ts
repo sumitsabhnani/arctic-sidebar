@@ -428,11 +428,13 @@ export function createMockChrome() {
           }
         }
         if (props.url !== undefined) tab.url = props.url;
+        if ((props as any).title !== undefined) tab.title = (props as any).title;
         if (props.muted !== undefined) {
           tab.mutedInfo = { muted: props.muted };
         }
         const changeInfo: chrome.tabs.TabChangeInfo = {};
         if (props.url) changeInfo.url = props.url;
+        if ((props as any).title) changeInfo.title = (props as any).title;
         for (const listener of tabUpdatedListeners) {
           listener(tabId, changeInfo, cloneTree(tab));
         }
@@ -510,7 +512,11 @@ export function createMockChrome() {
     },
     windows: {
       WINDOW_ID_NONE: -1,
-      getCurrent: vi.fn(async () => cloneTree(windowsState[0])),
+      getCurrent: vi.fn(async (cb?: (win: chrome.windows.Window) => void) => {
+        const win = cloneTree(windowsState[0]);
+        if (typeof cb === 'function') cb(win);
+        return win;
+      }),
       get: vi.fn(async (winId: number) => {
         const win = windowsState.find((w) => w.id === winId);
         return win ? cloneTree(win) : cloneTree(windowsState[0]);

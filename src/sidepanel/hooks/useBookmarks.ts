@@ -462,25 +462,6 @@ export function useBookmarks() {
         parentId: arcticSidebar.id,
         title: 'Home'
       });
-
-      if (isNewSidebar) {
-        const devFolder = await chrome.bookmarks.create({
-          parentId: homeFolder.id,
-          title: 'Development'
-        });
-        await Promise.all([
-          chrome.bookmarks.create({
-            parentId: devFolder.id,
-            title: 'Tailwind CSS Docs',
-            url: 'https://tailwindcss.com/docs'
-          }),
-          chrome.bookmarks.create({
-            parentId: devFolder.id,
-            title: 'Chrome Extensions Docs',
-            url: 'https://developer.chrome.com/docs/extensions'
-          })
-        ]);
-      }
     }
 
     // Ensure 'Home / Quick Access' exists and migrate any root-level 'Quick Access' or 'Quick Access (Home)' into it
@@ -1183,6 +1164,44 @@ export function useBookmarks() {
     [loadBookmarks]
   );
 
+  // Move one or more bookmarks/folders to a target folder (with optional index) and refresh
+  const moveBookmarks = useCallback(
+    async (ids: string[], targetParentId: string, targetIndex?: number) => {
+      if (!ids.length || !targetParentId) return;
+      isInternalMutationRef.current = true;
+      try {
+        let curIndex = targetIndex;
+        for (const id of ids) {
+          if (id === targetParentId) continue;
+          try {
+            if (typeof curIndex === 'number') {
+              const children = await chrome.bookmarks.getChildren(targetParentId);
+              const isAlreadyChild = children.some((c) => c.id === id);
+              const maxIndex = isAlreadyChild ? Math.max(0, children.length - 1) : children.length;
+              const safeIndex = Math.min(Math.max(0, curIndex), maxIndex);
+              await chrome.bookmarks.move(id, {
+                parentId: targetParentId,
+                index: safeIndex
+              });
+              curIndex = safeIndex + 1;
+            } else {
+              await chrome.bookmarks.move(id, { parentId: targetParentId });
+            }
+          } catch (moveErr) {
+            console.warn('[Arctic] Error moving individual bookmark with index, retrying without index:', moveErr);
+            await chrome.bookmarks.move(id, { parentId: targetParentId });
+          }
+        }
+      } catch (err) {
+        console.warn('[Arctic] Could not move bookmarks:', err);
+      } finally {
+        isInternalMutationRef.current = false;
+      }
+      await loadBookmarks();
+    },
+    [loadBookmarks]
+  );
+
   // Set up listeners for real-time Chrome bookmark sync
   useEffect(() => {
     loadBookmarks();
@@ -1254,6 +1273,7 @@ export function useBookmarks() {
     renameSpace,
     deleteSpace,
     moveNodeToSpace,
+    moveBookmarks,
     activeFolderIds,
     setQuickAccessFolderId,
     setWorkspaceFolderId,

@@ -28,6 +28,12 @@ interface OpenTabsSectionProps {
   getReminderForTab?: (tabId: number, url?: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
   densityMode?: 'relaxed' | 'compact';
+  selectedTabIds?: Set<number>;
+  onSelectTab?: (tab: chrome.tabs.Tab, e: React.MouseEvent) => void;
+  onCloseMultipleTabs?: (tabIds: number[]) => void;
+  onPinMultipleTabsToWorkspace?: (tabs: chrome.tabs.Tab[]) => void;
+  onPinMultipleTabsToSpace?: (tabs: chrome.tabs.Tab[], targetSpaceFolderId: string) => void;
+  onDiscardMultipleTabs?: (tabIds: number[]) => void;
   editingTabId?: number | null;
   editingTitle?: string;
   onStartRename?: (tab: chrome.tabs.Tab) => void;
@@ -60,6 +66,12 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   getReminderForTab,
   onOpenReminderPopover,
   densityMode = 'compact',
+  selectedTabIds,
+  onSelectTab,
+  onCloseMultipleTabs,
+  onPinMultipleTabsToWorkspace,
+  onPinMultipleTabsToSpace,
+  onDiscardMultipleTabs,
   editingTabId: controlledEditingTabId,
   editingTitle: controlledEditingTitle,
   onStartRename: controlledOnStartRename,
@@ -406,6 +418,13 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   reminder={typeof tab.id === 'number' ? getReminderForTab?.(tab.id, tab.url) : undefined}
                   onOpenReminderPopover={onOpenReminderPopover}
                   densityMode={densityMode}
+                  isSelected={typeof tab.id === 'number' && Boolean(selectedTabIds?.has(tab.id))}
+                  selectedTabIds={selectedTabIds}
+                  onSelectTab={onSelectTab}
+                  onCloseMultipleTabs={onCloseMultipleTabs}
+                  onPinMultipleTabsToWorkspace={onPinMultipleTabsToWorkspace}
+                  onPinMultipleTabsToSpace={onPinMultipleTabsToSpace}
+                  onDiscardMultipleTabs={onDiscardMultipleTabs}
                   isEditing={isEditing}
                   editTitle={isEditing ? (effectiveEditingTitle || '') : (tab.title || '')}
                   onStartRename={() => handleStartRename(tab)}

@@ -91,4 +91,15 @@ describe('SettingsModal component', () => {
     expect(onDiscard).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/Hibernated 3 background tabs/i)).toBeInTheDocument();
   });
+
+  it('renders Sidebar Position section and clicking Open Settings opens Chrome Appearance', () => {
+    render(<SettingsModal {...defaultProps} />);
+    expect(screen.getByText('Sidebar Position (Left / Right)')).toBeInTheDocument();
+    expect(screen.getByText(/Chrome places side panels on the right by default/i)).toBeInTheDocument();
+
+    const openSettingsBtn = screen.getByRole('button', { name: /Open Settings/i });
+    fireEvent.click(openSettingsBtn);
+
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'chrome://settings/appearance' });
+  });
 });

@@ -285,6 +285,21 @@ export function useTabBindings() {
           const currentTitle = tab.title || existing.currentTitle;
           const isNavAway = isUrlNavigatedAway(currentUrl, existing.originalUrl);
 
+          // If this was a docs.new link and it redirected to an active Google Doc, update bookmark URL
+          if (
+            existing.originalUrl === 'https://docs.new' &&
+            currentUrl &&
+            currentUrl.startsWith('https://docs.google.com/document/d/')
+          ) {
+            existing.originalUrl = currentUrl;
+            chrome.bookmarks.update(bookmarkId, {
+              url: currentUrl,
+              ...(tab.title && !tab.title.includes('docs.new') && tab.title !== 'New Google Doc'
+                ? { title: tab.title.replace(' - Google Docs', '').trim() }
+                : {})
+            }).catch(() => {});
+          }
+
           if (
             currentUrl === existing.currentUrl &&
             currentTitle === existing.currentTitle &&
@@ -537,37 +552,88 @@ export function useTabBindings() {
   }, [windowTabs, persistSession, refreshWindowTabs]);
 
   /**
+   * Pin one or more unpinned tabs to a bookmark folder (Quick Access or Home/Space).
+   * If a tab is already bound to a bookmark (e.g. in another space), moves that bookmark instead of duplicating it.
+   */
+  const pinMultipleTabs = useCallback(
+    async (tabs: chrome.tabs.Tab[], targetFolderId: string, targetIndex?: number) => {
+      if (!tabs.length || !targetFolderId) return;
+
+      let storedBindings: Record<string, TabBinding> = {};
+      let storedByTab: Record<number, string> = {};
+      try {
+        const session = await chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']);
+        storedBindings = (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+        storedByTab = (session.bookmarkIdByTabId as Record<number, string>) || {};
+      } catch {
+        // ignore
+      }
+
+      const nextBindings: Record<string, TabBinding> = {
+        ...bindingsByBookmarkId,
+        ...storedBindings
+      };
+      const nextByTab: Record<number, string> = {
+        ...bookmarkIdByTabId,
+        ...storedByTab
+      };
+
+      let curIndex = targetIndex;
+      for (const tab of tabs) {
+        if (typeof tab.id !== 'number' || !tab.url) continue;
+
+        const existingBookmarkId = nextByTab[tab.id];
+        if (existingBookmarkId) {
+          try {
+            await chrome.bookmarks.move(existingBookmarkId, {
+              parentId: targetFolderId,
+              ...(typeof curIndex === 'number' ? { index: curIndex } : {})
+            });
+            if (typeof curIndex === 'number') curIndex += 1;
+            continue;
+          } catch {
+            delete nextBindings[existingBookmarkId];
+            delete nextByTab[tab.id];
+          }
+        }
+
+        const title = tab.title || tab.url || 'Pinned Tab';
+        const newBookmark = await chrome.bookmarks.create({
+          parentId: targetFolderId,
+          title,
+          url: tab.url,
+          ...(typeof curIndex === 'number' ? { index: curIndex } : {})
+        });
+        if (typeof curIndex === 'number') curIndex += 1;
+
+        const newBinding: TabBinding = {
+          bookmarkId: newBookmark.id,
+          tabId: tab.id,
+          windowId: tab.windowId,
+          originalUrl: tab.url,
+          currentUrl: tab.url,
+          currentTitle: title,
+          isNavigatedAway: false
+        };
+
+        nextBindings[newBookmark.id] = newBinding;
+        nextByTab[tab.id] = newBookmark.id;
+      }
+
+      await persistSession(nextBindings, nextByTab);
+      await refreshWindowTabs();
+    },
+    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
+  );
+
+  /**
    * Pin an unpinned tab to a bookmark folder (Quick Access or Home/Space)
    */
   const pinTab = useCallback(
     async (tab: chrome.tabs.Tab, targetFolderId: string, targetIndex?: number) => {
-      if (typeof tab.id !== 'number' || !tab.url) return;
-
-      const title = tab.title || tab.url || 'Pinned Tab';
-      const newBookmark = await chrome.bookmarks.create({
-        parentId: targetFolderId,
-        title,
-        url: tab.url,
-        ...(typeof targetIndex === 'number' ? { index: targetIndex } : {})
-      });
-
-      const newBinding: TabBinding = {
-        bookmarkId: newBookmark.id,
-        tabId: tab.id,
-        windowId: tab.windowId,
-        originalUrl: tab.url,
-        currentUrl: tab.url,
-        currentTitle: title,
-        isNavigatedAway: false
-      };
-
-      const newBindings = { ...bindingsByBookmarkId, [newBookmark.id]: newBinding };
-      const newByTab = { ...bookmarkIdByTabId, [tab.id]: newBookmark.id };
-
-      await persistSession(newBindings, newByTab);
-      await refreshWindowTabs();
+      await pinMultipleTabs([tab], targetFolderId, targetIndex);
     },
-    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
+    [pinMultipleTabs]
   );
 
   /**
@@ -1021,6 +1087,7 @@ export function useTabBindings() {
     closeAllUnpinnedTabs,
     closeAllWindowTabs,
     pinTab,
+    pinMultipleTabs,
     duplicateTab,
     reloadTab,
     reloadActiveTab,

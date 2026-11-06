@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeUrl, isUrlNavigatedAway, getDomainFromUrl, getFaviconUrl } from './url';
+import {
+  normalizeUrl,
+  isUrlNavigatedAway,
+  getDomainFromUrl,
+  getFaviconUrl,
+  isScratchpadUrl,
+  getScratchpadNoteId,
+  isGoogleDocUrl,
+  ARCTIC_SCRATCHPAD_PREFIX
+} from './url';
 
 describe('url utilities', () => {
   describe('normalizeUrl', () => {
@@ -86,6 +95,52 @@ describe('url utilities', () => {
     // Negative / Edge cases
     it('returns empty string if pageUrl is empty', () => {
       expect(getFaviconUrl('')).toBe('');
+    });
+  });
+
+  describe('isScratchpadUrl and getScratchpadNoteId', () => {
+    it('detects https://arctic.local/note/ as scratchpad URL and extracts ID', () => {
+      const noteUrl = `${ARCTIC_SCRATCHPAD_PREFIX}note_12345`;
+      expect(isScratchpadUrl(noteUrl)).toBe(true);
+      expect(getScratchpadNoteId(noteUrl)).toBe('note_12345');
+    });
+
+    it('detects arctic://note/ as scratchpad URL and extracts ID', () => {
+      const legacyNoteUrl = 'arctic://note/note_abcde';
+      expect(isScratchpadUrl(legacyNoteUrl)).toBe(true);
+      expect(getScratchpadNoteId(legacyNoteUrl)).toBe('note_abcde');
+    });
+
+    it('returns false and empty string for non-scratchpad URLs or empty strings', () => {
+      expect(isScratchpadUrl('https://google.com')).toBe(false);
+      expect(getScratchpadNoteId('https://google.com')).toBe('');
+      expect(isScratchpadUrl('')).toBe(false);
+      expect(getScratchpadNoteId('')).toBe('');
+      expect(isScratchpadUrl(undefined)).toBe(false);
+      expect(getScratchpadNoteId(undefined)).toBe('');
+    });
+  });
+
+  describe('isGoogleDocUrl', () => {
+    it('detects docs.new shortcut URL', () => {
+      expect(isGoogleDocUrl('https://docs.new')).toBe(true);
+      expect(isGoogleDocUrl('http://docs.new/')).toBe(true);
+    });
+
+    it('detects document.new shortcut URL', () => {
+      expect(isGoogleDocUrl('https://document.new')).toBe(true);
+    });
+
+    it('detects Google Docs document editor URLs', () => {
+      expect(isGoogleDocUrl('https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit')).toBe(true);
+    });
+
+    it('returns false for other services or non-doc URLs', () => {
+      expect(isGoogleDocUrl('https://docs.google.com/spreadsheets/d/123')).toBe(false);
+      expect(isGoogleDocUrl('https://docs.google.com/presentation/d/123')).toBe(false);
+      expect(isGoogleDocUrl('https://google.com')).toBe(false);
+      expect(isGoogleDocUrl('')).toBe(false);
+      expect(isGoogleDocUrl(undefined)).toBe(false);
     });
   });
 });

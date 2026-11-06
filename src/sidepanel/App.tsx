@@ -14,7 +14,8 @@ import { useScratchpad } from './hooks/useScratchpad';
 import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
-import { Loader2, FolderPlus, Folder, Check, X, Bell } from 'lucide-react';
+import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft } from 'lucide-react';
+import { isScratchpadUrl, getScratchpadNoteId } from './utils/url';
 
 export const App: React.FC = () => {
   const {
@@ -38,6 +39,7 @@ export const App: React.FC = () => {
     renameBookmarkOrFolder,
     updateBookmarkUrl,
     removeBookmarkOrFolder,
+    moveBookmarks,
     loading
   } = useBookmarks();
 
@@ -57,6 +59,7 @@ export const App: React.FC = () => {
     closeAllUnpinnedTabs,
     closeAllWindowTabs,
     pinTab,
+    pinMultipleTabs,
     duplicateTab,
     reloadTab,
     reloadActiveTab,
@@ -278,6 +281,156 @@ export const App: React.FC = () => {
     chrome.storage.local.set({ showMemorySaverBar: show } as LocalSettings);
   }, []);
 
+  // First-run Left-Side Tip State
+  const [showLeftSideTip, setShowLeftSideTip] = useState(false);
+
+  const dismissLeftSideTip = useCallback(() => {
+    setShowLeftSideTip(false);
+    chrome.storage.local.set({ hasDismissedLeftSideTip: true } as LocalSettings);
+  }, []);
+
+  useEffect(() => {
+    let resolved = false;
+    let cleanupListeners = () => {};
+
+    chrome.storage.local.get(
+      [
+        'hasDismissedLeftSideTip',
+        'spaces',
+        'workspaceFolderId',
+        'quickAccessFolderId',
+        'collapsedFolderIds',
+        'theme',
+        'colorTheme',
+        'densityMode',
+        'quickAccessDensity',
+        'tabsDensity',
+        'showMemorySaverBar',
+        'autoArchiveInterval'
+      ],
+      async (res) => {
+        if (res.hasDismissedLeftSideTip) {
+          resolved = true;
+          return;
+        }
+
+        // Suppress if user already had Arctic installed previously
+        const hasExistingConfig = Boolean(
+          (Array.isArray(res.spaces) && res.spaces.length > 1) ||
+            (Array.isArray(res.collapsedFolderIds) && res.collapsedFolderIds.length > 0) ||
+            res.theme ||
+            res.colorTheme ||
+            res.densityMode ||
+            res.quickAccessDensity ||
+            res.tabsDensity ||
+            res.showMemorySaverBar !== undefined ||
+            res.autoArchiveInterval !== undefined
+        );
+        if (hasExistingConfig) {
+          dismissLeftSideTip();
+          resolved = true;
+          return;
+        }
+
+        // 1. Check native Chrome 140+ side panel layout API if available
+        if (typeof (chrome?.sidePanel as any)?.getLayout === 'function') {
+          try {
+            const layout = await (chrome.sidePanel as any).getLayout();
+            if (layout && layout.side) {
+              resolved = true;
+              if (layout.side === 'left') {
+                dismissLeftSideTip();
+              } else if (layout.side === 'right') {
+                setShowLeftSideTip(true);
+              }
+              return;
+            }
+          } catch {
+            // Fall through to pointer/window detection
+          }
+        }
+
+        // 2. Unit tests (JSDOM): Show tip so tests can verify dismissal & buttons
+        const isJsdom =
+          typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
+        if (isJsdom) {
+          setShowLeftSideTip(true);
+          resolved = true;
+          return;
+        }
+
+        // 3. Fallback for real browser: Detect docked position on first pointer interaction
+        cleanupListeners = () => {
+          window.removeEventListener('pointermove', handlePointer);
+          window.removeEventListener('pointerdown', handlePointer);
+          window.removeEventListener('mouseenter', handlePointer);
+        };
+
+        const handlePointer = (e: MouseEvent | PointerEvent) => {
+          if (resolved) return;
+          if (!chrome?.windows?.getCurrent) {
+            resolved = true;
+            cleanupListeners();
+            setShowLeftSideTip(true);
+            return;
+          }
+
+          chrome.windows.getCurrent((win) => {
+            if (resolved) return;
+            if (win) {
+              resolved = true;
+              cleanupListeners();
+              const panelScreenLeft = e.screenX - e.clientX;
+              const relativeX =
+                typeof win.left === 'number'
+                  ? panelScreenLeft - win.left
+                  : panelScreenLeft;
+              const halfWidth =
+                typeof win.width === 'number' && win.width > 0
+                  ? win.width / 2
+                  : (window.screen?.availWidth || 1920) / 2;
+
+              if (relativeX < halfWidth) {
+                // Docked on the LEFT: auto-dismiss and never show!
+                dismissLeftSideTip();
+              } else {
+                // Docked on the RIGHT: show the tip banner
+                setShowLeftSideTip(true);
+              }
+            }
+          });
+        };
+
+        window.addEventListener('pointermove', handlePointer, { passive: true });
+        window.addEventListener('pointerdown', handlePointer, { passive: true });
+        window.addEventListener('mouseenter', handlePointer, { passive: true });
+      }
+    );
+
+    return () => {
+      resolved = true;
+      cleanupListeners();
+    };
+  }, [dismissLeftSideTip]);
+
+  // Folder Scratchpad Active Note State
+  const [activeNote, setActiveNote] = useState<{
+    id: string;
+    bookmarkId: string;
+    title: string;
+  } | null>(null);
+  const [noteContent, setNoteContent] = useState<string>('');
+  const [noteSyncStatus, setNoteSyncStatus] = useState<'Synced' | 'Saving...' | 'Offline - Saved locally'>('Synced');
+  const noteDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Multi-Selection State for Bookmarks & Today's Tabs
+  const [selectedBookmarkIds, setSelectedBookmarkIds] = useState<Set<string>>(new Set());
+  const [lastSelectedBookmarkId, setLastSelectedBookmarkId] = useState<string | null>(null);
+  const lastSelectedBookmarkIdRef = React.useRef<string | null>(null);
+  const [selectedTabIds, setSelectedTabIds] = useState<Set<number>>(new Set());
+  const [lastSelectedTabId, setLastSelectedTabId] = useState<number | null>(null);
+  const lastSelectedTabIdRef = React.useRef<number | null>(null);
+
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -295,6 +448,45 @@ export const App: React.FC = () => {
     activeSpaceObj?.name ||
     (workspaceNode?.title?.toLowerCase() === 'workspace' ? 'Home' : workspaceNode?.title) ||
     'Home';
+
+  const quickAccessBookmarks = quickAccessNode?.children || [];
+  // Filter out the Quick Access subfolder from the Active Space tree so it only renders in the top Quick Access grid
+  const workspaceBookmarks = useMemo(() => {
+    return (workspaceNode?.children || []).filter(
+      (child) =>
+        child.id !== activeFolderIds.quickAccessId &&
+        !(!child.url && child.title.trim().toLowerCase() === 'quick access')
+    );
+  }, [workspaceNode?.children, activeFolderIds.quickAccessId]);
+
+  const activeBookmarkIds = useMemo(() => {
+    const ids = new Set<string>();
+    const collect = (node?: chrome.bookmarks.BookmarkTreeNode | null) => {
+      if (!node) return;
+      if (node.url && node.id) {
+        ids.add(node.id);
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          collect(child);
+        }
+      }
+    };
+    collect(quickAccessNode);
+    collect(workspaceNode);
+    return ids;
+  }, [quickAccessNode, workspaceNode]);
+
+  const visibleUnpinnedTabs = useMemo(() => {
+    return unpinnedTabs.concat(
+      Object.values(tabsByTabId).filter((tab) => {
+        if (typeof tab.id !== 'number') return false;
+        const boundId = bookmarkIdByTabId[tab.id];
+        // If tab is bound to a bookmark that is NOT in the active space's Quick Access or Workspace, show it in Today's Tabs so it is never hidden
+        return Boolean(boundId && !activeBookmarkIds.has(boundId));
+      })
+    ).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+  }, [unpinnedTabs, tabsByTabId, bookmarkIdByTabId, activeBookmarkIds]);
 
   // Inline Space / Home Root Folder Renaming
   const [isRenamingWorkspace, setIsRenamingWorkspace] = useState(false);
@@ -398,6 +590,9 @@ export const App: React.FC = () => {
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
         e.preventDefault();
         reloadActiveTab(e.shiftKey);
+      } else if (e.key === 'Escape') {
+        setSelectedBookmarkIds(new Set());
+        setSelectedTabIds(new Set());
       }
     };
 
@@ -519,27 +714,394 @@ export const App: React.FC = () => {
   );
 
   /**
+   * Open a folder scratchpad note in the drawer
+   */
+  const handleOpenScratchpadNote = useCallback(
+    async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
+      const noteId = getScratchpadNoteId(bookmark.url);
+      if (!noteId) return;
+
+      // If this note is already open, clicking it again toggles it closed
+      if (isScratchpadOpen && activeNote && activeNote.bookmarkId === bookmark.id) {
+        setIsScratchpadOpen(false);
+        setActiveNote(null);
+        return;
+      }
+
+      try {
+        const data = await chrome.storage.local.get([`arctic_note_${noteId}`]);
+        const text = (data[`arctic_note_${noteId}`] as string) || '';
+        setActiveNote({
+          id: noteId,
+          bookmarkId: bookmark.id,
+          title: bookmark.title || 'Scratchpad'
+        });
+        setNoteContent(text);
+        setNoteSyncStatus('Synced');
+        setIsScratchpadOpen(true);
+      } catch (err) {
+        console.warn('[Arctic] Error loading scratchpad note:', err);
+      }
+    },
+    [isScratchpadOpen, activeNote, setIsScratchpadOpen]
+  );
+
+  const handleNoteContentChange = useCallback(
+    (newText: string) => {
+      setNoteContent(newText);
+      if (!activeNote) return;
+      setNoteSyncStatus('Saving...');
+      if (noteDebounceTimerRef.current) {
+        clearTimeout(noteDebounceTimerRef.current);
+      }
+      noteDebounceTimerRef.current = setTimeout(async () => {
+        try {
+          await chrome.storage.local.set({ [`arctic_note_${activeNote.id}`]: newText });
+          setNoteSyncStatus('Synced');
+        } catch {
+          setNoteSyncStatus('Offline - Saved locally');
+        }
+      }, 400);
+    },
+    [activeNote]
+  );
+
+  const handleClearNoteContent = useCallback(async () => {
+    setNoteContent('');
+    if (!activeNote) return;
+    if (noteDebounceTimerRef.current) clearTimeout(noteDebounceTimerRef.current);
+    await chrome.storage.local.set({ [`arctic_note_${activeNote.id}`]: '' });
+    setNoteSyncStatus('Synced');
+  }, [activeNote]);
+
+  const handleCloseScratchpadDrawer = useCallback(() => {
+    setIsScratchpadOpen(false);
+    setActiveNote(null);
+  }, [setIsScratchpadOpen]);
+
+  /**
+   * Create a new Scratchpad note inside a target folder
+   */
+  const handleCreateScratchpad = useCallback(
+    async (targetFolderId: string) => {
+      try {
+        const noteId = `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        const title = 'Scratchpad';
+        const url = `https://arctic.local/note/${noteId}`;
+        const newBookmark = await chrome.bookmarks.create({
+          parentId: targetFolderId,
+          title,
+          url
+        });
+        await chrome.storage.local.set({ [`arctic_note_${noteId}`]: '' });
+        setActiveNote({
+          id: noteId,
+          bookmarkId: newBookmark.id,
+          title
+        });
+        setNoteContent('');
+        setNoteSyncStatus('Synced');
+        setIsScratchpadOpen(true);
+      } catch (err) {
+        console.warn('[Arctic] Could not create scratchpad note:', err);
+      }
+    },
+    [setIsScratchpadOpen]
+  );
+
+  /**
+   * Create a new Google Doc bookmark in a target folder and open https://docs.new
+   */
+  const handleCreateGoogleDoc = useCallback(
+    async (targetFolderId: string) => {
+      try {
+        const newBookmark = await chrome.bookmarks.create({
+          parentId: targetFolderId,
+          title: 'New Google Doc',
+          url: 'https://docs.new'
+        });
+        const newTab = await chrome.tabs.create({ url: 'https://docs.new', active: true });
+        if (typeof newTab.id === 'number') {
+          const newBinding: TabBinding = {
+            bookmarkId: newBookmark.id,
+            tabId: newTab.id,
+            windowId: newTab.windowId,
+            originalUrl: 'https://docs.new',
+            currentUrl: 'https://docs.new',
+            currentTitle: 'New Google Doc',
+            isNavigatedAway: false
+          };
+          await chrome.storage.session.set({
+            bindingsByBookmarkId: { ...bindingsByBookmarkId, [newBookmark.id]: newBinding },
+            bookmarkIdByTabId: { ...bookmarkIdByTabId, [newTab.id]: newBookmark.id }
+          });
+        }
+      } catch (err) {
+        console.warn('[Arctic] Could not create Google Doc bookmark:', err);
+      }
+    },
+    [bindingsByBookmarkId, bookmarkIdByTabId]
+  );
+
+  // Helper to collect all visible bookmark IDs under current space tree for range selection
+  const getVisibleBookmarkIds = useCallback(
+    (nodes: chrome.bookmarks.BookmarkTreeNode[]): string[] => {
+      const result: string[] = [];
+      const traverse = (list: chrome.bookmarks.BookmarkTreeNode[]) => {
+        for (const node of list) {
+          if (node.url) {
+            result.push(node.id);
+          } else {
+            const isCollapsed = collapsedFolderIds[node.id] !== undefined ? Boolean(collapsedFolderIds[node.id]) : true;
+            if (!isCollapsed && node.children) {
+              traverse(node.children);
+            }
+          }
+        }
+      };
+      traverse(nodes);
+      return result;
+    },
+    [collapsedFolderIds]
+  );
+
+  const handleSelectBookmark = useCallback(
+    (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => {
+      if (e.metaKey || e.ctrlKey) {
+        setSelectedBookmarkIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(bookmark.id)) {
+            next.delete(bookmark.id);
+          } else {
+            next.add(bookmark.id);
+          }
+          return next;
+        });
+        setLastSelectedBookmarkId(bookmark.id);
+        lastSelectedBookmarkIdRef.current = bookmark.id;
+      } else if (e.shiftKey) {
+        const visibleIds = getVisibleBookmarkIds(workspaceBookmarks);
+        const anchorId =
+          lastSelectedBookmarkIdRef.current ||
+          lastSelectedBookmarkId ||
+          (selectedBookmarkIds.size > 0 ? Array.from(selectedBookmarkIds)[0] : null);
+
+        const idxA = anchorId ? visibleIds.indexOf(anchorId) : -1;
+        const idxB = visibleIds.indexOf(bookmark.id);
+
+        if (idxA !== -1 && idxB !== -1) {
+          const start = Math.min(idxA, idxB);
+          const end = Math.max(idxA, idxB);
+          const range = visibleIds.slice(start, end + 1);
+          setSelectedBookmarkIds(new Set(range));
+        } else {
+          setSelectedBookmarkIds(new Set([bookmark.id]));
+          setLastSelectedBookmarkId(bookmark.id);
+          lastSelectedBookmarkIdRef.current = bookmark.id;
+        }
+      } else {
+        setSelectedBookmarkIds(new Set());
+        setLastSelectedBookmarkId(bookmark.id);
+        lastSelectedBookmarkIdRef.current = bookmark.id;
+      }
+    },
+    [workspaceBookmarks, getVisibleBookmarkIds, lastSelectedBookmarkId, selectedBookmarkIds]
+  );
+
+  const handleSelectTab = useCallback(
+    (tab: chrome.tabs.Tab, e: React.MouseEvent) => {
+      if (typeof tab.id !== 'number') return;
+      const tid = tab.id;
+      if (e.metaKey || e.ctrlKey) {
+        setSelectedTabIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(tid)) {
+            next.delete(tid);
+          } else {
+            next.add(tid);
+          }
+          return next;
+        });
+        setLastSelectedTabId(tid);
+        lastSelectedTabIdRef.current = tid;
+      } else if (e.shiftKey) {
+        const visibleTabIds = visibleUnpinnedTabs
+          .map((t) => t.id)
+          .filter((id): id is number => typeof id === 'number');
+
+        const anchorId =
+          typeof lastSelectedTabIdRef.current === 'number'
+            ? lastSelectedTabIdRef.current
+            : typeof lastSelectedTabId === 'number'
+            ? lastSelectedTabId
+            : selectedTabIds.size > 0
+            ? Array.from(selectedTabIds)[0]
+            : null;
+
+        const idxA = typeof anchorId === 'number' ? visibleTabIds.indexOf(anchorId) : -1;
+        const idxB = visibleTabIds.indexOf(tid);
+
+        if (idxA !== -1 && idxB !== -1) {
+          const start = Math.min(idxA, idxB);
+          const end = Math.max(idxA, idxB);
+          const range = visibleTabIds.slice(start, end + 1);
+          setSelectedTabIds(new Set(range));
+        } else {
+          setSelectedTabIds(new Set([tid]));
+          setLastSelectedTabId(tid);
+          lastSelectedTabIdRef.current = tid;
+        }
+      } else {
+        setSelectedTabIds(new Set());
+        setLastSelectedTabId(tid);
+        lastSelectedTabIdRef.current = tid;
+      }
+    },
+    [visibleUnpinnedTabs, lastSelectedTabId, selectedTabIds]
+  );
+
+  const handleDeleteMultipleBookmarks = useCallback(
+    async (ids: string[]) => {
+      for (const id of ids) {
+        await handleDeleteBookmark(id);
+      }
+      setSelectedBookmarkIds(new Set());
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  );
+
+  const handleMoveMultipleBookmarksToSpace = useCallback(
+    async (ids: string[], targetSpaceFolderId: string) => {
+      await moveBookmarks(ids, targetSpaceFolderId);
+      setSelectedBookmarkIds(new Set());
+      setLastSelectedBookmarkId(null);
+      lastSelectedBookmarkIdRef.current = null;
+    },
+    [moveBookmarks]
+  );
+
+  const handleCloseMultipleTabs = useCallback(
+    async (tabIds: number[]) => {
+      for (const tid of tabIds) {
+        await handleCloseTab(tid);
+      }
+      setSelectedTabIds(new Set());
+    },
+    [handleCloseTab]
+  );
+
+  const handlePinMultipleTabsToWorkspace = useCallback(
+    async (_tabs: chrome.tabs.Tab[]) => {
+      const ids = Array.from(selectedTabIds);
+      const targetTabs = ids
+        .map(
+          (id) =>
+            visibleUnpinnedTabs.find((t) => t.id === id) ||
+            tabsByTabId[id] ||
+            unpinnedTabs.find((t) => t.id === id)
+        )
+        .filter((t): t is chrome.tabs.Tab => Boolean(t));
+      if (activeFolderIds.workspaceId && targetTabs.length > 0) {
+        await pinMultipleTabs(targetTabs, activeFolderIds.workspaceId);
+      }
+      setSelectedTabIds(new Set());
+      setLastSelectedTabId(null);
+      lastSelectedTabIdRef.current = null;
+    },
+    [selectedTabIds, visibleUnpinnedTabs, tabsByTabId, unpinnedTabs, activeFolderIds.workspaceId, pinMultipleTabs]
+  );
+
+  const handlePinMultipleTabsToSpace = useCallback(
+    async (_tabs: chrome.tabs.Tab[], targetSpaceFolderId: string) => {
+      const ids = Array.from(selectedTabIds);
+      const targetTabs = ids
+        .map(
+          (id) =>
+            visibleUnpinnedTabs.find((t) => t.id === id) ||
+            tabsByTabId[id] ||
+            unpinnedTabs.find((t) => t.id === id)
+        )
+        .filter((t): t is chrome.tabs.Tab => Boolean(t));
+      if (targetTabs.length > 0) {
+        await pinMultipleTabs(targetTabs, targetSpaceFolderId);
+      }
+      setSelectedTabIds(new Set());
+      setLastSelectedTabId(null);
+      lastSelectedTabIdRef.current = null;
+    },
+    [selectedTabIds, visibleUnpinnedTabs, tabsByTabId, unpinnedTabs, pinMultipleTabs]
+  );
+
+  const handleDiscardMultipleTabs = useCallback(
+    async (tabIds: number[]) => {
+      for (const tid of tabIds) {
+        if (discardTab) await discardTab(tid);
+      }
+      setSelectedTabIds(new Set());
+    },
+    [discardTab]
+  );
+
+  /**
    * Handle drop of items (unpinned tab, bookmark, or folder) onto a folder, bookmark, or space
    */
   const handleDropItemToFolder = useCallback(
     async (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => {
-      if (data.type === 'openTab' && typeof data.tabId === 'number') {
-        const tab = unpinnedTabs.find((t) => t.id === data.tabId) || {
-          id: data.tabId as number,
-          url: (data.url as string) || '',
-          title: (data.title as string) || 'Pinned Tab',
-          windowId: 0
-        };
-        await pinTab(tab as chrome.tabs.Tab, targetFolderId, targetIndex);
-      } else if ((data.type === 'bookmark' || data.type === 'folder') && typeof data.id === 'string') {
-        if (data.id === targetFolderId) return;
-        await chrome.bookmarks.move(data.id, {
-          parentId: targetFolderId,
-          ...(typeof targetIndex === 'number' ? { index: targetIndex } : {})
-        });
+      if (data.type === 'openTab') {
+        const tabIds: number[] =
+          Array.isArray(data.tabIds) && data.tabIds.length > 0
+            ? (data.tabIds as number[])
+            : typeof data.tabId === 'number'
+            ? [data.tabId as number]
+            : [];
+
+        const tabsToPin: chrome.tabs.Tab[] = [];
+        for (const tid of tabIds) {
+          const tab =
+            visibleUnpinnedTabs.find((t) => t.id === tid) ||
+            tabsByTabId[tid] ||
+            unpinnedTabs.find((t) => t.id === tid) || {
+              id: tid,
+              url: (data.url as string) || '',
+              title: (data.title as string) || 'Pinned Tab',
+              windowId: 0
+            };
+          tabsToPin.push(tab as chrome.tabs.Tab);
+        }
+
+        if (tabsToPin.length > 0) {
+          await pinMultipleTabs(tabsToPin, targetFolderId, targetIndex);
+        }
+        setSelectedTabIds(new Set());
+        setLastSelectedTabId(null);
+        lastSelectedTabIdRef.current = null;
+      } else if (data.type === 'bookmark' || data.type === 'folder') {
+        const rawIds: string[] =
+          Array.isArray(data.ids) && data.ids.length > 0
+            ? (data.ids as string[])
+            : typeof data.id === 'string'
+            ? [data.id as string]
+            : [];
+        const ids = rawIds.filter((bid) => bid !== targetFolderId);
+        if (ids.length > 0) {
+          const visibleIds = getVisibleBookmarkIds(workspaceBookmarks);
+          const sortedIds = [...ids].sort((a, b) => {
+            const idxA = visibleIds.indexOf(a);
+            const idxB = visibleIds.indexOf(b);
+            if (idxA === -1 && idxB === -1) return 0;
+            if (idxA === -1) return 1;
+            if (idxB === -1) return -1;
+            return idxA - idxB;
+          });
+          await moveBookmarks(sortedIds, targetFolderId, targetIndex);
+        }
+        setSelectedBookmarkIds(new Set());
+        setLastSelectedBookmarkId(null);
+        lastSelectedBookmarkIdRef.current = null;
       }
     },
-    [pinTab, unpinnedTabs]
+    [visibleUnpinnedTabs, tabsByTabId, unpinnedTabs, pinMultipleTabs, workspaceBookmarks, getVisibleBookmarkIds, moveBookmarks]
   );
 
   /**
@@ -566,15 +1128,28 @@ export const App: React.FC = () => {
   const handleMoveBookmarkToIndex = useCallback(
     async (draggedId: string, targetParentId: string, targetIndex?: number) => {
       try {
-        await chrome.bookmarks.move(draggedId, {
-          parentId: targetParentId,
-          ...(typeof targetIndex === 'number' ? { index: targetIndex } : {})
+        const ids =
+          selectedBookmarkIds.has(draggedId) && selectedBookmarkIds.size > 1
+            ? Array.from(selectedBookmarkIds)
+            : [draggedId];
+        const visibleIds = getVisibleBookmarkIds(workspaceBookmarks);
+        const sortedIds = [...ids].sort((a, b) => {
+          const idxA = visibleIds.indexOf(a);
+          const idxB = visibleIds.indexOf(b);
+          if (idxA === -1 && idxB === -1) return 0;
+          if (idxA === -1) return 1;
+          if (idxB === -1) return -1;
+          return idxA - idxB;
         });
+        await moveBookmarks(sortedIds, targetParentId, targetIndex);
+        setSelectedBookmarkIds(new Set());
+        setLastSelectedBookmarkId(null);
+        lastSelectedBookmarkIdRef.current = null;
       } catch (err) {
         console.warn('[Arctic] Could not reorder bookmark:', err);
       }
     },
-    []
+    [selectedBookmarkIds, workspaceBookmarks, getVisibleBookmarkIds, moveBookmarks]
   );
 
   /**
@@ -615,20 +1190,29 @@ export const App: React.FC = () => {
         try {
           const [subtree] = await chrome.bookmarks.getSubTree(id);
           const collectDescendants = (node: chrome.bookmarks.BookmarkTreeNode) => {
-            if (node.id) bookmarkIdsToClose.push(node.id);
+            if (node.id) {
+              bookmarkIdsToClose.push(node.id);
+              if (isScratchpadUrl(node.url)) {
+                const noteId = getScratchpadNoteId(node.url);
+                if (noteId) {
+                  chrome.storage.local.remove([`arctic_note_${noteId}`]);
+                }
+              }
+            }
             if (node.children) {
               for (const child of node.children) {
                 collectDescendants(child);
               }
             }
           };
-          if (subtree.children) {
-            for (const child of subtree.children) {
-              collectDescendants(child);
-            }
-          }
+          collectDescendants(subtree);
         } catch {
           // ignore if subtree cannot be queried
+        }
+
+        if (activeNote && (activeNote.bookmarkId === id || bookmarkIdsToClose.includes(activeNote.bookmarkId))) {
+          setActiveNote(null);
+          setIsScratchpadOpen(false);
         }
 
         for (const bId of bookmarkIdsToClose) {
@@ -644,37 +1228,8 @@ export const App: React.FC = () => {
         await removeBookmarkOrFolder(id);
       }
     },
-    [bindingsByBookmarkId, handleCloseTab, removeBookmarkOrFolder]
+    [bindingsByBookmarkId, handleCloseTab, removeBookmarkOrFolder, activeNote, setIsScratchpadOpen]
   );
-
-  const activeBookmarkIds = useMemo(() => {
-    const ids = new Set<string>();
-    const collect = (node?: chrome.bookmarks.BookmarkTreeNode | null) => {
-      if (!node) return;
-      if (node.url && node.id) {
-        ids.add(node.id);
-      }
-      if (node.children) {
-        for (const child of node.children) {
-          collect(child);
-        }
-      }
-    };
-    collect(quickAccessNode);
-    collect(workspaceNode);
-    return ids;
-  }, [quickAccessNode, workspaceNode]);
-
-  const visibleUnpinnedTabs = useMemo(() => {
-    return unpinnedTabs.concat(
-      Object.values(tabsByTabId).filter((tab) => {
-        if (typeof tab.id !== 'number') return false;
-        const boundId = bookmarkIdByTabId[tab.id];
-        // If tab is bound to a bookmark that is NOT in the active space's Quick Access or Workspace, show it in Today's Tabs so it is never hidden
-        return Boolean(boundId && !activeBookmarkIds.has(boundId));
-      })
-    ).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
-  }, [unpinnedTabs, tabsByTabId, bookmarkIdByTabId, activeBookmarkIds]);
 
   const discardedTabsCount = useMemo(() => {
     let count = 0;
@@ -689,17 +1244,51 @@ export const App: React.FC = () => {
     return count;
   }, [discardedTabsByTabId, unpinnedTabs]);
 
-  const quickAccessBookmarks = quickAccessNode?.children || [];
-  // Filter out the Quick Access subfolder from the Active Space tree so it only renders in the top Quick Access grid
-  const workspaceBookmarks = (workspaceNode?.children || []).filter(
-    (child) =>
-      child.id !== activeFolderIds.quickAccessId &&
-      !(!child.url && child.title.trim().toLowerCase() === 'quick access')
-  );
+  const handleToggleBottomScratchpad = useCallback(() => {
+    if (activeNote) {
+      if (isScratchpadOpen) {
+        setIsScratchpadOpen(false);
+        setActiveNote(null);
+      } else {
+        setActiveNote(null);
+        setIsScratchpadOpen(true);
+      }
+    } else {
+      toggleScratchpadOpen();
+    }
+  }, [activeNote, isScratchpadOpen, setIsScratchpadOpen, toggleScratchpadOpen]);
+
+  const handleContainerClick = useCallback((e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) {
+      if (selectedBookmarkIds.size > 0) setSelectedBookmarkIds(new Set());
+      if (selectedTabIds.size > 0) setSelectedTabIds(new Set());
+      setLastSelectedBookmarkId(null);
+      lastSelectedBookmarkIdRef.current = null;
+      setLastSelectedTabId(null);
+      lastSelectedTabIdRef.current = null;
+    }
+  }, [selectedBookmarkIds.size, selectedTabIds.size]);
 
   return (
     <div
       style={{ background: 'var(--theme-bg-gradient)' }}
+      onPointerDown={(e) => {
+        if (showLeftSideTip && chrome?.windows?.getCurrent) {
+          chrome.windows.getCurrent((win) => {
+            if (
+              win &&
+              typeof win.left === 'number' &&
+              typeof win.width === 'number' &&
+              win.width > 0
+            ) {
+              const panelScreenLeft = e.screenX - e.clientX;
+              if (panelScreenLeft - win.left < win.width / 2) {
+                dismissLeftSideTip();
+              }
+            }
+          });
+        }
+      }}
       className="flex flex-col h-screen w-full text-zinc-800 dark:text-zinc-100 select-none overflow-hidden font-sans transition-colors duration-200"
     >
       {/* Header with Address Bar */}
@@ -710,6 +1299,48 @@ export const App: React.FC = () => {
         onNavigateActiveTab={navigateActiveTab}
         onGoBackActiveTab={goBackActiveTab}
       />
+
+      {/* First-Run Left-Side Positioning Tip Banner */}
+      {showLeftSideTip && (
+        <div className="mx-2.5 mt-2 p-2.5 rounded-xl bg-cyan-500/10 dark:bg-cyan-500/15 border border-cyan-500/25 text-zinc-800 dark:text-zinc-200 flex items-start gap-2 text-xs shadow-xs animate-in fade-in slide-in-from-top-1">
+          <PanelLeft className="w-4 h-4 text-cyan-600 dark:text-cyan-400 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-zinc-900 dark:text-zinc-100">
+              Prefer Arctic on the Left?
+            </div>
+            <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5 leading-relaxed">
+              Chrome opens sidebars on the right by default. You can switch sidebar alignment to the left anytime in Chrome Appearance Settings.
+            </p>
+            <div className="flex items-center gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  dismissLeftSideTip();
+                  chrome.tabs.create({ url: 'chrome://settings/appearance' });
+                }}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors shadow-xs active:scale-95"
+              >
+                Open Settings
+              </button>
+              <button
+                type="button"
+                onClick={dismissLeftSideTip}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-600 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={dismissLeftSideTip}
+            title="Dismiss"
+            className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors -mr-1 -mt-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Top Overdue Tab Reminders Banner */}
       {firedReminders.length > 0 && (
@@ -795,12 +1426,15 @@ export const App: React.FC = () => {
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 space-y-4">
+      <div
+        onClick={handleContainerClick}
+        className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 py-3 space-y-4"
+      >
         {/* Section 2: Active Space / Home Vertical Tabs Tree (Permanent Bookmarks & Folders) */}
         <div
           onDragOver={(e) => {
             e.preventDefault();
-            e.dataTransfer.dropEffect = 'copy';
+            e.dataTransfer.dropEffect = 'move';
             setIsWorkspaceDragOver(true);
           }}
           onDragLeave={() => setIsWorkspaceDragOver(false)}
@@ -995,13 +1629,24 @@ export const App: React.FC = () => {
                       onChangeEditTitle={handleChangeEditTitle}
                       onSaveRename={handleSaveRename}
                       onCancelRename={handleCancelRename}
+                      onCreateScratchpad={handleCreateScratchpad}
+                      onCreateGoogleDoc={handleCreateGoogleDoc}
+                      onOpenScratchpadNote={handleOpenScratchpadNote}
+                      activeNoteId={isScratchpadOpen && activeNote ? activeNote.bookmarkId : null}
+                      selectedBookmarkIds={selectedBookmarkIds}
+                      onSelectBookmark={handleSelectBookmark}
+                      onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
+                      onMoveMultipleBookmarksToSpace={handleMoveMultipleBookmarksToSpace}
                     />
                   );
                 }
 
                 const binding = bindingsByBookmarkId[child.id];
                 const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
-                const isActive = Boolean(binding && binding.tabId === activeTabId);
+                const isNote = isScratchpadUrl(child.url);
+                const isActive = isNote
+                  ? Boolean(isScratchpadOpen && activeNote && activeNote.bookmarkId === child.id)
+                  : Boolean(binding && binding.tabId === activeTabId);
                 const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
                 const isEditing = Boolean(editingTarget && editingTarget.type === 'bookmark' && editingTarget.id === child.id);
 
@@ -1044,6 +1689,12 @@ export const App: React.FC = () => {
                     onChangeEditTitle={handleChangeEditTitle}
                     onSaveRename={handleSaveRename}
                     onCancelRename={handleCancelRename}
+                    isSelected={Boolean(selectedBookmarkIds.has(child.id))}
+                    selectedBookmarkIds={selectedBookmarkIds}
+                    onSelectBookmark={handleSelectBookmark}
+                    onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
+                    onMoveMultipleBookmarksToSpace={handleMoveMultipleBookmarksToSpace}
+                    onOpenScratchpadNote={handleOpenScratchpadNote}
                   />
                 );
               })
@@ -1084,6 +1735,12 @@ export const App: React.FC = () => {
           onChangeEditTitle={handleChangeEditTitle}
           onSaveRename={handleSaveRename}
           onCancelRename={handleCancelRename}
+          selectedTabIds={selectedTabIds}
+          onSelectTab={handleSelectTab}
+          onCloseMultipleTabs={handleCloseMultipleTabs}
+          onPinMultipleTabsToWorkspace={handlePinMultipleTabsToWorkspace}
+          onPinMultipleTabsToSpace={handlePinMultipleTabsToSpace}
+          onDiscardMultipleTabs={handleDiscardMultipleTabs}
         />
       </div>
 
@@ -1100,12 +1757,14 @@ export const App: React.FC = () => {
       {/* Slide-Up Scratchpad Drawer */}
       <ScratchpadDrawer
         isOpen={isScratchpadOpen}
-        onClose={() => setIsScratchpadOpen(false)}
-        text={scratchpadText}
-        onChange={setScratchpadText}
-        syncStatus={scratchpadStatus}
-        onClear={clearScratchpad}
+        onClose={handleCloseScratchpadDrawer}
+        text={activeNote ? noteContent : scratchpadText}
+        onChange={activeNote ? handleNoteContentChange : setScratchpadText}
+        syncStatus={activeNote ? noteSyncStatus : scratchpadStatus}
+        onClear={activeNote ? handleClearNoteContent : clearScratchpad}
         maxChars={maxScratchpadChars}
+        title={activeNote ? activeNote.title : 'Scratchpad'}
+        placeholder={activeNote ? 'Write notes for this folder...' : 'Quick notes, URLs, or snippets (synced across devices)...'}
       />
 
       {/* Bottom Multiple Spaces Switcher Dock / Footer Bar */}
@@ -1119,7 +1778,7 @@ export const App: React.FC = () => {
         onDropItemToSpace={(data, targetFolderId) => handleDropItemToFolder(data, targetFolderId)}
         onOpenContextMenu={handleOpenContextMenu}
         isScratchpadOpen={isScratchpadOpen}
-        onToggleScratchpad={toggleScratchpadOpen}
+        onToggleScratchpad={handleToggleBottomScratchpad}
         hasScratchpadText={Boolean(scratchpadText.trim())}
         onOpenSettings={() => setIsSettingsOpen(true)}
         showMemorySaverBar={showMemorySaverBar}
