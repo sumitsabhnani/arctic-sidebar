@@ -271,6 +271,146 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     delete (chrome.sidePanel as any).getLayout;
   });
 
+  it('detects left-side docking from pointer coordinates in real browser and suppresses tip', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: '111', title: 'Google', url: 'https://google.com' }]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setSyncStorage({});
+
+    // Mock chrome.windows.getCurrent to simulate Chrome browser window
+    chrome.windows.getCurrent = vi.fn((cb?: (win: any) => void) => {
+      const win = { id: 1, left: 0, top: 0, width: 1200, height: 800 };
+      if (cb) cb(win);
+      return Promise.resolve(win) as any;
+    }) as any;
+
+    const originalUserAgent = navigator.userAgent;
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
+      configurable: true
+    });
+
+    try {
+      render(<App />);
+
+      // Banner should not be rendered initially
+      expect(screen.queryByText('Prefer Arctic on the Left?')).not.toBeInTheDocument();
+
+      // Trigger pointermove simulating cursor inside sidepanel on the LEFT (e.screenX=100, e.clientX=20 -> panelLeft=80 < 600)
+      await act(async () => {
+        window.dispatchEvent(new MouseEvent('pointermove', { screenX: 100, clientX: 20 }));
+      });
+
+      expect(screen.queryByText('Prefer Arctic on the Left?')).not.toBeInTheDocument();
+      // Verifies it marked dismissed in storage
+      expect(mockChrome.storage.local.set).toHaveBeenCalledWith(
+        expect.objectContaining({ hasDismissedLeftSideTip: true })
+      );
+    } finally {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: originalUserAgent,
+        configurable: true
+      });
+    }
+  });
+
+  it('detects right-side docking from pointer coordinates in real browser and shows tip', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: '111', title: 'Google', url: 'https://google.com' }]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setSyncStorage({});
+
+    // Mock chrome.windows.getCurrent to simulate Chrome browser window
+    chrome.windows.getCurrent = vi.fn((cb?: (win: any) => void) => {
+      const win = { id: 1, left: 0, top: 0, width: 1200, height: 800 };
+      if (cb) cb(win);
+      return Promise.resolve(win) as any;
+    }) as any;
+
+    const originalUserAgent = navigator.userAgent;
+    Object.defineProperty(navigator, 'userAgent', {
+      value: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36',
+      configurable: true
+    });
+
+    try {
+      render(<App />);
+
+      // Banner should not be rendered initially
+      expect(screen.queryByText('Prefer Arctic on the Left?')).not.toBeInTheDocument();
+
+      // Trigger pointermove simulating cursor inside sidepanel on the RIGHT (e.screenX=1000, e.clientX=20 -> panelLeft=980 >= 600)
+      await act(async () => {
+        window.dispatchEvent(new MouseEvent('pointermove', { screenX: 1000, clientX: 20 }));
+      });
+
+      expect(await screen.findByText('Prefer Arctic on the Left?')).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(navigator, 'userAgent', {
+        value: originalUserAgent,
+        configurable: true
+      });
+    }
+  });
+
   it('FolderNode right-click context menu offers "New Scratchpad" and "New Google Doc"', () => {
     const onOpenContextMenu = vi.fn();
     const onCreateScratchpad = vi.fn();

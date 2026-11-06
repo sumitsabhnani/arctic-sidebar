@@ -298,4 +298,131 @@ describe('useTabBindings hook', () => {
     });
     expect(mockChrome.tabs.reload).toHaveBeenCalledWith(42, { bypassCache: true });
   });
+
+  it('pinMultipleTabs pins multiple tabs to target folder and preserves/moves existing bookmarks', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  { id: '11', title: 'Quick Access', children: [] },
+                  { id: '12', title: 'Home', children: [] }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    const tabA = { id: 101, url: 'https://site-a.com', title: 'Site A', windowId: 1 } as chrome.tabs.Tab;
+    const tabB = { id: 102, url: 'https://site-b.com', title: 'Site B', windowId: 1 } as chrome.tabs.Tab;
+    mockChrome.__setTabs([tabA, tabB]);
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.pinMultipleTabs([tabA, tabB], '12');
+    });
+
+    const tree = mockChrome.__getBookmarksTree();
+    const home = tree[0].children?.[0].children?.[0].children?.find((c) => c.id === '12');
+    expect(home?.children?.length).toBe(2);
+    expect(home?.children?.map((c) => c.url)).toEqual(['https://site-a.com', 'https://site-b.com']);
+
+    // Now pin them again to Quick Access (id: '11') - should move rather than create duplicates
+    await act(async () => {
+      await result.current.pinMultipleTabs([tabA, tabB], '11');
+    });
+
+    const updatedTree = mockChrome.__getBookmarksTree();
+    const updatedHome = updatedTree[0].children?.[0].children?.[0].children?.find((c) => c.id === '12');
+    const updatedQA = updatedTree[0].children?.[0].children?.[0].children?.find((c) => c.id === '11');
+
+    expect(updatedHome?.children?.length).toBe(0);
+    expect(updatedQA?.children?.length).toBe(2);
+  });
+
+  it('updates bookmark URL and title when docs.new redirects to a Google Document', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: 'doc-bm', title: 'New Google Doc', url: 'https://docs.new' }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'doc-bm': {
+          bookmarkId: 'doc-bm',
+          tabId: 50,
+          windowId: 1,
+          originalUrl: 'https://docs.new',
+          currentUrl: 'https://docs.new',
+          currentTitle: 'New Google Doc',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 50: 'doc-bm' }
+    });
+
+    mockChrome.__setTabs([
+      {
+        id: 50,
+        windowId: 1,
+        url: 'https://docs.new',
+        title: 'New Google Doc',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await mockChrome.tabs.update(50, {
+        url: 'https://docs.google.com/document/d/1a2b3c/edit',
+        title: 'Sprint Planning - Google Docs'
+      } as any);
+    });
+
+    expect(mockChrome.bookmarks.update).toHaveBeenCalledWith('doc-bm', {
+      url: 'https://docs.google.com/document/d/1a2b3c/edit',
+      title: 'Sprint Planning'
+    });
+  });
 });

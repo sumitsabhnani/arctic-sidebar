@@ -94,4 +94,83 @@ describe('BookmarkRow component', () => {
     duplicateItem.action();
     expect(defaultProps.onDuplicateTab).toHaveBeenCalledWith(501);
   });
+
+  it('renders scratchpad bookmark with monochrome note icon, handles selection and note click', () => {
+    const onRowClick = vi.fn();
+    const noteBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'b-note',
+      parentId: 'folder-1',
+      title: 'Meeting Notes',
+      url: 'https://arctic.local/note/note_123'
+    };
+
+    const { container, rerender } = render(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={noteBookmark}
+        binding={undefined}
+        isSelected={false}
+        isActive={false}
+        onRowClick={onRowClick}
+      />
+    );
+
+    expect(screen.getByText('Meeting Notes')).toBeInTheDocument();
+    // Scratchpad notes render a StickyNote svg icon
+    const noteSvg = container.querySelector('svg.lucide-sticky-note');
+    expect(noteSvg).toBeInTheDocument();
+    expect(noteSvg?.getAttribute('class') || '').toContain('text-zinc-400');
+
+    // Click on scratchpad note row
+    const row = screen.getByText('Meeting Notes').closest('[role="button"]')!;
+    fireEvent.click(row);
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+
+    // Re-render as active (when note drawer is open)
+    rerender(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={noteBookmark}
+        binding={undefined}
+        isSelected={false}
+        isActive={true}
+        onRowClick={onRowClick}
+      />
+    );
+    expect(row.className).toContain('theme-active-card');
+
+    // Re-render as multi-selected
+    rerender(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={noteBookmark}
+        binding={undefined}
+        isSelected={true}
+        isActive={false}
+        onRowClick={onRowClick}
+      />
+    );
+    expect(row.className).toContain('bg-cyan-500/15');
+  });
+
+  it('renders Google Doc bookmark with monochrome FileText icon', () => {
+    const docBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'b-doc',
+      parentId: 'folder-1',
+      title: 'Project Spec',
+      url: 'https://docs.new'
+    };
+
+    const { container } = render(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={docBookmark}
+        binding={undefined}
+      />
+    );
+
+    const docSvg = container.querySelector('svg.lucide-file-text');
+    expect(docSvg).toBeInTheDocument();
+    expect(docSvg?.getAttribute('class') || '').toContain('text-zinc-400');
+  });
 });

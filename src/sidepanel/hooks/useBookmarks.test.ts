@@ -595,4 +595,72 @@ describe('useBookmarks hook', () => {
     expect(spaceIcons['Personal Vault']).toBe('user');
     expect(spaceIcons['Misc']).toBe('folder');
   });
+
+  it('does NOT create a Development folder or sample links on fresh install', async () => {
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const homeChildren = result.current.workspaceNode?.children || [];
+    const devFolder = homeChildren.find(
+      (c) => c.title.toLowerCase() === 'development' || c.title.toLowerCase() === 'tailwind css docs'
+    );
+    expect(devFolder).toBeUndefined();
+  });
+
+  it('moveBookmarks moves multiple bookmarks into target folder', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  { id: '11', title: 'Quick Access', children: [] },
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: 'b1', title: 'Link 1', url: 'https://example1.com' },
+                      { id: 'b2', title: 'Link 2', url: 'https://example2.com' },
+                      {
+                        id: 'targetFolder',
+                        title: 'Target Folder',
+                        children: []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.moveBookmarks(['b1', 'b2'], 'targetFolder');
+    });
+
+    const tree = mockChrome.__getBookmarksTree();
+    const otherBookmarks = tree[0].children?.find((c) => c.id === '2');
+    const arctic = otherBookmarks?.children?.find((c) => c.id === '10');
+    const home = arctic?.children?.find((c) => c.id === '12');
+    const targetFolder = home?.children?.find((c) => c.id === 'targetFolder');
+
+    expect(targetFolder?.children?.map((c) => c.id)).toContain('b1');
+    expect(targetFolder?.children?.map((c) => c.id)).toContain('b2');
+  });
 });

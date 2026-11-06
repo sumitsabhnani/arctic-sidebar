@@ -428,11 +428,13 @@ export function createMockChrome() {
           }
         }
         if (props.url !== undefined) tab.url = props.url;
+        if ((props as any).title !== undefined) tab.title = (props as any).title;
         if (props.muted !== undefined) {
           tab.mutedInfo = { muted: props.muted };
         }
         const changeInfo: chrome.tabs.TabChangeInfo = {};
         if (props.url) changeInfo.url = props.url;
+        if ((props as any).title) changeInfo.title = (props as any).title;
         for (const listener of tabUpdatedListeners) {
           listener(tabId, changeInfo, cloneTree(tab));
         }
