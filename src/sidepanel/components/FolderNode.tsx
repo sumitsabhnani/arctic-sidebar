@@ -10,11 +10,14 @@ import {
   Check,
   X,
   ArrowRightLeft,
-  ChevronRight
+  ChevronRight,
+  StickyNote,
+  FileText
 } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
+import { isScratchpadUrl } from '../utils/url';
 
 function getDescendantBookmarkIds(folder: chrome.bookmarks.BookmarkTreeNode): string[] {
   let ids: string[] = [];
@@ -63,6 +66,14 @@ interface FolderNodeProps {
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
   getReminderForBookmark?: (bookmarkId: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
+  onCreateScratchpad?: (parentId: string) => void;
+  onCreateGoogleDoc?: (parentId: string) => void;
+  onOpenScratchpadNote?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  activeNoteId?: string | null;
+  selectedBookmarkIds?: Set<string>;
+  onSelectBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
+  onDeleteMultipleBookmarks?: (ids: string[]) => void;
+  onMoveMultipleBookmarksToSpace?: (ids: string[], targetSpaceFolderId: string) => void;
   densityMode?: 'relaxed' | 'compact';
   editingTarget?: { type: 'openTab' | 'bookmark' | 'folder'; id: string | number; initialTitle?: string; title: string } | null;
   onStartRename?: (type: 'openTab' | 'bookmark' | 'folder', id: string | number, currentTitle: string) => void;
@@ -104,6 +115,14 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onMoveBookmarkToIndex,
   getReminderForBookmark,
   onOpenReminderPopover,
+  onCreateScratchpad,
+  onCreateGoogleDoc,
+  onOpenScratchpadNote,
+  activeNoteId,
+  selectedBookmarkIds,
+  onSelectBookmark,
+  onDeleteMultipleBookmarks,
+  onMoveMultipleBookmarksToSpace,
   densityMode = 'compact',
   editingTarget,
   onStartRename,
@@ -203,6 +222,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   };
 
   const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
     e.dataTransfer.setData(
       'application/json',
       JSON.stringify({
@@ -213,7 +233,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         index: node.index
       })
     );
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.effectAllowed = 'copyMove';
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -223,9 +243,9 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
     const rect = e.currentTarget.getBoundingClientRect();
     const relY = e.clientY - rect.top;
-    if (relY < 6) {
+    if (relY < 4) {
       setDropState('top');
-    } else if (relY > rect.height - 6) {
+    } else if (relY > rect.height - 4) {
       setDropState('bottom');
     } else {
       setDropState('inside');
@@ -235,13 +255,16 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) {
+      return;
+    }
     setDropState(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const currentDrop = dropState;
+    const currentDrop = dropState || 'inside';
     setDropState(null);
 
     try {
@@ -251,25 +274,26 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
       if (data.id === node.id) return;
 
-      if (data.type === 'openTab') {
-        if (currentDrop === 'inside' && onDropItemToFolder) {
+      // Dropping bookmarks or open tabs onto a folder row always places them inside the folder
+      if (data.type === 'openTab' || data.type === 'bookmark') {
+        if (onDropItemToFolder) {
           onDropItemToFolder(data, node.id);
-        } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId && onDropItemToFolder) {
-          let targetIndex = typeof node.index === 'number' ? node.index : 0;
-          if (currentDrop === 'bottom') targetIndex += 1;
-          onDropItemToFolder(data, node.parentId, targetIndex);
         }
         return;
       }
 
       if (currentDrop === 'inside' && onDropItemToFolder) {
         onDropItemToFolder(data, node.id);
-      } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId && onMoveBookmarkToIndex && data.id) {
+      } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId) {
         let targetIndex = typeof node.index === 'number' ? node.index : 0;
         if (currentDrop === 'bottom') {
           targetIndex += 1;
         }
-        onMoveBookmarkToIndex(data.id, node.parentId, targetIndex);
+        if (onDropItemToFolder) {
+          onDropItemToFolder(data, node.parentId, targetIndex);
+        } else if (onMoveBookmarkToIndex && data.id) {
+          onMoveBookmarkToIndex(data.id, node.parentId, targetIndex);
+        }
       }
     } catch (err) {
       console.warn('[Arctic] Could not parse dropped data:', err);
@@ -297,6 +321,24 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         icon: <FolderPlus className="w-3.5 h-3.5" />,
         action: () => handleStartCreateSubfolder()
       },
+      ...(onCreateScratchpad
+        ? [
+            {
+              label: 'New Scratchpad',
+              icon: <StickyNote className="w-3.5 h-3.5" />,
+              action: () => onCreateScratchpad(node.id)
+            }
+          ]
+        : []),
+      ...(onCreateGoogleDoc
+        ? [
+            {
+              label: 'New Google Doc',
+              icon: <FileText className="w-3.5 h-3.5" />,
+              action: () => onCreateGoogleDoc(node.id)
+            }
+          ]
+        : []),
       ...(onMoveToSpace && otherSpaces.length > 0
         ? [
             {
@@ -568,6 +610,27 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           {/* Render Child Items */}
           {children.length === 0 && !isCreatingSubfolder ? (
             <div
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                setDropState('inside');
+              }}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setDropState(null);
+                try {
+                  const dataStr = e.dataTransfer.getData('application/json');
+                  if (!dataStr) return;
+                  const data = JSON.parse(dataStr);
+                  if (data.id === node.id) return;
+                  onDropItemToFolder?.(data, node.id);
+                } catch {
+                  // ignore
+                }
+              }}
               style={{ paddingLeft: `${24 + depth * 14}px` }}
               className="py-1 text-[11px] text-zinc-400 dark:text-zinc-600 italic select-none"
             >
@@ -612,6 +675,14 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onDropItemToFolder={onDropItemToFolder}
                     getReminderForBookmark={getReminderForBookmark}
                     onOpenReminderPopover={onOpenReminderPopover}
+                    onCreateScratchpad={onCreateScratchpad}
+                    onCreateGoogleDoc={onCreateGoogleDoc}
+                    onOpenScratchpadNote={onOpenScratchpadNote}
+                    activeNoteId={activeNoteId}
+                    selectedBookmarkIds={selectedBookmarkIds}
+                    onSelectBookmark={onSelectBookmark}
+                    onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
+                    onMoveMultipleBookmarksToSpace={onMoveMultipleBookmarksToSpace}
                     densityMode={densityMode}
                     editingTarget={editingTarget}
                     onStartRename={onStartRename}
@@ -624,7 +695,10 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
               const binding = bindingsByBookmarkId[child.id];
               const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
-              const isActive = Boolean(binding && binding.tabId === activeTabId);
+              const isNote = isScratchpadUrl(child.url);
+              const isActive = isNote
+                ? Boolean(activeNoteId && activeNoteId === child.id)
+                : Boolean(binding && binding.tabId === activeTabId);
               const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
               const isEditing = Boolean(editingTarget && editingTarget.type === 'bookmark' && editingTarget.id === child.id);
 
@@ -659,6 +733,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   reminder={getReminderForBookmark?.(child.id)}
                   onOpenReminderPopover={onOpenReminderPopover}
                   densityMode={densityMode}
+                  isSelected={Boolean(selectedBookmarkIds?.has(child.id))}
+                  selectedBookmarkIds={selectedBookmarkIds}
+                  onSelectBookmark={onSelectBookmark}
+                  onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
+                  onMoveMultipleBookmarksToSpace={onMoveMultipleBookmarksToSpace}
+                  onOpenScratchpadNote={onOpenScratchpadNote}
                   isEditing={isEditing}
                   editTitle={isEditing && editingTarget ? editingTarget.title : (child.title || '')}
                   onStartRename={() => onStartRename?.('bookmark', child.id, child.title || '')}

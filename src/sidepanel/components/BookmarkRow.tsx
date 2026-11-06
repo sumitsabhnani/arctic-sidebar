@@ -18,10 +18,12 @@ import {
   ArrowRightLeft,
   Folder,
   Bell,
-  PinOff
+  PinOff,
+  StickyNote,
+  FileText
 } from 'lucide-react';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
-import { getFaviconUrl } from '../utils/url';
+import { getFaviconUrl, isScratchpadUrl, isGoogleDocUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
 function formatSubdomain(rawUrl?: string): string {
@@ -65,6 +67,12 @@ interface BookmarkRowProps {
   onDropItemToFolder?: (data: { type: string; [key: string]: unknown }, targetFolderId: string, targetIndex?: number) => void;
   reminder?: TabReminder;
   onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
+  isSelected?: boolean;
+  selectedBookmarkIds?: Set<string>;
+  onSelectBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
+  onDeleteMultipleBookmarks?: (ids: string[]) => void;
+  onMoveMultipleBookmarksToSpace?: (ids: string[], targetSpaceFolderId: string) => void;
+  onOpenScratchpadNote?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   isEditing?: boolean;
   editTitle?: string;
   onStartRename?: () => void;
@@ -102,6 +110,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   reminder,
   onOpenReminderPopover,
   densityMode = 'compact',
+  isSelected = false,
+  selectedBookmarkIds,
+  onSelectBookmark,
+  onDeleteMultipleBookmarks,
+  onMoveMultipleBookmarksToSpace,
+  onOpenScratchpadNote,
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
   onStartRename,
@@ -120,14 +134,18 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
   const effectiveEditTitle = isControlled && typeof controlledEditTitle === 'string' ? controlledEditTitle : localEditTitle;
 
+  const isNote = isScratchpadUrl(bookmark.url);
+  const isGoogleDoc = isGoogleDocUrl(bookmark.url);
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
   const isAudible = Boolean(boundTab?.audible);
   const isMuted = Boolean(boundTab?.mutedInfo?.muted);
-  const titleText = bookmark.title || bookmark.url || 'Untitled Bookmark';
+  const titleText = bookmark.title || (isNote ? 'Scratchpad Note' : bookmark.url || 'Untitled Bookmark');
 
   let tooltip = titleText;
-  if (isNavAway && binding) {
+  if (isNote) {
+    tooltip = `${titleText} (Click to open note)`;
+  } else if (isNavAway && binding) {
     tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to bookmark)`;
   } else if (bookmark.url) {
     tooltip = `${titleText}\n${bookmark.url}`;
@@ -136,13 +154,122 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     tooltip += '\n(Sleeping to save memory - click to wake)';
   }
 
-  const faviconSrc = bookmark.url ? getFaviconUrl(bookmark.url, 32) : '';
+  const faviconSrc = bookmark.url && !isNote && !isGoogleDoc ? getFaviconUrl(bookmark.url, 32) : '';
 
   const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!onOpenContextMenu) return;
     e.preventDefault();
+
+    const isMultiSelected = Boolean(selectedBookmarkIds && selectedBookmarkIds.has(bookmark.id) && selectedBookmarkIds.size > 1);
+
+    if (isMultiSelected) {
+      const selectedIds = Array.from(selectedBookmarkIds!);
+      const multiItems: ContextMenuItem[] = [
+        ...(onMoveMultipleBookmarksToSpace && otherSpaces.length > 0
+          ? [
+              {
+                label: `Move ${selectedIds.length} Bookmarks to Space`,
+                icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
+                submenu: otherSpaces.map((sp) => ({
+                  label: sp.name,
+                  icon: <Folder className="w-3.5 h-3.5" />,
+                  action: () => onMoveMultipleBookmarksToSpace(selectedIds, sp.folderId)
+                }))
+              }
+            ]
+          : []),
+        ...(onDeleteMultipleBookmarks
+          ? [
+              {
+                label: `Delete ${selectedIds.length} Selected Bookmarks`,
+                icon: <Trash2 className="w-3.5 h-3.5" />,
+                action: () => onDeleteMultipleBookmarks(selectedIds),
+                danger: true
+              }
+            ]
+          : [])
+      ];
+      onOpenContextMenu(e, multiItems);
+      return;
+    }
+
+    if (isNote) {
+      const noteItems: ContextMenuItem[] = [
+        ...(onOpenScratchpadNote
+          ? [
+              {
+                label: 'Open Note',
+                icon: <StickyNote className="w-3.5 h-3.5" />,
+                action: () => onOpenScratchpadNote(bookmark)
+              }
+            ]
+          : []),
+        ...(onRenameBookmark
+          ? [
+              {
+                label: 'Rename Note',
+                icon: <Edit2 className="w-3.5 h-3.5" />,
+                action: () => {
+                  if (onStartRename) {
+                    onStartRename();
+                  } else {
+                    setLocalEditTitle(bookmark.title || '');
+                    setLocalIsEditing(true);
+                  }
+                }
+              }
+            ]
+          : []),
+        ...(onOpenReminderPopover && bookmark.url
+          ? [
+              {
+                label: reminder ? 'Edit Reminder' : 'Set Reminder',
+                icon: <Bell className="w-3.5 h-3.5" />,
+                action: () => {
+                  const rect = (e.target as HTMLElement).getBoundingClientRect();
+                  onOpenReminderPopover(
+                    {
+                      type: 'bookmark',
+                      bookmarkId: bookmark.id,
+                      url: bookmark.url || '',
+                      title: bookmark.title || ''
+                    },
+                    rect
+                  );
+                }
+              }
+            ]
+          : []),
+        ...(onMoveToSpace && otherSpaces.length > 0
+          ? [
+              {
+                label: 'Move to Space',
+                icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
+                submenu: otherSpaces.map((sp) => ({
+                  label: sp.name,
+                  icon: <Folder className="w-3.5 h-3.5" />,
+                  action: () => onMoveToSpace(bookmark.id, sp.folderId)
+                }))
+              }
+            ]
+          : []),
+        ...(onDeleteBookmark
+          ? [
+              {
+                label: 'Delete Note',
+                icon: <Trash2 className="w-3.5 h-3.5" />,
+                action: () => onDeleteBookmark(bookmark.id),
+                danger: true,
+                dividerBefore: true
+              }
+            ]
+          : [])
+      ];
+      onOpenContextMenu(e, noteItems);
+      return;
+    }
 
     const items: ContextMenuItem[] = [
       {
@@ -289,19 +416,30 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   };
 
   const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
     setIsDragging(true);
+    const hasCurrent = Boolean(selectedBookmarkIds && selectedBookmarkIds.has(bookmark.id));
+    const isMulti = Boolean(
+      selectedBookmarkIds &&
+        ((hasCurrent && selectedBookmarkIds.size > 1) ||
+          (!hasCurrent && (e.metaKey || e.ctrlKey) && selectedBookmarkIds.size >= 1))
+    );
+    const idsToDrag = isMulti
+      ? Array.from(new Set([...Array.from(selectedBookmarkIds!), bookmark.id]))
+      : [bookmark.id];
     e.dataTransfer.setData(
       'application/json',
       JSON.stringify({
         type: 'bookmark',
         id: bookmark.id,
+        ids: idsToDrag,
         title: bookmark.title,
         url: bookmark.url,
         parentId: bookmark.parentId,
         index: bookmark.index
       })
     );
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.effectAllowed = 'copyMove';
   };
 
   const handleDragEnd = () => {
@@ -317,14 +455,18 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     setDropPosition(isTop ? 'top' : 'bottom');
   };
 
-  const handleDragLeave = () => {
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) {
+      return;
+    }
     setDropPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const pos = dropPosition;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos = dropPosition || (e.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom');
     setDropPosition(null);
 
     try {
@@ -332,7 +474,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       if (!dataStr) return;
       const data = JSON.parse(dataStr);
 
-      if (data.id === bookmark.id) return;
+      if (data.id === bookmark.id && (!Array.isArray(data.ids) || data.ids.length <= 1)) return;
 
       const targetParentId = bookmark.parentId;
       if (!targetParentId) return;
@@ -342,10 +484,14 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         targetIndex += 1;
       }
 
-      if (data.type === 'openTab' && onDropItemToFolder) {
+      if (data.type === 'bookmark') {
+        if (onDropItemToFolder) {
+          onDropItemToFolder(data, targetParentId, targetIndex);
+        } else if (onMoveBookmarkToIndex && data.id) {
+          onMoveBookmarkToIndex(data.id, targetParentId, targetIndex);
+        }
+      } else if (data.type === 'openTab' && onDropItemToFolder) {
         onDropItemToFolder(data, targetParentId, targetIndex);
-      } else if (onMoveBookmarkToIndex && data.id) {
-        onMoveBookmarkToIndex(data.id, targetParentId, targetIndex);
       }
     } catch {
       // ignore
@@ -433,12 +579,34 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      onClick={() => onRowClick(bookmark)}
+      onMouseDown={(e) => {
+        if (e.shiftKey) {
+          e.preventDefault();
+        }
+      }}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelectBookmark?.(bookmark, e);
+          return;
+        }
+        onSelectBookmark?.(bookmark, e);
+        if (isNote && onOpenScratchpadNote) {
+          onOpenScratchpadNote(bookmark);
+        } else {
+          onRowClick(bookmark);
+        }
+      }}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onRowClick(bookmark);
+          if (isNote && onOpenScratchpadNote) {
+            onOpenScratchpadNote(bookmark);
+          } else {
+            onRowClick(bookmark);
+          }
         }
       }}
       style={{ paddingLeft: `${12 + depth * 14}px` }}
@@ -453,7 +621,9 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           ? 'theme-drag-over-bottom'
           : ''
       } ${
-        isActive
+        isSelected
+          ? 'bg-cyan-500/15 dark:bg-cyan-400/20 border-l-2 border-cyan-500 text-zinc-900 dark:text-white font-medium'
+          : isActive
           ? 'theme-active-card text-zinc-900 dark:text-white font-medium'
           : isRunning
           ? 'text-zinc-800 dark:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10'
@@ -466,26 +636,47 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         <div
           role="button"
           tabIndex={0}
-          title={isNavAway ? 'Reset tab to bookmarked URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
-          onClick={(e) => onFaviconClick(bookmark, e)}
+          title={isNote ? 'Scratchpad Note (Click to open note)' : isNavAway ? 'Reset tab to bookmarked URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey) {
+              return;
+            }
+            if (isNote && onOpenScratchpadNote) {
+              e.stopPropagation();
+              onOpenScratchpadNote(bookmark);
+              return;
+            }
+            onFaviconClick(bookmark, e);
+          }}
           onDoubleClick={(e) => {
             e.stopPropagation();
-            onFaviconDoubleClick?.(bookmark, e);
+            if (!isNote) {
+              onFaviconDoubleClick?.(bookmark, e);
+            }
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              onFaviconClick(bookmark, e as unknown as React.MouseEvent);
+              if (isNote && onOpenScratchpadNote) {
+                onOpenScratchpadNote(bookmark);
+              } else {
+                onFaviconClick(bookmark, e as unknown as React.MouseEvent);
+              }
             }
           }}
           onMouseEnter={() => setIsHoveringFavicon(true)}
           onMouseLeave={() => setIsHoveringFavicon(false)}
           className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center rounded transition-transform active:scale-90"
         >
-          {!faviconError && faviconSrc ? (
+          {isNote ? (
+            <StickyNote className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-opacity duration-150 flex-shrink-0" />
+          ) : isGoogleDoc ? (
+            <FileText className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-opacity duration-150 flex-shrink-0" />
+          ) : !faviconError && faviconSrc ? (
             <img
               src={faviconSrc}
               alt=""
+              draggable={false}
               onError={() => setFaviconError(true)}
               className={`w-4 h-4 object-contain rounded-sm transition-opacity duration-150 ${
                 isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
@@ -500,12 +691,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           )}
 
           {/* Sleep icon overlay on favicon if hibernated */}
-          {isDiscarded && (
+          {isDiscarded && !isNote && (
             <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
           )}
 
           {/* Reset Icon Overlay on Favicon Hover when Navigated Away */}
-          {isNavAway && (
+          {isNavAway && !isNote && (
             <div
               className={`absolute inset-0 flex items-center justify-center rounded-sm transition-all duration-150 ${
                 isHoveringFavicon
@@ -534,7 +725,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           <span
             title={tooltip}
             className={`truncate text-[12.5px] leading-tight transition-colors duration-150 select-none ${
-              isNavAway
+              isNavAway && !isNote
                 ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'
                 : isActive
                 ? 'font-semibold text-zinc-900 dark:text-white'
@@ -547,7 +738,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           </span>
           {densityMode === 'relaxed' && bookmark.url && (
             <span className="truncate text-[10px] text-zinc-400 dark:text-zinc-500 leading-none select-none pt-0.5 font-mono">
-              {formatSubdomain(bookmark.url)}
+              {isNote ? 'Scratchpad Note' : formatSubdomain(bookmark.url)}
             </span>
           )}
         </div>
@@ -555,8 +746,22 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
 
       {/* Right: Audio Mute Indicator, Split View, Copy Link, Reload, & Status */}
       <div className="flex items-center space-x-1 flex-shrink-0 ml-1">
+        {/* Note quick delete button */}
+        {isNote && onDeleteBookmark && (
+          <button
+            type="button"
+            data-tooltip="Delete note"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeleteBookmark(bookmark.id);
+            }}
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-rose-500 hover:bg-rose-500/10 transition-all duration-100"
+          >
+            <Trash2 className="w-3 h-3 stroke-[2.2]" />
+          </button>
+        )}
         {/* Quick Audio Mute Indicator on Pinned Bookmark Tab */}
-        {isRunning && binding && (isAudible || isMuted) && (
+        {!isNote && isRunning && binding && (isAudible || isMuted) && (
           <button
             type="button"
             data-tooltip={isMuted ? 'Tab is muted (Click to unmute)' : 'Tab is playing audio (Click to mute)'}
@@ -579,7 +784,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         )}
 
         {/* Unpin Bookmark to Today's Tabs Button (on hover) */}
-        {onUnpinBookmark && (
+        {!isNote && onUnpinBookmark && (
           <button
             type="button"
             data-tooltip="Unpin to Today's Tabs (Removes bookmark)"
@@ -595,7 +800,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         )}
 
         {/* Reload Tab Button (visible on hover, only for open/running tabs) */}
-        {isRunning && binding && typeof binding.tabId === 'number' && (
+        {!isNote && isRunning && binding && typeof binding.tabId === 'number' && (
           <button
             type="button"
             data-tooltip="Reload tab"
@@ -649,7 +854,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         )}
 
         {/* Running status / close tab button */}
-        {isRunning && (
+        {!isNote && isRunning && (
           <>
             <div
               className={`w-1.5 h-1.5 rounded-full transition-opacity duration-150 ${

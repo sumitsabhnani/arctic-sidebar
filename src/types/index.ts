@@ -46,6 +46,7 @@ export interface LocalSettings {
   tabsDensity?: 'relaxed' | 'compact';
   densityMode?: 'relaxed' | 'compact';
   showMemorySaverBar?: boolean;
+  hasDismissedLeftSideTip?: boolean;
   isSidebarCollapsed?: boolean;
   collapsedSections?: {
     quickAccess?: boolean;

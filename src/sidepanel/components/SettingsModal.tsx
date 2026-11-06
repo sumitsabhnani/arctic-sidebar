@@ -12,7 +12,9 @@ import {
   Heart,
   LayoutGrid,
   Activity,
-  Loader2
+  Loader2,
+  PanelLeft,
+  ExternalLink
 } from 'lucide-react';
 import type { BookmarkFolderOption, ColorThemeId, ThemeMode } from '../../types';
 import { COLOR_THEMES } from '../utils/theme';
@@ -261,6 +263,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-normal">
               Relaxed mode displays two-line rows with domain details. Compact mode uses streamlined single-line rows.
+            </p>
+          </div>
+
+          {/* Sidebar Position Preference */}
+          <div className="flex flex-col space-y-1.5 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col pr-2">
+                <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
+                  <PanelLeft className="w-3.5 h-3.5 theme-accent-text" />
+                  Sidebar Position (Left / Right)
+                </span>
+                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Chrome places side panels on the right by default. You can display Arctic on the left side in Chrome settings.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    chrome?.storage?.local?.set?.({ hasDismissedLeftSideTip: true });
+                  } catch {
+                    // ignore
+                  }
+                  if (chrome?.tabs?.create) {
+                    chrome.tabs.create({ url: 'chrome://settings/appearance' });
+                  }
+                }}
+                className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-zinc-700 dark:text-zinc-200 text-[11px] font-medium transition-colors flex-shrink-0"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>Open Settings</span>
+              </button>
+            </div>
+            <p className="text-[10.5px] text-zinc-400 dark:text-zinc-500 italic">
+              In Settings &rarr; Appearance &rarr; Side panel &rarr; choose &quot;Show on left&quot;.
             </p>
           </div>
 

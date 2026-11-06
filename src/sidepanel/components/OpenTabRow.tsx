@@ -52,6 +52,13 @@ interface OpenTabRowProps {
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
   reminder?: TabReminder;
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
+  isSelected?: boolean;
+  selectedTabIds?: Set<number>;
+  onSelectTab?: (tab: chrome.tabs.Tab, e: React.MouseEvent) => void;
+  onCloseMultipleTabs?: (tabIds: number[]) => void;
+  onPinMultipleTabsToWorkspace?: (tabs: chrome.tabs.Tab[]) => void;
+  onPinMultipleTabsToSpace?: (tabs: chrome.tabs.Tab[], targetSpaceFolderId: string) => void;
+  onDiscardMultipleTabs?: (tabIds: number[]) => void;
   isEditing?: boolean;
   editTitle?: string;
   onStartRename?: () => void;
@@ -79,6 +86,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onMoveOpenTab,
   reminder,
   onOpenReminderPopover,
+  isSelected = false,
+  selectedTabIds,
+  onSelectTab,
+  onCloseMultipleTabs,
+  onPinMultipleTabsToWorkspace,
+  onPinMultipleTabsToSpace,
+  onDiscardMultipleTabs,
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
   onStartRename,
@@ -113,6 +127,58 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     if (typeof tabId !== 'number') return;
+
+    const isMultiSelected = Boolean(selectedTabIds && selectedTabIds.has(tabId) && selectedTabIds.size > 1);
+
+    if (isMultiSelected) {
+      const selectedIds = Array.from(selectedTabIds!);
+      const multiItems: ContextMenuItem[] = [
+        ...(onPinMultipleTabsToWorkspace
+          ? [
+              {
+                label: `Pin ${selectedIds.length} Tabs to Active Space`,
+                icon: <FolderPlus className="w-3.5 h-3.5" />,
+                action: () => onPinMultipleTabsToWorkspace([])
+              }
+            ]
+          : []),
+        ...(onPinMultipleTabsToSpace && spaces.length > 0
+          ? [
+              {
+                label: `Move ${selectedIds.length} Tabs to Space`,
+                icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
+                submenu: spaces.map((sp) => ({
+                  label: sp.name,
+                  icon: <Folder className="w-3.5 h-3.5" />,
+                  action: () => onPinMultipleTabsToSpace([], sp.folderId)
+                }))
+              }
+            ]
+          : []),
+        ...(onDiscardMultipleTabs
+          ? [
+              {
+                label: `Hibernate ${selectedIds.length} Tabs (Save RAM)`,
+                icon: <Moon className="w-3.5 h-3.5" />,
+                action: () => onDiscardMultipleTabs(selectedIds)
+              }
+            ]
+          : []),
+        ...(onCloseMultipleTabs
+          ? [
+              {
+                label: `Close ${selectedIds.length} Selected Tabs`,
+                icon: <X className="w-3.5 h-3.5" />,
+                action: () => onCloseMultipleTabs(selectedIds),
+                danger: true,
+                dividerBefore: true
+              }
+            ]
+          : [])
+      ];
+      onOpenContextMenu(e, multiItems);
+      return;
+    }
 
     const items: ContextMenuItem[] = [
       {
@@ -203,18 +269,26 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
 
   const handleDragStart = (e: React.DragEvent) => {
     if (typeof tabId !== 'number') return;
+    e.stopPropagation();
     setIsDragging(true);
+    let tabIdsToDrag: number[] = [tabId];
+    if (selectedTabIds && selectedTabIds.has(tabId)) {
+      tabIdsToDrag = Array.from(selectedTabIds);
+    } else if (selectedTabIds && selectedTabIds.size > 0 && (e.metaKey || e.ctrlKey)) {
+      tabIdsToDrag = Array.from(new Set([...Array.from(selectedTabIds), tabId]));
+    }
     e.dataTransfer.setData(
       'application/json',
       JSON.stringify({
         type: 'openTab',
         tabId,
+        tabIds: tabIdsToDrag,
         url: tab.url,
         title: tab.title,
         index: tab.index
       })
     );
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.effectAllowed = 'copyMove';
   };
 
   const handleDragEnd = () => {
@@ -230,14 +304,20 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     setDropPosition(isTop ? 'top' : 'bottom');
   };
 
-  const handleDragLeave = () => {
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
     setDropPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const pos = dropPosition;
+    const pos =
+      dropPosition ||
+      (e.clientY - e.currentTarget.getBoundingClientRect().top <
+      e.currentTarget.getBoundingClientRect().height / 2
+        ? 'top'
+        : 'bottom');
     setDropPosition(null);
 
     try {
@@ -245,12 +325,18 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       if (!dataStr) return;
       const data = JSON.parse(dataStr);
 
-      if (data.type === 'openTab' && data.tabId !== tabId && onMoveOpenTab) {
+      if (data.type === 'openTab' && onMoveOpenTab) {
         let targetIndex = tab.index;
         if (pos === 'bottom') {
           targetIndex += 1;
         }
-        onMoveOpenTab(data.tabId, targetIndex);
+        if (Array.isArray(data.tabIds) && data.tabIds.length > 0) {
+          for (let i = 0; i < data.tabIds.length; i++) {
+            onMoveOpenTab(data.tabIds[i], targetIndex + i);
+          }
+        } else if (typeof data.tabId === 'number' && data.tabId !== tabId) {
+          onMoveOpenTab(data.tabId, targetIndex);
+        }
       }
     } catch {
       // ignore
@@ -337,7 +423,19 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       title={`${titleText}\n${tab.url || ''}${isDiscarded ? '\n(Sleeping to save memory - click to wake)' : ''}`}
-      onClick={() => tabId && onFocus(tabId)}
+      onMouseDown={(e) => {
+        if (e.shiftKey) e.preventDefault();
+      }}
+      onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey) {
+          e.preventDefault();
+          e.stopPropagation();
+          onSelectTab?.(tab, e);
+          return;
+        }
+        onSelectTab?.(tab, e);
+        if (tabId) onFocus(tabId);
+      }}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if ((e.key === 'Enter' || e.key === ' ') && tabId) {
@@ -358,7 +456,11 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           ? 'theme-drag-over-bottom'
           : ''
       } ${
-        isActive
+        isSelected
+          ? densityMode === 'relaxed'
+            ? 'bg-cyan-500/15 dark:bg-cyan-400/20 border-cyan-500 dark:border-cyan-400 text-zinc-900 dark:text-white font-medium shadow-xs'
+            : 'bg-cyan-500/15 dark:bg-cyan-400/20 border-l-2 border-cyan-500 text-zinc-900 dark:text-white font-medium'
+          : isActive
           ? densityMode === 'relaxed'
             ? 'theme-active-card border-cyan-500/50 dark:border-cyan-400/50 shadow-xs text-zinc-900 dark:text-white font-medium'
             : 'theme-active-card text-zinc-900 dark:text-white font-medium'
@@ -378,6 +480,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
             <img
               src={faviconSrc}
               alt=""
+              draggable={false}
               onError={() => setFaviconError(true)}
               className={`w-4 h-4 object-contain rounded-sm transition-opacity ${
                 isDiscarded ? 'opacity-60 grayscale' : 'opacity-100'
