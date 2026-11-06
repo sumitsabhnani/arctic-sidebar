@@ -185,6 +185,13 @@ export const Header: React.FC<HeaderProps> = ({
       }}
       className="relative flex flex-col w-full border-b transition-colors duration-200"
     >
+      {/* Top Loading Progress Bar when Active Tab is Loading */}
+      {isActiveTabLoading && (
+        <div className="absolute top-0 left-0 right-0 h-[2.5px] overflow-hidden z-50 bg-black/5 dark:bg-white/10 pointer-events-none">
+          <div className="h-full theme-accent-bg arctic-nav-progress" />
+        </div>
+      )}
+
       {/* Top Address / URL Bar with Back, Copy Link & Reload */}
       <div className="px-2.5 py-2">
         <div
@@ -258,8 +265,18 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Right URL Bar Actions: Copy Link & Reload */}
+          {/* Right URL Bar Actions: Reloading Badge, Copy Link & Reload */}
           <div className="flex items-center space-x-0.5 flex-shrink-0">
+            {/* Active Tab Reloading Indicator Badge */}
+            {isActiveTabLoading && (
+              <span
+                data-tooltip="Page is reloading..."
+                className="flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold text-cyan-600 dark:text-cyan-400 bg-cyan-500/15 border border-cyan-500/30 animate-pulse select-none mr-0.5"
+              >
+                <span>Reloading</span>
+              </span>
+            )}
+
             {/* Copy Current URL Button */}
             <button
               type="button"
@@ -302,13 +319,7 @@ export const Header: React.FC<HeaderProps> = ({
                   }}
                   className="p-1 pl-1.5 rounded-l-md text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors group"
                 >
-                  <RotateCw
-                    className={`w-3.5 h-3.5 transition-transform duration-300 ${
-                      isActiveTabLoading
-                        ? 'animate-spin theme-accent-text'
-                        : 'group-active:rotate-180'
-                    }`}
-                  />
+                  <RotateCw className="w-3.5 h-3.5 transition-transform duration-300 group-active:rotate-180" />
                 </button>
 
                 <span className="w-[1px] h-3.5 bg-black/15 dark:bg-white/15 my-auto" />

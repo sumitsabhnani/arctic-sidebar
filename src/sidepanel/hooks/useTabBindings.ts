@@ -1,17 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TabBinding, LocalSettings } from '../../types';
-import { normalizeUrl, isUrlNavigatedAway } from '../utils/url';
+import { normalizeUrl, isUrlNavigatedAway, isScratchpadUrl } from '../utils/url';
 
-export function useTabBindings() {
+export function useTabBindings(activeSpaceId: string = 'home') {
   const [bindingsByBookmarkId, setBindingsByBookmarkId] = useState<Record<string, TabBinding>>({});
   const [bookmarkIdByTabId, setBookmarkIdByTabId] = useState<Record<number, string>>({});
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [windowTabs, setWindowTabs] = useState<chrome.tabs.Tab[]>([]);
+  const [tabSpaceByTabId, setTabSpaceByTabId] = useState<Record<number, string>>({});
   const [customTabTitles, setCustomTabTitles] = useState<Record<number, string>>({});
   const customTabTitlesRef = useRef<Record<number, string>>({});
   customTabTitlesRef.current = customTabTitles;
   const [autoArchiveInterval, setAutoArchiveIntervalState] = useState<'never' | '12h' | '24h' | '7d'>('24h');
   const currentWindowIdRef = useRef<number | null>(null);
+  const currentActiveSpaceIdRef = useRef<string>(activeSpaceId);
+  currentActiveSpaceIdRef.current = activeSpaceId;
 
   /**
    * Refresh all tabs in the current window
@@ -47,7 +50,7 @@ export function useTabBindings() {
     try {
       const [sessionData, localData] = await Promise.all([
         chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId', 'customTabTitles']),
-        chrome.storage.local.get(['autoArchiveInterval', 'tabOpenedAt'])
+        chrome.storage.local.get(['autoArchiveInterval', 'tabOpenedAt', 'tabSpaceByTabId'])
       ]);
 
       if (sessionData.customTabTitles) {
@@ -58,6 +61,10 @@ export function useTabBindings() {
         (sessionData.bindingsByBookmarkId as Record<string, TabBinding>) || {};
       const byTab: Record<number, string> =
         (sessionData.bookmarkIdByTabId as Record<number, string>) || {};
+
+      if (localData.tabSpaceByTabId) {
+        setTabSpaceByTabId(localData.tabSpaceByTabId as Record<number, string>);
+      }
 
       if (localData.autoArchiveInterval) {
         setAutoArchiveIntervalState(localData.autoArchiveInterval as 'never' | '12h' | '24h' | '7d');
@@ -99,6 +106,24 @@ export function useTabBindings() {
 
       setBindingsByBookmarkId(cleanBindings);
       setBookmarkIdByTabId(cleanByTab);
+
+      // Prune dead tab spaces
+      const existingSpaces: Record<number, string> =
+        (localData.tabSpaceByTabId as Record<number, string>) || {};
+      let spacesUpdated = false;
+      const cleanSpaces: Record<number, string> = {};
+      for (const [tIdStr, spId] of Object.entries(existingSpaces)) {
+        const tId = Number(tIdStr);
+        if (openTabIdSet.has(tId)) {
+          cleanSpaces[tId] = spId;
+        } else {
+          spacesUpdated = true;
+        }
+      }
+      if (spacesUpdated) {
+        await chrome.storage.local.set({ tabSpaceByTabId: cleanSpaces });
+      }
+      setTabSpaceByTabId(cleanSpaces);
 
       // Track tab creation timestamps for auto-archive
       const now = Date.now();
@@ -204,8 +229,14 @@ export function useTabBindings() {
       chrome.windows.getCurrent((currentWin) => {
         if (currentWin.id === tab.windowId) {
           refreshWindowTabs();
-          // Record timestamp for new tab
           if (typeof tab.id === 'number') {
+            const currentSpace = currentActiveSpaceIdRef.current || 'home';
+            setTabSpaceByTabId((prev) => {
+              const next = { ...prev, [tab.id!]: currentSpace };
+              chrome.storage.local.set({ tabSpaceByTabId: next });
+              return next;
+            });
+            // Record timestamp for new tab
             chrome.storage.local.get(['tabOpenedAt'], (res) => {
               const timestamps = (res.tabOpenedAt as Record<number, number>) || {};
               timestamps[tab.id!] = Date.now();
@@ -219,6 +250,14 @@ export function useTabBindings() {
     // Listen to tab removal
     const handleRemoved = (tabId: number) => {
       refreshWindowTabs();
+
+      setTabSpaceByTabId((prev) => {
+        if (!prev[tabId]) return prev;
+        const next = { ...prev };
+        delete next[tabId];
+        chrome.storage.local.set({ tabSpaceByTabId: next });
+        return next;
+      });
 
       setCustomTabTitles((prev) => {
         if (!prev[tabId]) return prev;
@@ -450,10 +489,16 @@ export function useTabBindings() {
   /**
    * Create a new tab (e.g. Ctrl+T or '+ New Tab' button)
    */
-  const createNewTab = useCallback(async (url?: string) => {
+  const createNewTab = useCallback(async (url?: string, spaceId?: string) => {
     const newTab = await chrome.tabs.create({ url, active: true });
-    if (newTab.id) {
+    const targetSpace = spaceId || currentActiveSpaceIdRef.current || 'home';
+    if (typeof newTab.id === 'number') {
       setActiveTabId(newTab.id);
+      setTabSpaceByTabId((prev) => {
+        const next = { ...prev, [newTab.id!]: targetSpace };
+        chrome.storage.local.set({ tabSpaceByTabId: next });
+        return next;
+      });
     }
     await refreshWindowTabs();
     if (document.activeElement instanceof HTMLElement) {
@@ -550,6 +595,135 @@ export function useTabBindings() {
     await persistSession({}, {});
     await refreshWindowTabs();
   }, [windowTabs, persistSession, refreshWindowTabs]);
+
+  /**
+   * Close a specific list of unpinned tabs (e.g. from the active space)
+   */
+  const closeSpaceUnpinnedTabs = useCallback(
+    async (tabIdsToClose: number[]) => {
+      if (!tabIdsToClose.length) return;
+      if (tabIdsToClose.length >= windowTabs.length) {
+        await chrome.tabs.create({ active: true });
+      }
+      await chrome.tabs.remove(tabIdsToClose);
+      await refreshWindowTabs();
+    },
+    [windowTabs.length, refreshWindowTabs]
+  );
+
+  /**
+   * Set space for an individual tab
+   */
+  const setTabSpace = useCallback(async (tabId: number, spaceId: string) => {
+    setTabSpaceByTabId((prev) => {
+      const next = { ...prev, [tabId]: spaceId };
+      chrome.storage.local.set({ tabSpaceByTabId: next });
+      return next;
+    });
+  }, []);
+
+  /**
+   * Move multiple tabs to a space
+   */
+  const moveTabsToSpace = useCallback(async (tabIds: number[], spaceId: string) => {
+    setTabSpaceByTabId((prev) => {
+      const next = { ...prev };
+      for (const id of tabIds) {
+        next[id] = spaceId;
+      }
+      chrome.storage.local.set({ tabSpaceByTabId: next });
+      return next;
+    });
+  }, []);
+
+  /**
+   * Reconciles open browser tabs with saved bookmarks on startup/reload.
+   * If an open tab matches a bookmark's normalized URL and is not yet bound,
+   * it binds the tab to that bookmark so it appears as a running pinned tab
+   * instead of polluting Today's Tabs!
+   */
+  const reconcileTabsWithBookmarks = useCallback(
+    async (bookmarkNodes: chrome.bookmarks.BookmarkTreeNode[]) => {
+      try {
+        const currentTabs = await chrome.tabs.query({ currentWindow: true });
+        const session = await chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']);
+        const currentBindings: Record<string, TabBinding> =
+          (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+        const currentByTab: Record<number, string> =
+          (session.bookmarkIdByTabId as Record<number, string>) || {};
+
+        const allBookmarkLeaves: chrome.bookmarks.BookmarkTreeNode[] = [];
+        const collect = (nodes: chrome.bookmarks.BookmarkTreeNode[]) => {
+          for (const node of nodes) {
+            if (node.url && !isScratchpadUrl(node.url)) {
+              allBookmarkLeaves.push(node);
+            }
+            if (node.children) {
+              collect(node.children);
+            }
+          }
+        };
+        collect(bookmarkNodes);
+
+        if (allBookmarkLeaves.length === 0 || currentTabs.length === 0) return;
+
+        let hasNewBindings = false;
+        const nextBindings = { ...bindingsByBookmarkId, ...currentBindings };
+        const nextByTab = { ...bookmarkIdByTabId, ...currentByTab };
+
+        const boundTabIds = new Set(Object.keys(nextByTab).map(Number));
+        const boundBookmarkIds = new Set(Object.keys(nextBindings));
+
+        for (const tab of currentTabs) {
+          if (typeof tab.id !== 'number' || !tab.url) continue;
+          if (boundTabIds.has(tab.id)) continue;
+
+          if (
+            tab.url.startsWith('chrome://newtab') ||
+            tab.url === 'about:blank' ||
+            tab.url.includes('/newtab.html') ||
+            tab.url.includes('/command.html')
+          ) {
+            continue;
+          }
+
+          const tabNormalized = normalizeUrl(tab.url);
+          const matchingBookmark = allBookmarkLeaves.find(
+            (b) =>
+              !boundBookmarkIds.has(b.id) &&
+              b.url &&
+              normalizeUrl(b.url) === tabNormalized
+          );
+
+          if (matchingBookmark) {
+            const newBinding: TabBinding = {
+              bookmarkId: matchingBookmark.id,
+              tabId: tab.id,
+              windowId: tab.windowId,
+              originalUrl: matchingBookmark.url!,
+              currentUrl: tab.url,
+              currentTitle: tab.title || matchingBookmark.title || '',
+              isNavigatedAway: isUrlNavigatedAway(tab.url, matchingBookmark.url!)
+            };
+
+            nextBindings[matchingBookmark.id] = newBinding;
+            nextByTab[tab.id] = matchingBookmark.id;
+            boundTabIds.add(tab.id);
+            boundBookmarkIds.add(matchingBookmark.id);
+            hasNewBindings = true;
+          }
+        }
+
+        if (hasNewBindings) {
+          await persistSession(nextBindings, nextByTab);
+          await refreshWindowTabs();
+        }
+      } catch (err) {
+        console.warn('[Arctic] Could not reconcile tabs with bookmarks:', err);
+      }
+    },
+    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
+  );
 
   /**
    * Pin one or more unpinned tabs to a bookmark folder (Quick Access or Home/Space).
@@ -1077,6 +1251,11 @@ export function useTabBindings() {
     tabsByTabId,
     activeTabId,
     unpinnedTabs,
+    tabSpaceByTabId,
+    setTabSpace,
+    moveTabsToSpace,
+    closeSpaceUnpinnedTabs,
+    reconcileTabsWithBookmarks,
     createNewTab,
     focusTab,
     handleRowClick,

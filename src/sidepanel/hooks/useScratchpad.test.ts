@@ -141,6 +141,29 @@ describe('useScratchpad and chunking helpers', () => {
       expect(result.current.isOpen).toBe(false);
     });
 
+    it('restores scratchpad note from bookmark backup when storage was wiped (reinstall scenario)', async () => {
+      // Mock an existing bookmark with encoded note hash
+      const mockBookmarks = [
+        {
+          id: 'bm-backup',
+          title: 'Scratchpad Backup',
+          url: 'https://arctic.local/scratchpad#Restored%20From%20Reinstall%20Backup'
+        }
+      ];
+      vi.mocked(chrome.bookmarks.search).mockResolvedValue(mockBookmarks as unknown as chrome.bookmarks.BookmarkTreeNode[]);
+
+      const { result } = renderHook(() => useScratchpad());
+
+      // Fast forward async loadInitial
+      await act(async () => {
+        await Promise.resolve();
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(result.current.text).toBe('Restored From Reinstall Backup');
+      expect(result.current.syncStatus).toBe('Synced');
+    });
+
     it('copies scratchpad text to clipboard', async () => {
       const writeTextMock = vi.fn().mockResolvedValue(undefined);
       Object.assign(navigator, {

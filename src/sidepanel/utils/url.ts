@@ -134,19 +134,62 @@ export function getDomainFromUrl(url: string): string {
 }
 
 export const ARCTIC_SCRATCHPAD_PREFIX = 'https://arctic.local/note/';
+export const ARCTIC_GLOBAL_SCRATCHPAD_URL = 'https://arctic.local/scratchpad';
 
 export function isScratchpadUrl(url?: string): boolean {
   if (!url) return false;
-  return url.startsWith(ARCTIC_SCRATCHPAD_PREFIX) || url.startsWith('arctic://note/');
+  return (
+    url.startsWith(ARCTIC_SCRATCHPAD_PREFIX) ||
+    url.startsWith(ARCTIC_GLOBAL_SCRATCHPAD_URL) ||
+    url.startsWith('arctic://note/')
+  );
 }
 
 export function getScratchpadNoteId(url?: string): string {
   if (!url) return '';
+  let rest = '';
   if (url.startsWith(ARCTIC_SCRATCHPAD_PREFIX)) {
-    return url.slice(ARCTIC_SCRATCHPAD_PREFIX.length);
+    rest = url.slice(ARCTIC_SCRATCHPAD_PREFIX.length);
+  } else if (url.startsWith('arctic://note/')) {
+    rest = url.slice('arctic://note/'.length);
   }
-  if (url.startsWith('arctic://note/')) {
-    return url.slice('arctic://note/'.length);
+  if (!rest) return '';
+  return rest.split('#')[0].split('?')[0];
+}
+
+/**
+ * Encodes text into a URL-safe hash fragment.
+ */
+export function encodeNoteHash(text: string): string {
+  if (!text) return '';
+  try {
+    return encodeURIComponent(text);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Decodes text from a URL hash fragment.
+ */
+export function decodeNoteHash(hash: string): string {
+  if (!hash) return '';
+  try {
+    const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+    return decodeURIComponent(raw);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Extracts decoded note content from a note bookmark URL (either from hash or query).
+ */
+export function extractNoteContentFromUrl(url?: string): string {
+  if (!url) return '';
+  const hashIdx = url.indexOf('#');
+  if (hashIdx !== -1) {
+    return decodeNoteHash(url.slice(hashIdx + 1));
   }
   return '';
 }

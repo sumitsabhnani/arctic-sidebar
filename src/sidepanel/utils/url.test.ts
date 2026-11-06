@@ -7,7 +7,11 @@ import {
   isScratchpadUrl,
   getScratchpadNoteId,
   isGoogleDocUrl,
-  ARCTIC_SCRATCHPAD_PREFIX
+  encodeNoteHash,
+  decodeNoteHash,
+  extractNoteContentFromUrl,
+  ARCTIC_SCRATCHPAD_PREFIX,
+  ARCTIC_GLOBAL_SCRATCHPAD_URL
 } from './url';
 
 describe('url utilities', () => {
@@ -103,6 +107,33 @@ describe('url utilities', () => {
       const noteUrl = `${ARCTIC_SCRATCHPAD_PREFIX}note_12345`;
       expect(isScratchpadUrl(noteUrl)).toBe(true);
       expect(getScratchpadNoteId(noteUrl)).toBe('note_12345');
+    });
+
+    it('handles note URLs with hash fragments and extracts clean ID', () => {
+      const noteUrl = `${ARCTIC_SCRATCHPAD_PREFIX}note_9999#My%20Note%20Content`;
+      expect(isScratchpadUrl(noteUrl)).toBe(true);
+      expect(getScratchpadNoteId(noteUrl)).toBe('note_9999');
+      expect(extractNoteContentFromUrl(noteUrl)).toBe('My Note Content');
+    });
+
+    it('detects global scratchpad URL', () => {
+      expect(isScratchpadUrl(ARCTIC_GLOBAL_SCRATCHPAD_URL)).toBe(true);
+      expect(isScratchpadUrl(`${ARCTIC_GLOBAL_SCRATCHPAD_URL}#Test%20Global`)).toBe(true);
+      expect(extractNoteContentFromUrl(`${ARCTIC_GLOBAL_SCRATCHPAD_URL}#Test%20Global`)).toBe('Test Global');
+    });
+
+    it('encodes and decodes note hash content including special characters and newlines', () => {
+      const original = 'Hello world!\nLine 2 with emojis 🚀 & special chars: ?&=#';
+      const encoded = encodeNoteHash(original);
+      expect(encoded).not.toBe('');
+      expect(decodeNoteHash(encoded)).toBe(original);
+    });
+
+    it('handles empty hash or invalid inputs gracefully', () => {
+      expect(encodeNoteHash('')).toBe('');
+      expect(decodeNoteHash('')).toBe('');
+      expect(extractNoteContentFromUrl('')).toBe('');
+      expect(extractNoteContentFromUrl('https://example.com')).toBe('');
     });
 
     it('detects arctic://note/ as scratchpad URL and extracts ID', () => {
