@@ -146,7 +146,7 @@ describe('newtab url detection and formatting', () => {
       // Verify Linear App suggestion appears with Space badge
       const bmItem = await screen.findByText('Linear App');
       expect(bmItem).toBeInTheDocument();
-      expect(screen.getByText('Space Bookmark')).toBeInTheDocument();
+      expect(screen.getByText('Space Tab')).toBeInTheDocument();
 
       // Press Enter to open
       await act(async () => {

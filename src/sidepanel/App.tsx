@@ -644,7 +644,7 @@ export const App: React.FC = () => {
       try {
         const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (currentTab && currentTab.url) {
-          const title = currentTab.title || currentTab.url || 'New Bookmark';
+          const title = currentTab.title || currentTab.url || 'New Tab';
           const newBookmark = await chrome.bookmarks.create({
             parentId: targetFolderId,
             title,
@@ -1438,7 +1438,7 @@ export const App: React.FC = () => {
             {loading && workspaceBookmarks.length === 0 ? (
               <div className="flex items-center justify-center py-6 space-x-2 text-zinc-400 dark:text-zinc-500">
                 <Loader2 className="w-4 h-4 animate-spin text-cyan-500 dark:text-cyan-400" />
-                <span className="text-xs">Loading bookmarks...</span>
+                <span className="text-xs">Loading tabs...</span>
               </div>
             ) : workspaceBookmarks.length === 0 && !isCreatingRootFolder ? (
               <div className="px-3 py-6 text-center text-zinc-500">

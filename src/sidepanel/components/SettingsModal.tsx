@@ -229,12 +229,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
           </div>
 
-          {/* Tabs & Bookmarks Density */}
+          {/* Tabs Density */}
           <div className="flex flex-col space-y-1.5 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
             <div className="flex items-center justify-between">
               <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
                 <LayoutGrid className="w-3.5 h-3.5 theme-accent-text" />
-                Tabs & Bookmarks Density
+                Tabs Density
               </span>
               <div className="flex items-center space-x-1 bg-black/5 dark:bg-white/5 p-0.5 rounded-lg border border-black/5 dark:border-white/5">
                 <button

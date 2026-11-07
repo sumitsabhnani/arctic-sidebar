@@ -70,12 +70,12 @@ describe('BookmarkRow component', () => {
     // Query all action buttons within the right-side cluster
     const actionButtons = Array.from(
       container.querySelectorAll(
-        'button[data-tooltip="Unpin to Today\'s Tabs (Removes bookmark)"], button[data-tooltip="Reload tab"], button[data-tooltip="Set reminder"], button[data-tooltip="Close running tab"]'
+        'button[data-tooltip="Unpin to Today\'s Tabs"], button[data-tooltip="Reload tab"], button[data-tooltip="Set reminder"], button[data-tooltip="Close running tab"]'
       )
     );
 
     expect(actionButtons.length).toBe(4);
-    expect(actionButtons[0]).toHaveAttribute('data-tooltip', "Unpin to Today's Tabs (Removes bookmark)");
+    expect(actionButtons[0]).toHaveAttribute('data-tooltip', "Unpin to Today's Tabs");
     expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Reload tab');
     expect(actionButtons[2]).toHaveAttribute('data-tooltip', 'Set reminder');
     expect(actionButtons[3]).toHaveAttribute('data-tooltip', 'Close running tab');

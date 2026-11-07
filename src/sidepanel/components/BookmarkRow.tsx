@@ -137,11 +137,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const isAudible = Boolean(boundTab?.audible);
   const isMuted = Boolean(boundTab?.mutedInfo?.muted);
   const isBoundTabLoading = boundTab?.status === 'loading';
-  const titleText = bookmark.title || bookmark.url || 'Untitled Bookmark';
+  const titleText = bookmark.title || bookmark.url || 'Untitled Tab';
 
   let tooltip = titleText;
   if (isNavAway && binding) {
-    tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to bookmark)`;
+    tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to saved URL)`;
   } else if (bookmark.url) {
     tooltip = `${titleText}\n${bookmark.url}`;
   }
@@ -165,7 +165,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ...(onMoveMultipleBookmarksToSpace && otherSpaces.length > 0
           ? [
               {
-                label: `Move ${selectedIds.length} Bookmarks to Space`,
+                label: `Move ${selectedIds.length} Tabs to Space`,
                 icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
                 submenu: otherSpaces.map((sp) => ({
                   label: sp.name,
@@ -178,7 +178,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         ...(onDeleteMultipleBookmarks
           ? [
               {
-                label: `Delete ${selectedIds.length} Selected Bookmarks`,
+                label: `Delete ${selectedIds.length} Selected Tabs`,
                 icon: <Trash2 className="w-3.5 h-3.5" />,
                 action: () => onDeleteMultipleBookmarks(selectedIds),
                 danger: true
@@ -321,7 +321,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       ...(onDeleteBookmark
         ? [
             {
-              label: 'Delete Bookmark',
+              label: 'Delete Tab',
               icon: <Trash2 className="w-3.5 h-3.5" />,
               action: () => onDeleteBookmark(bookmark.id),
               danger: true,
@@ -547,7 +547,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         <div
           role="button"
           tabIndex={0}
-          title={isNavAway ? 'Reset tab to bookmarked URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
+          title={isNavAway ? 'Reset tab to saved URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey) {
               return;
@@ -669,11 +669,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           </button>
         )}
 
-        {/* Unpin Bookmark to Today's Tabs Button (on hover) */}
+        {/* Unpin Tab to Today's Tabs Button (on hover) */}
         {onUnpinBookmark && (
           <button
             type="button"
-            data-tooltip="Unpin to Today's Tabs (Removes bookmark)"
+            data-tooltip="Unpin to Today's Tabs"
             data-tooltip-pos="bottom-right"
             onClick={(e) => {
               e.stopPropagation();

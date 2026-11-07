@@ -49,10 +49,10 @@ Install Arctic directly from the official **Chrome Web Store**:
   * `> Reopen Last Closed Tab`
   * `> Switch Space: [Space Name]`
   * `> Open Chrome Bookmarks / History / Extensions / Downloads`
-* **Instant Navigation:** Jump directly to URLs (e.g., `github.com` or `localhost:3000`), search your bookmarks and browsing history, or fall back to Google Search with Enter.
+* **Instant Navigation:** Jump directly to URLs (e.g., `github.com` or `localhost:3000`), search your tabs and browsing history, or fall back to Google Search with Enter.
 
 ### ⏰ Tab Reminders & Alerts
-* **Set Tab Reminders:** Never lose track of an article, pull request, or invoice. Schedule reminders on any open tab or bookmark with 1-click presets (*In 15m*, *In 1h*, *In 3h*, *Tomorrow 9 AM*) or a custom date & time picker.
+* **Set Tab Reminders:** Never lose track of an article, pull request, or invoice. Schedule reminders on any tab with 1-click presets (*In 15m*, *In 1h*, *In 3h*, *Tomorrow 9 AM*) or a custom date & time picker.
 * **Native Desktop Notifications:** Receive system notifications with one-click **Open Tab** and **Dismiss** actions when reminders are due.
 * **Top Overdue Banner:** Overdue reminders automatically surface at the top of the sidebar with multi-line notes, hover tooltips, and click-to-alert dialogs.
 * **Background Service Worker:** Powered by `chrome.alarms` with automatic startup reconciliation so you never miss a reminder even if Chrome was closed or asleep.
@@ -75,9 +75,9 @@ Install Arctic directly from the official **Chrome Web Store**:
 * **Multiple Color Accents:** Choose from *Glacier Blue*, *Midnight Amethyst*, *Forest Sage*, *Warm Terracotta*, and *Pure Monochrome*.
 
 ### 🎯 Arc-Style Ergonomics & Hidden Gems
-* **Favicon Click to Reset:** Deep in a website on a pinned tab or bookmark? Clicking its favicon instantly resets the tab back to your original saved root URL (just like Arc!). Double-clicking reloads.
-* **Double-Click to Rename:** Clean up 100-character cluttered web titles. Double-click any tab, bookmark, folder, or space title to give it a clean, custom name.
-* **Move Across Spaces:** Right-click any bookmark or folder and choose **Move to [Space]** to instantly send items between Work, Personal, and Project contexts.
+* **Favicon Click to Reset:** Deep in a website on a pinned tab? Clicking its favicon instantly resets the tab back to your original saved root URL (just like Arc!). Double-clicking reloads.
+* **Double-Click to Rename:** Clean up 100-character cluttered web titles. Double-click any tab, folder, or space title to give it a clean, custom name.
+* **Move Across Spaces:** Right-click any tab or folder and choose **Move to [Space]** to instantly send items between Work, Personal, and Project contexts.
 * **Instant URL Replace:** Click any pinned favorite to bring its active tab into focus or navigate cleanly in place without opening endless duplicate tabs.
 
 ### 🔒 100% Private & Open Source
