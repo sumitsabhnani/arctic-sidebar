@@ -34,29 +34,34 @@ describe('BookmarkRow component', () => {
     onOpenContextMenu: vi.fn()
   };
 
-  it('renders bookmark row with title and reload button on hover', () => {
-    const { container } = render(<BookmarkRow {...defaultProps} />);
+  it('renders bookmark row with title and Copy link button on hover (even when tab is not open)', () => {
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    });
+    const { container } = render(<BookmarkRow {...defaultProps} binding={undefined} />);
     expect(screen.getByText('Google Docs')).toBeInTheDocument();
 
-    const reloadBtn = container.querySelector('button[data-tooltip="Reload tab"]');
-    expect(reloadBtn).toBeInTheDocument();
-    expect(reloadBtn?.className).toContain('hidden');
-    expect(reloadBtn?.className).toContain('group-hover:flex');
+    const copyBtn = container.querySelector('button[data-tooltip="Copy link"]');
+    expect(copyBtn).toBeInTheDocument();
+    expect(copyBtn?.className).toContain('hidden');
+    expect(copyBtn?.className).toContain('group-hover:flex');
 
-    fireEvent.click(reloadBtn!);
-    expect(defaultProps.onReloadTab).toHaveBeenCalledWith(501);
+    fireEvent.click(copyBtn!);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://docs.google.com');
   });
 
-  it('does NOT render reload button when bookmark tab is not open (un-bound)', () => {
+  it('does NOT render reload button on row hover (Reload lives in context menu, URL bar, and double-click favicon)', () => {
     const { container } = render(
-      <BookmarkRow {...defaultProps} binding={undefined} />
+      <BookmarkRow {...defaultProps} />
     );
 
     const reloadBtn = container.querySelector('button[data-tooltip="Reload tab"]');
     expect(reloadBtn).not.toBeInTheDocument();
   });
 
-  it('renders action buttons in consistent order: PinOff -> Reload -> Bell -> Close', () => {
+  it('renders action buttons in consistent order: PinOff -> Copy link -> Bell -> Close', () => {
     const onOpenReminderPopover = vi.fn();
     const onUnpinBookmark = vi.fn();
     const { container } = render(
@@ -70,13 +75,13 @@ describe('BookmarkRow component', () => {
     // Query all action buttons within the right-side cluster
     const actionButtons = Array.from(
       container.querySelectorAll(
-        'button[data-tooltip="Unpin to Today\'s Tabs"], button[data-tooltip="Reload tab"], button[data-tooltip="Set reminder"], button[data-tooltip="Close running tab"]'
+        'button[data-tooltip="Unpin to Today\'s Tabs"], button[data-tooltip="Copy link"], button[data-tooltip="Set reminder"], button[data-tooltip="Close running tab"]'
       )
     );
 
     expect(actionButtons.length).toBe(4);
     expect(actionButtons[0]).toHaveAttribute('data-tooltip', "Unpin to Today's Tabs");
-    expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Reload tab');
+    expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Copy link');
     expect(actionButtons[2]).toHaveAttribute('data-tooltip', 'Set reminder');
     expect(actionButtons[3]).toHaveAttribute('data-tooltip', 'Close running tab');
   });
@@ -95,12 +100,12 @@ describe('BookmarkRow component', () => {
     expect(defaultProps.onDuplicateTab).toHaveBeenCalledWith(501);
   });
 
-  it('renders Google Doc bookmark with monochrome FileText icon', () => {
+  it('renders Google Doc bookmark with proper website favicon img instead of monochrome FileText icon', () => {
     const docBookmark: chrome.bookmarks.BookmarkTreeNode = {
       id: 'b-doc',
       parentId: 'folder-1',
       title: 'Project Spec',
-      url: 'https://docs.new'
+      url: 'https://docs.google.com/document/d/123/edit'
     };
 
     const { container } = render(
@@ -112,8 +117,13 @@ describe('BookmarkRow component', () => {
     );
 
     const docSvg = container.querySelector('svg.lucide-file-text');
-    expect(docSvg).toBeInTheDocument();
-    expect(docSvg?.getAttribute('class') || '').toContain('text-zinc-400');
+    expect(docSvg).not.toBeInTheDocument();
+
+    const faviconImg = container.querySelector('img');
+    expect(faviconImg).toBeInTheDocument();
+    expect(faviconImg?.getAttribute('src')).toContain(
+      encodeURIComponent('https://docs.google.com/document/d/123/edit')
+    );
   });
 
   it('renders spinning loader icon when bound tab status is loading', () => {

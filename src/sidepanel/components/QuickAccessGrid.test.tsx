@@ -128,7 +128,7 @@ describe('QuickAccessGrid component', () => {
     expect(defaultProps.onDuplicateTab).toHaveBeenCalledWith(101);
   });
 
-  it('renders Google Doc tiles with monochrome icon', () => {
+  it('renders Google Doc tiles with proper website favicon img instead of monochrome icon', () => {
     const specialBookmarks: chrome.bookmarks.BookmarkTreeNode[] = [
       { id: 'qa-doc', title: 'Roadmap Doc', url: 'https://docs.new', index: 0 }
     ];
@@ -143,8 +143,12 @@ describe('QuickAccessGrid component', () => {
     );
 
     const docIcon = container.querySelector('svg.lucide-file-text');
+    expect(docIcon).not.toBeInTheDocument();
 
-    expect(docIcon).toBeInTheDocument();
-    expect(docIcon?.getAttribute('class') || '').toContain('text-zinc-400');
+    const faviconImg = container.querySelector('img');
+    expect(faviconImg).toBeInTheDocument();
+    expect(faviconImg?.getAttribute('src')).toContain(
+      encodeURIComponent('https://docs.google.com/document/')
+    );
   });
 });

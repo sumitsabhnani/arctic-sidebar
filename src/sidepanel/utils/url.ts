@@ -110,11 +110,29 @@ export function isUrlNavigatedAway(currentUrl: string, originalUrl: string): boo
 /**
  * Returns the Chrome internal favicon API URL.
  * Requires "favicon" permission in manifest.json.
+ * Maps `.new` shortcut URLs to their canonical origins so Chrome's favicon cache resolves their website icon.
  */
 export function getFaviconUrl(pageUrl: string, size: number = 32): string {
   if (!pageUrl) return '';
+  let resolvedUrl = pageUrl;
+  try {
+    const host = new URL(pageUrl).hostname.toLowerCase().replace(/^www\./, '');
+    if (host === 'docs.new' || host === 'document.new') {
+      resolvedUrl = 'https://docs.google.com/document/';
+    } else if (host === 'sheets.new' || host === 'spreadsheet.new') {
+      resolvedUrl = 'https://docs.google.com/spreadsheets/';
+    } else if (host === 'slides.new' || host === 'presentation.new') {
+      resolvedUrl = 'https://docs.google.com/presentation/';
+    } else if (host === 'notion.new') {
+      resolvedUrl = 'https://www.notion.so/';
+    } else if (host === 'gist.new') {
+      resolvedUrl = 'https://gist.github.com/';
+    }
+  } catch {
+    // keep raw pageUrl
+  }
   if (typeof chrome !== 'undefined' && chrome.runtime?.id) {
-    return `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(pageUrl)}&size=${size}`;
+    return `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(resolvedUrl)}&size=${size}`;
   }
   return '';
 }

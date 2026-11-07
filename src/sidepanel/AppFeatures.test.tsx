@@ -458,6 +458,66 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     expect(onCreateGoogleDoc).toHaveBeenCalledWith('f-1', 'https://notion.new', 'New Notion Page');
   });
 
+  it('FolderNode renders cleanly without item count badge, right chevron, or Archive/Pin hover buttons, keeping only New subfolder on hover and full actions in right-click menu', () => {
+    const onOpenContextMenu = vi.fn();
+    const onBookmarkCurrentPage = vi.fn();
+    const onDiscardTab = vi.fn();
+
+    const mockFolder: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'f-clean',
+      title: 'Clean Folder',
+      children: [
+        { id: 'b-1', title: 'Child 1', url: 'https://example.com/1' },
+        { id: 'b-2', title: 'Child 2', url: 'https://example.com/2' }
+      ]
+    };
+
+    const { container } = render(
+      <FolderNode
+        node={mockFolder}
+        collapsedFolderIds={{ 'f-clean': true }}
+        onToggleCollapse={vi.fn()}
+        bindingsByBookmarkId={{
+          'b-1': {
+            bookmarkId: 'b-1',
+            tabId: 777,
+            windowId: 1,
+            originalUrl: 'https://example.com/1',
+            currentUrl: 'https://example.com/1',
+            currentTitle: 'Child 1',
+            isNavigatedAway: false
+          }
+        }}
+        activeTabId={null}
+        onRowClick={vi.fn()}
+        onFaviconClick={vi.fn()}
+        onCloseTab={vi.fn()}
+        onCreateFolder={vi.fn()}
+        onBookmarkCurrentPage={onBookmarkCurrentPage}
+        onDiscardTab={onDiscardTab}
+        onOpenContextMenu={onOpenContextMenu}
+      />
+    );
+
+    // No item count badge ("2") or right chevron icon on the folder row
+    expect(screen.queryByText('2')).not.toBeInTheDocument();
+    expect(container.querySelector('svg.lucide-chevron-right')).not.toBeInTheDocument();
+
+    // No Archive or Pin Current Tab hover buttons on the folder row
+    expect(container.querySelector('button[data-tooltip*="Archive"]')).not.toBeInTheDocument();
+    expect(container.querySelector('button[data-tooltip="Pin current tab here"]')).not.toBeInTheDocument();
+
+    // Keeps only the subtle New subfolder hover button
+    expect(container.querySelector('button[data-tooltip="New subfolder"]')).toBeInTheDocument();
+
+    // Right-click menu still exposes Pin Current Tab Here and Archive All Tabs in Folder
+    const folderRow = screen.getByText('Clean Folder').closest('[role="button"]')!;
+    fireEvent.contextMenu(folderRow);
+    const menuItems = onOpenContextMenu.mock.calls[0][1];
+    expect(menuItems.some((i: { label: string }) => i.label === 'Pin Current Tab Here')).toBe(true);
+    expect(menuItems.some((i: { label: string }) => i.label.startsWith('Archive All Tabs in Folder'))).toBe(true);
+  });
+
   it('supports multi-select on BookmarkRow with Ctrl/Cmd + click and Shift + click', () => {
     const onSelectBookmark = vi.fn();
     const onRowClick = vi.fn();
@@ -685,7 +745,7 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     expect(chrome.bookmarks.move).toHaveBeenCalledWith('bm-2', expect.objectContaining({ parentId: 'folder-target' }));
   });
 
-  it('renders Google Doc bookmark with FileText icon consistent with Scratchpad StickyNote in monochrome', async () => {
+  it('renders Google Doc bookmark with proper website favicon img instead of monochrome FileText icon', async () => {
     mockChrome.__setBookmarksTree([
       {
         id: '0',
@@ -727,9 +787,12 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
 
     const gdocRow = screen.getByText('Q4 Strategy Doc').closest('div[role="button"]')!;
 
-    // Google Doc has lucide-file-text icon in monochrome styling
-    const gdocSvg = gdocRow.querySelector('svg.lucide-file-text');
-    expect(gdocSvg).toBeInTheDocument();
-    expect(gdocSvg?.getAttribute('class')).toContain('text-zinc-400');
+    // Google Doc renders proper website favicon img
+    expect(gdocRow.querySelector('svg.lucide-file-text')).not.toBeInTheDocument();
+    const faviconImg = gdocRow.querySelector('img');
+    expect(faviconImg).toBeInTheDocument();
+    expect(faviconImg?.getAttribute('src')).toContain(
+      encodeURIComponent('https://docs.google.com/document/d/123/edit')
+    );
   });
 });

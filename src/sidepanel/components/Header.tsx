@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 import {
   RotateCw,
   RefreshCw,
-  ChevronDown,
   Link2,
   Lock,
   Globe,
@@ -265,18 +264,8 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           )}
 
-          {/* Right URL Bar Actions: Reloading Badge, Copy Link & Reload */}
+          {/* Right URL Bar Actions: Copy Link & Reload */}
           <div className="flex items-center space-x-0.5 flex-shrink-0">
-            {/* Active Tab Reloading Indicator Badge */}
-            {isActiveTabLoading && (
-              <span
-                data-tooltip="Page is reloading..."
-                className="flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold text-cyan-600 dark:text-cyan-400 bg-cyan-500/15 border border-cyan-500/30 animate-pulse select-none mr-0.5"
-              >
-                <span>Reloading</span>
-              </span>
-            )}
-
             {/* Copy Current URL Button */}
             <button
               type="button"
@@ -289,7 +278,7 @@ export const Header: React.FC<HeaderProps> = ({
                   ? 'opacity-30 cursor-not-allowed text-zinc-400'
                   : isCopied
                   ? 'text-emerald-500 bg-emerald-500/15'
-                  : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
+                  : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
               }`}
             >
               {isCopied ? (
@@ -299,50 +288,27 @@ export const Header: React.FC<HeaderProps> = ({
               )}
             </button>
 
-            {/* Reload Active Tab Button & Hard Reload Dropdown */}
+            {/* Reload Active Tab Button (Right-click for Hard Reload menu) */}
             <div className="relative flex items-center" ref={reloadDropdownRef}>
-              <div
-                className={`flex items-center rounded-lg border transition-colors ${
+              <button
+                type="button"
+                data-tooltip="Reload (Cmd+R)"
+                data-tooltip-pos="bottom-right"
+                aria-label="Reload"
+                aria-expanded={isReloadMenuOpen}
+                onClick={() => onReloadActiveTab(false)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  toggleReloadMenu();
+                }}
+                className={`p-1 rounded-md transition-colors group ${
                   isReloadMenuOpen
-                    ? 'bg-black/10 dark:bg-white/10 border-black/15 dark:border-white/20'
-                    : 'bg-black/[0.03] dark:bg-white/[0.04] border-black/5 dark:border-white/5 hover:bg-black/5 dark:hover:bg-white/10'
+                    ? 'bg-black/10 dark:bg-white/10 text-zinc-900 dark:text-white'
+                    : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'
                 }`}
               >
-                <button
-                  type="button"
-                  data-tooltip="Reload (Cmd+R)"
-                  data-tooltip-pos="bottom-right"
-                  onClick={() => onReloadActiveTab(false)}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    toggleReloadMenu();
-                  }}
-                  className="p-1 pl-1.5 rounded-l-md text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors group"
-                >
-                  <RotateCw className="w-3.5 h-3.5 transition-transform duration-300 group-active:rotate-180" />
-                </button>
-
-                <span className="w-[1px] h-3.5 bg-black/15 dark:bg-white/15 my-auto" />
-
-                <button
-                  type="button"
-                  data-tooltip="Reload options"
-                  data-tooltip-pos="bottom-right"
-                  aria-label="Reload options"
-                  aria-expanded={isReloadMenuOpen}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleReloadMenu();
-                  }}
-                  className="p-1 pr-1.5 rounded-r-md text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
-                >
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 stroke-[2.5] transition-transform duration-150 ${
-                      isReloadMenuOpen ? 'rotate-180 text-zinc-900 dark:text-white' : ''
-                    }`}
-                  />
-                </button>
-              </div>
+                <RotateCw className="w-3.5 h-3.5 transition-transform duration-300 group-active:rotate-180" />
+              </button>
 
               {/* Reload Dropdown Menu rendered via portal into document.body to avoid backdrop-filter/stacking context issues */}
               {isReloadMenuOpen &&

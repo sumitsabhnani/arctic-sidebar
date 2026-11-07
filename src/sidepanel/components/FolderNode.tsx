@@ -10,7 +10,6 @@ import {
   Check,
   X,
   ArrowRightLeft,
-  ChevronRight,
   FileText,
   Table,
   Presentation,
@@ -128,7 +127,6 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 }) => {
   const isCollapsed = collapsedFolderIds[node.id] !== undefined ? Boolean(collapsedFolderIds[node.id]) : true;
   const children = node.children || [];
-  const itemCount = children.length;
 
   // Inline subfolder creation state
   const [isCreatingSubfolder, setIsCreatingSubfolder] = useState(false);
@@ -528,54 +526,16 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             </span>
           </div>
 
-          <div className="flex items-center space-x-1 flex-shrink-0">
-            {/* Archive All Tabs in Folder (Sleep tabs to save RAM) */}
-            {runningTabIdsUnderFolder.length > 0 && onDiscardTab && (
-              <button
-                type="button"
-                data-tooltip={`Archive ${runningTabIdsUnderFolder.length} open tab${runningTabIdsUnderFolder.length > 1 ? 's' : ''} (Sleep)`}
-                onClick={handleArchiveAllTabs}
-                className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded text-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-              >
-                <Archive className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            {/* Pin Current Tab */}
-            {onBookmarkCurrentPage && (
-              <button
-                type="button"
-                data-tooltip="Pin current tab here"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onBookmarkCurrentPage(node.id);
-                }}
-                className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:theme-accent-text hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-              >
-                <BookmarkPlus className="w-3.5 h-3.5" />
-              </button>
-            )}
-
-            {/* Add Subfolder */}
+          <div className="flex items-center flex-shrink-0">
+            {/* Add Subfolder (subtle hover action; other folder actions live in right-click menu) */}
             <button
               type="button"
               data-tooltip="New subfolder"
               onClick={handleStartCreateSubfolder}
-              className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-amber-500 dark:hover:text-amber-300 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md text-zinc-400/80 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors"
             >
-              <FolderPlus className="w-3.5 h-3.5" />
+              <FolderPlus className="w-3.5 h-3.5 stroke-[2]" />
             </button>
-
-            <div className="flex items-center space-x-1.5 pl-1">
-              <span className="px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400 font-mono">
-                {itemCount}
-              </span>
-              <ChevronRight
-                className={`w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-transform duration-150 ${
-                  !isCollapsed ? 'rotate-90 text-amber-500' : ''
-                }`}
-              />
-            </div>
           </div>
         </div>
       )}

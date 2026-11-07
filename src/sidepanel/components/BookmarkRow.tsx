@@ -18,11 +18,10 @@ import {
   ArrowRightLeft,
   Folder,
   Bell,
-  PinOff,
-  FileText
+  PinOff
 } from 'lucide-react';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
-import { getFaviconUrl, isGoogleDocUrl } from '../utils/url';
+import { getFaviconUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
 function formatSubdomain(rawUrl?: string): string {
@@ -126,12 +125,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
   const [localIsEditing, setLocalIsEditing] = useState(false);
   const [localEditTitle, setLocalEditTitle] = useState(bookmark.title || '');
+  const [isCopied, setIsCopied] = useState(false);
 
   const isControlled = typeof onStartRename === 'function';
   const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
   const effectiveEditTitle = isControlled && typeof controlledEditTitle === 'string' ? controlledEditTitle : localEditTitle;
 
-  const isGoogleDoc = isGoogleDocUrl(bookmark.url);
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
   const isAudible = Boolean(boundTab?.audible);
@@ -149,7 +148,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     tooltip += '\n(Sleeping to save memory - click to wake)';
   }
 
-  const faviconSrc = bookmark.url && !isGoogleDoc ? getFaviconUrl(bookmark.url, 32) : '';
+  const faviconSrc = boundTab?.favIconUrl || (bookmark.url ? getFaviconUrl(bookmark.url, 32) : '');
 
   const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
 
@@ -568,9 +567,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           onMouseLeave={() => setIsHoveringFavicon(false)}
           className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center rounded transition-transform active:scale-90"
         >
-          {isGoogleDoc ? (
-            <FileText className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-opacity duration-150 flex-shrink-0" />
-          ) : isBoundTabLoading ? (
+          {isBoundTabLoading ? (
             <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text flex-shrink-0" />
           ) : !faviconError && faviconSrc ? (
             <img
@@ -644,8 +641,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         </div>
       </div>
 
-      {/* Right: Audio Mute Indicator, Split View, Copy Link, Reload, & Status */}
-      <div className="flex items-center space-x-1 flex-shrink-0 ml-1">
+      {/* Right: Audio Mute Indicator & Cohesive Hover Actions (Unpin, Reload, Reminder, Close) */}
+      <div className="flex items-center gap-0.5 flex-shrink-0 ml-1">
         {/* Quick Audio Mute Indicator on Pinned Bookmark Tab */}
         {isRunning && binding && (isAudible || isMuted) && (
           <button
@@ -655,16 +652,16 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               e.stopPropagation();
               onToggleMuteTab?.(binding.tabId);
             }}
-            className={`flex items-center justify-center w-5 h-5 rounded-full transition-colors ${
+            className={`flex items-center justify-center w-5 h-5 rounded-md transition-colors ${
               isMuted
                 ? 'text-rose-500 dark:text-rose-400 bg-rose-500/15 hover:bg-rose-500/25'
                 : 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/15 hover:bg-cyan-500/25'
             }`}
           >
             {isMuted ? (
-              <VolumeX className="w-3 h-3 stroke-[2.5]" />
+              <VolumeX className="w-3 h-3 stroke-[2.2]" />
             ) : (
-              <Volume2 className="w-3 h-3 stroke-[2.5] animate-pulse" />
+              <Volume2 className="w-3 h-3 stroke-[2.2] animate-pulse" />
             )}
           </button>
         )}
@@ -679,27 +676,37 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               e.stopPropagation();
               onUnpinBookmark(bookmark);
             }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100"
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md text-zinc-400/80 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors"
           >
-            <PinOff className="w-3 h-3 stroke-[2.2]" />
+            <PinOff className="w-3 h-3 stroke-[2]" />
           </button>
         )}
 
-        {/* Reload Tab Button (visible on hover, only for open/running tabs) */}
-        {isRunning && binding && typeof binding.tabId === 'number' && (
+        {/* Copy Link Button (visible on hover) */}
+        {bookmark.url && (
           <button
             type="button"
-            data-tooltip="Reload tab"
+            data-tooltip={isCopied ? 'Copied!' : 'Copy link'}
             data-tooltip-pos="bottom-right"
             onClick={(e) => {
               e.stopPropagation();
-              if (onReloadTab) {
-                onReloadTab(binding.tabId);
+              if (bookmark.url) {
+                navigator.clipboard.writeText(bookmark.url);
+                setIsCopied(true);
+                setTimeout(() => setIsCopied(false), 1500);
               }
             }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-all duration-100"
+            className={`hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md transition-colors ${
+              isCopied
+                ? 'text-emerald-500 bg-emerald-500/15'
+                : 'text-zinc-400/80 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.06] dark:hover:bg-white/[0.08]'
+            }`}
           >
-            <RotateCw className="w-3 h-3 stroke-[2.2]" />
+            {isCopied ? (
+              <Check className="w-3 h-3 stroke-[2.2]" />
+            ) : (
+              <Link2 className="w-3 h-3 stroke-[2]" />
+            )}
           </button>
         )}
 
@@ -727,15 +734,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
                 rect
               );
             }}
-            className={`items-center justify-center w-5 h-5 rounded-full transition-all duration-100 ${
+            className={`items-center justify-center w-5 h-5 rounded-md transition-colors ${
               reminder
                 ? reminder.status === 'fired' || reminder.triggerAt <= Date.now()
                   ? 'flex text-rose-500 bg-rose-500/15 animate-pulse'
                   : 'flex text-amber-500 dark:text-amber-400 bg-amber-500/10'
-                : 'hidden group-hover:flex text-zinc-400 hover:text-amber-500 hover:bg-amber-500/10'
+                : 'hidden group-hover:flex text-zinc-400/80 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.06] dark:hover:bg-white/[0.08]'
             }`}
           >
-            <Bell className="w-3 h-3 stroke-[2.5]" />
+            <Bell className="w-3 h-3 stroke-[2]" />
           </button>
         )}
 
@@ -745,8 +752,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             <div
               className={`w-1.5 h-1.5 rounded-full transition-opacity duration-150 ${
                 isActive
-                  ? 'theme-active-indicator'
-                  : 'bg-zinc-400 dark:bg-zinc-400/70 group-hover:opacity-0'
+                  ? 'theme-active-indicator group-hover:hidden'
+                  : 'bg-zinc-400 dark:bg-zinc-400/70 group-hover:hidden'
               }`}
             />
 
@@ -754,9 +761,9 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               type="button"
               data-tooltip="Close running tab"
               onClick={(e) => binding && onCloseTab(binding.tabId, e)}
-              className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-rose-500 hover:bg-rose-500/10 transition-all duration-100"
+              className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md text-zinc-400/80 dark:text-zinc-500 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
             >
-              <X className="w-3 h-3 stroke-[2.5]" />
+              <X className="w-3 h-3 stroke-[2.2]" />
             </button>
           </>
         )}

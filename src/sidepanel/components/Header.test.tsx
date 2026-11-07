@@ -81,16 +81,17 @@ describe('Header component', () => {
     expect(defaultProps.onReloadActiveTab).toHaveBeenCalledWith(false);
   });
 
-  it('renders dropdown arrow next to reload button and toggles reload menu with hard reload option', () => {
-    render(<Header {...defaultProps} />);
-    const dropdownBtn = screen.getByLabelText('Reload options');
-    expect(dropdownBtn).toBeInTheDocument();
+  it('renders single clean reload button (no split dropdown arrow) and toggles reload menu with hard reload option on right-click', () => {
+    const { container } = render(<Header {...defaultProps} />);
+    const reloadBtn = container.querySelector('[data-tooltip="Reload (Cmd+R)"]') as HTMLElement;
+    expect(reloadBtn).toBeInTheDocument();
+    expect(screen.queryByLabelText('Reload options')).not.toBeInTheDocument();
 
     // Menu not visible initially
     expect(screen.queryByText('Hard Reload')).not.toBeInTheDocument();
 
-    // Click dropdown button to open
-    fireEvent.click(dropdownBtn);
+    // Right-click reload button to open menu
+    fireEvent.contextMenu(reloadBtn);
     expect(screen.getByText('Hard Reload')).toBeInTheDocument();
     expect(screen.getByText('Clear cache & reload')).toBeInTheDocument();
     expect(screen.getByText('Normal Reload')).toBeInTheDocument();
@@ -104,10 +105,10 @@ describe('Header component', () => {
     expect(screen.queryByText('Hard Reload')).not.toBeInTheDocument();
   });
 
-  it('allows normal reload from the dropdown menu', () => {
-    render(<Header {...defaultProps} />);
-    const dropdownBtn = screen.getByLabelText('Reload options');
-    fireEvent.click(dropdownBtn);
+  it('allows normal reload from the right-click dropdown menu', () => {
+    const { container } = render(<Header {...defaultProps} />);
+    const reloadBtn = container.querySelector('[data-tooltip="Reload (Cmd+R)"]') as HTMLElement;
+    fireEvent.contextMenu(reloadBtn);
 
     const normalReloadBtn = screen.getByText('Normal Reload').closest('button')!;
     fireEvent.click(normalReloadBtn);
@@ -128,9 +129,9 @@ describe('Header component', () => {
   });
 
   it('closes reload dropdown when window loses focus (e.g. clicking on webpage)', () => {
-    render(<Header {...defaultProps} />);
-    const dropdownBtn = screen.getByLabelText('Reload options');
-    fireEvent.click(dropdownBtn);
+    const { container } = render(<Header {...defaultProps} />);
+    const reloadBtn = container.querySelector('[data-tooltip="Reload (Cmd+R)"]') as HTMLElement;
+    fireEvent.contextMenu(reloadBtn);
     expect(screen.getByText('Hard Reload')).toBeInTheDocument();
 
     // Click outside on the webpage triggers window blur
@@ -177,14 +178,14 @@ describe('Header component', () => {
     expect(defaultProps.onGoBackActiveTab).toHaveBeenCalledTimes(1);
   });
 
-  it('renders progress bar and reloading badge without spinning reload button when isActiveTabLoading is true', () => {
+  it('renders top progress bar without reloading text badge or spinning reload button when isActiveTabLoading is true', () => {
     const { container } = render(<Header {...defaultProps} isActiveTabLoading={true} />);
 
     // Glowing progress bar rendered at top
     expect(container.querySelector('.arctic-nav-progress')).toBeInTheDocument();
 
-    // Reloading indicator badge rendered
-    expect(screen.getByText('Reloading')).toBeInTheDocument();
+    // Reloading indicator text badge is omitted for a cleaner URL bar
+    expect(screen.queryByText('Reloading')).not.toBeInTheDocument();
 
     // Reload button should not have animate-spin
     expect(container.querySelector('.animate-spin')).not.toBeInTheDocument();

@@ -44,15 +44,15 @@ describe('OpenTabsSection component', () => {
     onOpenContextMenu: vi.fn()
   };
 
-  it('renders Today\'s tabs with active count and tab rows', () => {
+  it('renders Today\'s tabs header cleanly and tab rows', () => {
     render(<OpenTabsSection {...defaultProps} />);
     expect(screen.getByText(/Today's Tabs/i)).toBeInTheDocument();
-    expect(screen.getByText('(2 ACTIVE)')).toBeInTheDocument();
+    expect(screen.queryByText('(2 ACTIVE)')).not.toBeInTheDocument();
     expect(screen.getByText('Hacker News')).toBeInTheDocument();
     expect(screen.getByText('GitHub Trending')).toBeInTheDocument();
   });
 
-  it('renders Clear button and dropdown menu with Clear all tabs option', () => {
+  it('renders Clear button and chevron dropdown menu with Clear all tabs option', () => {
     render(<OpenTabsSection {...defaultProps} />);
 
     // Clear temporary tabs button exists and calls onCloseAll
@@ -129,21 +129,26 @@ describe('OpenTabsSection component', () => {
     expect(defaultProps.onNewTab).toHaveBeenCalledTimes(1);
   });
 
-  it('renders reload button on open tab rows on hover and calls onReloadTab', () => {
+  it('renders Copy link button on open tab rows on hover and copies URL to clipboard', () => {
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    });
     const { container } = render(<OpenTabsSection {...defaultProps} />);
 
-    const reloadButtons = container.querySelectorAll('button[data-tooltip="Reload tab"]');
-    expect(reloadButtons.length).toBe(2);
-    reloadButtons.forEach((btn) => {
+    const copyButtons = container.querySelectorAll('button[data-tooltip="Copy link"]');
+    expect(copyButtons.length).toBe(2);
+    copyButtons.forEach((btn) => {
       expect(btn.className).toContain('hidden');
       expect(btn.className).toContain('group-hover:flex');
     });
 
-    fireEvent.click(reloadButtons[0]);
-    expect(defaultProps.onReloadTab).toHaveBeenCalledWith(101);
+    fireEvent.click(copyButtons[0]);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('https://news.ycombinator.com');
   });
 
-  it('renders tab row buttons in consistent order: Pin -> Reload -> Bell -> Close', () => {
+  it('renders tab row buttons in consistent order: Pin -> Copy link -> Bell -> Close', () => {
     const onOpenReminderPopover = vi.fn();
     render(
       <OpenTabsSection
@@ -156,13 +161,13 @@ describe('OpenTabsSection component', () => {
     const firstTabRow = screen.getByText('Hacker News').closest('[role="button"]')!;
     const actionButtons = Array.from(
       firstTabRow.querySelectorAll(
-        'button[data-tooltip="Pin to Active Space"], button[data-tooltip="Reload tab"], button[data-tooltip="Set reminder"], button[data-tooltip="Close tab (Cmd+W)"]'
+        'button[data-tooltip="Pin to Active Space"], button[data-tooltip="Copy link"], button[data-tooltip="Set reminder"], button[data-tooltip="Close tab (Cmd+W)"]'
       )
     );
 
     expect(actionButtons.length).toBe(4);
     expect(actionButtons[0]).toHaveAttribute('data-tooltip', 'Pin to Active Space');
-    expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Reload tab');
+    expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Copy link');
     expect(actionButtons[2]).toHaveAttribute('data-tooltip', 'Set reminder');
     expect(actionButtons[3]).toHaveAttribute('data-tooltip', 'Close tab (Cmd+W)');
   });
