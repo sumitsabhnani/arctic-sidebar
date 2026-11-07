@@ -8,6 +8,8 @@ import type { ContextMenuItem } from './ContextMenu';
 interface OpenTabsSectionProps {
   unpinnedTabs: chrome.tabs.Tab[];
   activeTabId: number | null;
+  activeSpaceId?: string;
+  isInitialTabsLoaded?: boolean;
   spaces?: SpaceItem[];
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
@@ -48,6 +50,8 @@ interface OpenTabsSectionProps {
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   unpinnedTabs,
   activeTabId,
+  activeSpaceId,
+  isInitialTabsLoaded = true,
   spaces = [],
   isCollapsed = false,
   onToggleCollapse,
@@ -87,6 +91,9 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   const [localEditingTabId, setLocalEditingTabId] = useState<number | null>(null);
   const [localEditingTitle, setLocalEditingTitle] = useState<string>('');
   const [isClearMenuOpen, setIsClearMenuOpen] = useState(false);
+  const sectionRef = React.useRef<HTMLDivElement>(null);
+  const prevTabIdsRef = React.useRef<Set<number> | null>(null);
+  const prevSpaceIdRef = React.useRef<string | undefined>(activeSpaceId);
   const clearDropdownRef = React.useRef<HTMLDivElement>(null);
   const dropdownMenuRef = React.useRef<HTMLDivElement>(null);
   const [clearMenuCoords, setClearMenuCoords] = useState<{ top: number; right: number }>({
@@ -283,8 +290,53 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
     }
   }, [localEditingTabId, unpinnedTabs]);
 
+  // Automatically scroll down so the latest tab is in view when a new tab is opened
+  useEffect(() => {
+    if (!isInitialTabsLoaded) return;
+
+    const currentIds = unpinnedTabs
+      .map((t) => t.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    if (prevTabIdsRef.current === null || prevSpaceIdRef.current !== activeSpaceId) {
+      prevTabIdsRef.current = new Set(currentIds);
+      prevSpaceIdRef.current = activeSpaceId;
+      return;
+    }
+
+    const prevIds = prevTabIdsRef.current;
+    const addedIds = currentIds.filter((id) => !prevIds.has(id));
+    prevTabIdsRef.current = new Set(currentIds);
+
+    if (addedIds.length > 0 && !isCollapsed) {
+      const latestTabId = addedIds[addedIds.length - 1];
+      const sectionEl = sectionRef.current;
+      if (sectionEl) {
+        const rowEl = sectionEl.querySelector(
+          `[data-tab-id="${latestTabId}"]`
+        ) as HTMLElement | null;
+        if (rowEl && typeof rowEl.scrollIntoView === 'function') {
+          rowEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+        const scrollContainer = sectionEl.closest('.overflow-y-auto') as HTMLElement | null;
+        if (scrollContainer) {
+          if (typeof scrollContainer.scrollTo === 'function') {
+            scrollContainer.scrollTo({
+              top: scrollContainer.scrollHeight,
+              behavior: 'smooth'
+            });
+          }
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
+      }
+    }
+  }, [unpinnedTabs, activeSpaceId, isInitialTabsLoaded, isCollapsed]);
+
   return (
-    <div className="flex flex-col space-y-1 pt-2 pb-2 border-t border-black/[0.06] dark:border-white/[0.06]">
+    <div
+      ref={sectionRef}
+      className="flex flex-col space-y-1 pt-2 pb-2 border-t border-black/[0.06] dark:border-white/[0.06]"
+    >
       {/* Header Bar */}
       <div className="flex items-center justify-between px-1 pb-1">
         <button

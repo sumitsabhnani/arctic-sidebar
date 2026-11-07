@@ -733,7 +733,7 @@ describe('newtab url detection and formatting', () => {
         expect.any(Object)
       );
 
-      expect(await screen.findByText('Search Google for "quantum computing"')).toBeInTheDocument();
+      expect(await screen.findByText('Search Web for "quantum computing"')).toBeInTheDocument();
       expect(await screen.findByText('quantum computing explained')).toBeInTheDocument();
       expect(screen.getByText('quantum computing stocks')).toBeInTheDocument();
       expect(screen.getByText('quantum computing news')).toBeInTheDocument();
@@ -742,6 +742,7 @@ describe('newtab url detection and formatting', () => {
 
     it('navigates to selected Google suggestion on ArrowDown + Enter and supports Tab to refine query', async () => {
       vi.mocked(chrome.tabs.update).mockClear();
+      vi.mocked(chrome.search.query).mockClear();
       vi.mocked(globalThis.fetch).mockResolvedValue({
         ok: true,
         json: async () => [
@@ -779,9 +780,40 @@ describe('newtab url detection and formatting', () => {
         fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
       });
 
+      expect(chrome.search.query).toHaveBeenCalledWith({
+        text: 'how to center text in css',
+        disposition: 'CURRENT_TAB'
+      });
       expect(chrome.tabs.update).toHaveBeenCalledWith(1, {
         url: 'https://www.google.com/search?q=how%20to%20center%20text%20in%20css',
         active: true
+      });
+    });
+
+    it('executes web search immediately with Shift+Enter even when a bookmark or history item is selected first', async () => {
+      vi.mocked(chrome.search.query).mockClear();
+      vi.mocked(chrome.tabs.update).mockClear();
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      // "github" matches the local history item "GitHub: Let’s build from here" at index 0
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'github' } });
+      });
+
+      expect(await screen.findByText(/GitHub: Let’s build from here/i)).toBeInTheDocument();
+      expect(screen.getByText('Search Web for "github"')).toBeInTheDocument();
+      expect(screen.getByTestId('shift-enter-search-hint')).toHaveTextContent('⇧ ↵');
+
+      // Press Shift+Enter directly without navigating down to the search row
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', shiftKey: true });
+      });
+
+      expect(chrome.search.query).toHaveBeenCalledWith({
+        text: 'github',
+        disposition: 'CURRENT_TAB'
       });
     });
 

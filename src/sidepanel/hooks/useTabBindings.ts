@@ -33,6 +33,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const [bookmarkIdByTabId, setBookmarkIdByTabId] = useState<Record<number, string>>({});
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [windowTabs, setWindowTabs] = useState<chrome.tabs.Tab[]>([]);
+  const [isInitialTabsLoaded, setIsInitialTabsLoaded] = useState<boolean>(false);
   const [tabSpaceByTabId, setTabSpaceByTabId] = useState<Record<number, string>>({});
   const [customTabTitles, setCustomTabTitles] = useState<Record<number, string>>({});
   const customTabTitlesRef = useRef<Record<number, string>>({});
@@ -236,8 +237,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
   // Initialize and register event listeners
   useEffect(() => {
-    refreshWindowTabs();
-    loadSessionState();
+    Promise.all([refreshWindowTabs(), loadSessionState()]).finally(() => {
+      setIsInitialTabsLoaded(true);
+    });
 
     // Listen to tab activation
     const handleActivated: Parameters<typeof chrome.tabs.onActivated.addListener>[0] = (activeInfo) => {
@@ -981,14 +983,33 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         if (!/^https?:\/\//i.test(trimmed) && !/^chrome:\/\//i.test(trimmed)) {
           finalUrl = `https://${trimmed}`;
         }
+        if (typeof activeTabId === 'number') {
+          await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
+        } else {
+          await chrome.tabs.create({ url: finalUrl, active: true });
+        }
+      } else if (typeof chrome !== 'undefined' && typeof chrome.search?.query === 'function') {
+        try {
+          if (typeof activeTabId === 'number') {
+            await chrome.search.query({ text: trimmed, tabId: activeTabId });
+          } else {
+            await chrome.search.query({ text: trimmed, disposition: 'NEW_TAB' });
+          }
+        } catch {
+          finalUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+          if (typeof activeTabId === 'number') {
+            await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
+          } else {
+            await chrome.tabs.create({ url: finalUrl, active: true });
+          }
+        }
       } else {
         finalUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
-      }
-
-      if (typeof activeTabId === 'number') {
-        await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
-      } else {
-        await chrome.tabs.create({ url: finalUrl, active: true });
+        if (typeof activeTabId === 'number') {
+          await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
+        } else {
+          await chrome.tabs.create({ url: finalUrl, active: true });
+        }
       }
       await refreshWindowTabs();
     },
@@ -1302,6 +1323,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     tabsByTabId,
     activeTabId,
     unpinnedTabs,
+    isInitialTabsLoaded,
     tabSpaceByTabId,
     setTabSpace,
     moveTabsToSpace,

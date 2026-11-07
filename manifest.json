@@ -13,7 +13,8 @@
     "history",
     "alarms",
     "notifications",
-    "sessions"
+    "sessions",
+    "search"
   ],
   "host_permissions": [
     "https://suggestqueries.google.com/*"
