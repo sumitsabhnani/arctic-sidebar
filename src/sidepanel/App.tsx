@@ -15,12 +15,6 @@ import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
 import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft } from 'lucide-react';
-import {
-  isScratchpadUrl,
-  getScratchpadNoteId,
-  encodeNoteHash,
-  extractNoteContentFromUrl
-} from './utils/url';
 
 export const App: React.FC = () => {
   const {
@@ -422,16 +416,6 @@ export const App: React.FC = () => {
     };
   }, [dismissLeftSideTip]);
 
-  // Folder Scratchpad Active Note State
-  const [activeNote, setActiveNote] = useState<{
-    id: string;
-    bookmarkId: string;
-    title: string;
-  } | null>(null);
-  const [noteContent, setNoteContent] = useState<string>('');
-  const [noteSyncStatus, setNoteSyncStatus] = useState<'Synced' | 'Saving...' | 'Offline - Saved locally'>('Synced');
-  const noteDebounceTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-
   // Multi-Selection State for Bookmarks & Today's Tabs
   const [selectedBookmarkIds, setSelectedBookmarkIds] = useState<Set<string>>(new Set());
   const [lastSelectedBookmarkId, setLastSelectedBookmarkId] = useState<string | null>(null);
@@ -713,142 +697,30 @@ export const App: React.FC = () => {
     [updateBookmarkUrl, updateBookmarkBindingUrl]
   );
 
-  /**
-   * Open a folder scratchpad note in the drawer
-   */
-  const handleOpenScratchpadNote = useCallback(
-    async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
-      const noteId = getScratchpadNoteId(bookmark.url);
-      if (!noteId) return;
-
-      // If this note is already open, clicking it again toggles it closed
-      if (isScratchpadOpen && activeNote && activeNote.bookmarkId === bookmark.id) {
-        setIsScratchpadOpen(false);
-        setActiveNote(null);
-        return;
-      }
-
-      try {
-        const data = await chrome.storage.local.get([`arctic_note_${noteId}`]);
-        let text = (data[`arctic_note_${noteId}`] as string) || '';
-
-        // If local storage was wiped (e.g. extension reinstall), restore from bookmark URL hash
-        if (!text && bookmark.url) {
-          const fromUrl = extractNoteContentFromUrl(bookmark.url);
-          if (fromUrl) {
-            text = fromUrl;
-            await chrome.storage.local.set({ [`arctic_note_${noteId}`]: fromUrl });
-          }
-        }
-
-        setActiveNote({
-          id: noteId,
-          bookmarkId: bookmark.id,
-          title: bookmark.title || 'Scratchpad'
-        });
-        setNoteContent(text);
-        setNoteSyncStatus('Synced');
-        setIsScratchpadOpen(true);
-      } catch (err) {
-        console.warn('[Arctic] Error loading scratchpad note:', err);
-      }
-    },
-    [isScratchpadOpen, activeNote, setIsScratchpadOpen]
-  );
-
-  const handleNoteContentChange = useCallback(
-    (newText: string) => {
-      setNoteContent(newText);
-      if (!activeNote) return;
-      setNoteSyncStatus('Saving...');
-      if (noteDebounceTimerRef.current) {
-        clearTimeout(noteDebounceTimerRef.current);
-      }
-      noteDebounceTimerRef.current = setTimeout(async () => {
-        try {
-          await chrome.storage.local.set({ [`arctic_note_${activeNote.id}`]: newText });
-          // Mirror to bookmark URL hash for reinstall retention
-          if (activeNote.bookmarkId && chrome.bookmarks?.update) {
-            const newUrl = newText
-              ? `https://arctic.local/note/${activeNote.id}#${encodeNoteHash(newText)}`
-              : `https://arctic.local/note/${activeNote.id}`;
-            await chrome.bookmarks.update(activeNote.bookmarkId, { url: newUrl });
-          }
-          setNoteSyncStatus('Synced');
-        } catch {
-          setNoteSyncStatus('Offline - Saved locally');
-        }
-      }, 400);
-    },
-    [activeNote]
-  );
-
-  const handleClearNoteContent = useCallback(async () => {
-    setNoteContent('');
-    if (!activeNote) return;
-    if (noteDebounceTimerRef.current) clearTimeout(noteDebounceTimerRef.current);
-    await chrome.storage.local.set({ [`arctic_note_${activeNote.id}`]: '' });
-    if (activeNote.bookmarkId && chrome.bookmarks?.update) {
-      await chrome.bookmarks.update(activeNote.bookmarkId, { url: `https://arctic.local/note/${activeNote.id}` });
-    }
-    setNoteSyncStatus('Synced');
-  }, [activeNote]);
-
   const handleCloseScratchpadDrawer = useCallback(() => {
     setIsScratchpadOpen(false);
-    setActiveNote(null);
   }, [setIsScratchpadOpen]);
 
   /**
-   * Create a new Scratchpad note inside a target folder
-   */
-  const handleCreateScratchpad = useCallback(
-    async (targetFolderId: string) => {
-      try {
-        const noteId = `note_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-        const title = 'Scratchpad';
-        const url = `https://arctic.local/note/${noteId}`;
-        const newBookmark = await chrome.bookmarks.create({
-          parentId: targetFolderId,
-          title,
-          url
-        });
-        await chrome.storage.local.set({ [`arctic_note_${noteId}`]: '' });
-        setActiveNote({
-          id: noteId,
-          bookmarkId: newBookmark.id,
-          title
-        });
-        setNoteContent('');
-        setNoteSyncStatus('Synced');
-        setIsScratchpadOpen(true);
-      } catch (err) {
-        console.warn('[Arctic] Could not create scratchpad note:', err);
-      }
-    },
-    [setIsScratchpadOpen]
-  );
-
-  /**
-   * Create a new Google Doc bookmark in a target folder and open https://docs.new
+   * Create a new document bookmark (.new shortcut) in a target folder and open it
    */
   const handleCreateGoogleDoc = useCallback(
-    async (targetFolderId: string) => {
+    async (targetFolderId: string, docUrl = 'https://docs.new', docTitle = 'New Google Doc') => {
       try {
         const newBookmark = await chrome.bookmarks.create({
           parentId: targetFolderId,
-          title: 'New Google Doc',
-          url: 'https://docs.new'
+          title: docTitle,
+          url: docUrl
         });
-        const newTab = await chrome.tabs.create({ url: 'https://docs.new', active: true });
+        const newTab = await chrome.tabs.create({ url: docUrl, active: true });
         if (typeof newTab.id === 'number') {
           const newBinding: TabBinding = {
             bookmarkId: newBookmark.id,
             tabId: newTab.id,
             windowId: newTab.windowId,
-            originalUrl: 'https://docs.new',
-            currentUrl: 'https://docs.new',
-            currentTitle: 'New Google Doc',
+            originalUrl: docUrl,
+            currentUrl: docUrl,
+            currentTitle: docTitle,
             isNavigatedAway: false
           };
           await chrome.storage.session.set({
@@ -857,7 +729,7 @@ export const App: React.FC = () => {
           });
         }
       } catch (err) {
-        console.warn('[Arctic] Could not create Google Doc bookmark:', err);
+        console.warn('[Arctic] Could not create document bookmark:', err);
       }
     },
     [bindingsByBookmarkId, bookmarkIdByTabId]
@@ -1212,12 +1084,6 @@ export const App: React.FC = () => {
           const collectDescendants = (node: chrome.bookmarks.BookmarkTreeNode) => {
             if (node.id) {
               bookmarkIdsToClose.push(node.id);
-              if (isScratchpadUrl(node.url)) {
-                const noteId = getScratchpadNoteId(node.url);
-                if (noteId) {
-                  chrome.storage.local.remove([`arctic_note_${noteId}`]);
-                }
-              }
             }
             if (node.children) {
               for (const child of node.children) {
@@ -1228,11 +1094,6 @@ export const App: React.FC = () => {
           collectDescendants(subtree);
         } catch {
           // ignore if subtree cannot be queried
-        }
-
-        if (activeNote && (activeNote.bookmarkId === id || bookmarkIdsToClose.includes(activeNote.bookmarkId))) {
-          setActiveNote(null);
-          setIsScratchpadOpen(false);
         }
 
         for (const bId of bookmarkIdsToClose) {
@@ -1248,7 +1109,7 @@ export const App: React.FC = () => {
         await removeBookmarkOrFolder(id);
       }
     },
-    [bindingsByBookmarkId, handleCloseTab, removeBookmarkOrFolder, activeNote, setIsScratchpadOpen]
+    [bindingsByBookmarkId, handleCloseTab, removeBookmarkOrFolder]
   );
 
   const discardedTabsCount = useMemo(() => {
@@ -1265,18 +1126,8 @@ export const App: React.FC = () => {
   }, [discardedTabsByTabId, unpinnedTabs]);
 
   const handleToggleBottomScratchpad = useCallback(() => {
-    if (activeNote) {
-      if (isScratchpadOpen) {
-        setIsScratchpadOpen(false);
-        setActiveNote(null);
-      } else {
-        setActiveNote(null);
-        setIsScratchpadOpen(true);
-      }
-    } else {
-      toggleScratchpadOpen();
-    }
-  }, [activeNote, isScratchpadOpen, setIsScratchpadOpen, toggleScratchpadOpen]);
+    toggleScratchpadOpen();
+  }, [toggleScratchpadOpen]);
 
   const handleContainerClick = useCallback((e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
@@ -1649,10 +1500,7 @@ export const App: React.FC = () => {
                       onChangeEditTitle={handleChangeEditTitle}
                       onSaveRename={handleSaveRename}
                       onCancelRename={handleCancelRename}
-                      onCreateScratchpad={handleCreateScratchpad}
                       onCreateGoogleDoc={handleCreateGoogleDoc}
-                      onOpenScratchpadNote={handleOpenScratchpadNote}
-                      activeNoteId={isScratchpadOpen && activeNote ? activeNote.bookmarkId : null}
                       selectedBookmarkIds={selectedBookmarkIds}
                       onSelectBookmark={handleSelectBookmark}
                       onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
@@ -1663,10 +1511,7 @@ export const App: React.FC = () => {
 
                 const binding = bindingsByBookmarkId[child.id];
                 const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
-                const isNote = isScratchpadUrl(child.url);
-                const isActive = isNote
-                  ? Boolean(isScratchpadOpen && activeNote && activeNote.bookmarkId === child.id)
-                  : Boolean(binding && binding.tabId === activeTabId);
+                const isActive = Boolean(binding && binding.tabId === activeTabId);
                 const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
                 const isEditing = Boolean(editingTarget && editingTarget.type === 'bookmark' && editingTarget.id === child.id);
 
@@ -1714,7 +1559,6 @@ export const App: React.FC = () => {
                     onSelectBookmark={handleSelectBookmark}
                     onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
                     onMoveMultipleBookmarksToSpace={handleMoveMultipleBookmarksToSpace}
-                    onOpenScratchpadNote={handleOpenScratchpadNote}
                   />
                 );
               })
@@ -1785,13 +1629,11 @@ export const App: React.FC = () => {
       <ScratchpadDrawer
         isOpen={isScratchpadOpen}
         onClose={handleCloseScratchpadDrawer}
-        text={activeNote ? noteContent : scratchpadText}
-        onChange={activeNote ? handleNoteContentChange : setScratchpadText}
-        syncStatus={activeNote ? noteSyncStatus : scratchpadStatus}
-        onClear={activeNote ? handleClearNoteContent : clearScratchpad}
+        text={scratchpadText}
+        onChange={setScratchpadText}
+        syncStatus={scratchpadStatus}
+        onClear={clearScratchpad}
         maxChars={maxScratchpadChars}
-        title={activeNote ? activeNote.title : 'Scratchpad'}
-        placeholder={activeNote ? 'Write notes for this folder...' : 'Quick notes, URLs, or snippets (synced across devices)...'}
       />
 
       {/* Bottom Multiple Spaces Switcher Dock / Footer Bar */}

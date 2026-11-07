@@ -11,13 +11,15 @@ import {
   X,
   ArrowRightLeft,
   ChevronRight,
-  StickyNote,
-  FileText
+  FileText,
+  Table,
+  Presentation,
+  BookOpen,
+  Code
 } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
-import { isScratchpadUrl } from '../utils/url';
 
 function getDescendantBookmarkIds(folder: chrome.bookmarks.BookmarkTreeNode): string[] {
   let ids: string[] = [];
@@ -66,10 +68,7 @@ interface FolderNodeProps {
   onMoveBookmarkToIndex?: (draggedId: string, targetParentId: string, targetIndex?: number) => void;
   getReminderForBookmark?: (bookmarkId: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'bookmark'; bookmarkId: string; url: string; title: string }, anchorRect: DOMRect) => void;
-  onCreateScratchpad?: (parentId: string) => void;
-  onCreateGoogleDoc?: (parentId: string) => void;
-  onOpenScratchpadNote?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
-  activeNoteId?: string | null;
+  onCreateGoogleDoc?: (parentId: string, url?: string, title?: string) => void;
   selectedBookmarkIds?: Set<string>;
   onSelectBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onDeleteMultipleBookmarks?: (ids: string[]) => void;
@@ -115,10 +114,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onMoveBookmarkToIndex,
   getReminderForBookmark,
   onOpenReminderPopover,
-  onCreateScratchpad,
   onCreateGoogleDoc,
-  onOpenScratchpadNote,
-  activeNoteId,
   selectedBookmarkIds,
   onSelectBookmark,
   onDeleteMultipleBookmarks,
@@ -321,21 +317,38 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         icon: <FolderPlus className="w-3.5 h-3.5" />,
         action: () => handleStartCreateSubfolder()
       },
-      ...(onCreateScratchpad
-        ? [
-            {
-              label: 'New Scratchpad',
-              icon: <StickyNote className="w-3.5 h-3.5" />,
-              action: () => onCreateScratchpad(node.id)
-            }
-          ]
-        : []),
       ...(onCreateGoogleDoc
         ? [
             {
-              label: 'New Google Doc',
+              label: 'New Document',
               icon: <FileText className="w-3.5 h-3.5" />,
-              action: () => onCreateGoogleDoc(node.id)
+              submenu: [
+                {
+                  label: 'Google Doc',
+                  icon: <FileText className="w-3.5 h-3.5" />,
+                  action: () => onCreateGoogleDoc(node.id, 'https://docs.new', 'New Google Doc')
+                },
+                {
+                  label: 'Google Sheet',
+                  icon: <Table className="w-3.5 h-3.5" />,
+                  action: () => onCreateGoogleDoc(node.id, 'https://sheets.new', 'New Google Sheet')
+                },
+                {
+                  label: 'Google Slides',
+                  icon: <Presentation className="w-3.5 h-3.5" />,
+                  action: () => onCreateGoogleDoc(node.id, 'https://slides.new', 'New Google Slides')
+                },
+                {
+                  label: 'Notion Page',
+                  icon: <BookOpen className="w-3.5 h-3.5" />,
+                  action: () => onCreateGoogleDoc(node.id, 'https://notion.new', 'New Notion Page')
+                },
+                {
+                  label: 'GitHub Gist',
+                  icon: <Code className="w-3.5 h-3.5" />,
+                  action: () => onCreateGoogleDoc(node.id, 'https://gist.new', 'New GitHub Gist')
+                }
+              ]
             }
           ]
         : []),
@@ -675,10 +688,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onDropItemToFolder={onDropItemToFolder}
                     getReminderForBookmark={getReminderForBookmark}
                     onOpenReminderPopover={onOpenReminderPopover}
-                    onCreateScratchpad={onCreateScratchpad}
                     onCreateGoogleDoc={onCreateGoogleDoc}
-                    onOpenScratchpadNote={onOpenScratchpadNote}
-                    activeNoteId={activeNoteId}
                     selectedBookmarkIds={selectedBookmarkIds}
                     onSelectBookmark={onSelectBookmark}
                     onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
@@ -695,10 +705,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
               const binding = bindingsByBookmarkId[child.id];
               const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
-              const isNote = isScratchpadUrl(child.url);
-              const isActive = isNote
-                ? Boolean(activeNoteId && activeNoteId === child.id)
-                : Boolean(binding && binding.tabId === activeTabId);
+              const isActive = Boolean(binding && binding.tabId === activeTabId);
               const isDiscarded = Boolean(binding && discardedTabsByTabId[binding.tabId]);
               const isEditing = Boolean(editingTarget && editingTarget.type === 'bookmark' && editingTarget.id === child.id);
 
@@ -738,7 +745,6 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onSelectBookmark={onSelectBookmark}
                   onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
                   onMoveMultipleBookmarksToSpace={onMoveMultipleBookmarksToSpace}
-                  onOpenScratchpadNote={onOpenScratchpadNote}
                   isEditing={isEditing}
                   editTitle={isEditing && editingTarget ? editingTarget.title : (child.title || '')}
                   onStartRename={() => onStartRename?.('bookmark', child.id, child.title || '')}

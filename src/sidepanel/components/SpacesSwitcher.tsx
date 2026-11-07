@@ -236,7 +236,7 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
               onClick={onToggleScratchpad}
               className={`relative p-1.5 rounded-xl transition-all ${
                 isScratchpadOpen
-                  ? 'theme-accent-text theme-accent-tint shadow-sm'
+                  ? 'theme-active-card theme-accent-text'
                   : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10'
               }`}
             >
