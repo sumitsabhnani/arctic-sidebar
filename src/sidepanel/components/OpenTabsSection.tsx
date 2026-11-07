@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Layers, Trash2, ChevronDown, X, Plus } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
+import { Trash2, ChevronDown, X, Plus } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
 import type { SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
@@ -88,6 +89,31 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   const [isClearMenuOpen, setIsClearMenuOpen] = useState(false);
   const clearDropdownRef = React.useRef<HTMLDivElement>(null);
   const dropdownMenuRef = React.useRef<HTMLDivElement>(null);
+  const [clearMenuCoords, setClearMenuCoords] = useState<{ top: number; right: number }>({
+    top: 0,
+    right: 8
+  });
+
+  useLayoutEffect(() => {
+    if (!isClearMenuOpen || !clearDropdownRef.current) return;
+    const triggerRect = clearDropdownRef.current.getBoundingClientRect();
+    const menuEl = dropdownMenuRef.current;
+    const menuHeight = menuEl ? menuEl.getBoundingClientRect().height : 84;
+    const winW = typeof window !== 'undefined' ? window.innerWidth : 320;
+    const winH = typeof window !== 'undefined' ? window.innerHeight : 600;
+    // Leave at least 52px margin from the bottom so it never overlaps the bottom Spaces dock
+    const bottomSafeBoundary = winH - 52;
+
+    let top = triggerRect.bottom + 6;
+    if (top + menuHeight > bottomSafeBoundary && triggerRect.top - menuHeight - 6 > 8) {
+      top = triggerRect.top - menuHeight - 6;
+    } else if (top + menuHeight > winH - 12) {
+      top = Math.max(8, winH - menuHeight - 12);
+    }
+
+    const right = Math.max(8, winW - triggerRect.right);
+    setClearMenuCoords({ top, right });
+  }, [isClearMenuOpen]);
 
   useEffect(() => {
     if (!isClearMenuOpen) return;
@@ -258,7 +284,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   }, [localEditingTabId, unpinnedTabs]);
 
   return (
-    <div className="flex flex-col space-y-1 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
+    <div className="flex flex-col space-y-1 pt-2 pb-2 border-t border-black/[0.06] dark:border-white/[0.06]">
       {/* Header Bar */}
       <div className="flex items-center justify-between px-1 pb-1">
         <button
@@ -273,36 +299,20 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
               }`}
             />
           )}
-          <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 flex items-center gap-1 group-hover:text-zinc-700 dark:group-hover:text-zinc-300">
-            <Layers className="w-2.5 h-2.5 theme-accent-text" />
+          <span className="text-[11px] font-semibold tracking-wide text-zinc-500 dark:text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-200 transition-colors">
             Today&apos;s Tabs
-          </span>
-          <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
-            ({unpinnedTabs.length} ACTIVE)
           </span>
         </button>
 
-        {/* Action Buttons: New Tab & Delete with Dropdown */}
+        {/* Action Buttons: Clear with Chevron & New Tab */}
         <div className="flex items-center space-x-1">
-          {onNewTab && (
-            <button
-              type="button"
-              title="New tab (Cmd+T)"
-              aria-label="New tab"
-              onClick={onNewTab}
-              className="p-1 rounded text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          )}
-
           {unpinnedTabs.length > 0 && (
             <div
               ref={clearDropdownRef}
-              className={`relative flex items-center rounded-md border transition-colors ${
+              className={`relative flex items-center rounded-md transition-colors ${
                 isClearMenuOpen
-                  ? 'bg-black/10 dark:bg-white/10 border-black/15 dark:border-white/20'
-                  : 'border-transparent hover:border-black/10 dark:hover:border-white/10 hover:bg-black/5 dark:hover:bg-white/10'
+                  ? 'bg-black/10 dark:bg-white/10'
+                  : 'hover:bg-black/5 dark:hover:bg-white/10'
               }`}
             >
               <button
@@ -316,14 +326,14 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                     setIsClearMenuOpen((prev) => !prev);
                   }
                 }}
-                className="p-1 pl-1.5 rounded-l text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+                className="p-1 pl-1.5 rounded-l text-zinc-400 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
 
               {onCloseAllWindowTabs && (
                 <>
-                  <span className="w-[1px] h-3 bg-black/15 dark:bg-white/15 my-auto" />
+                  <span className="w-[1px] h-3 bg-black/10 dark:bg-white/10 my-auto" />
                   <button
                     type="button"
                     title="Clear options"
@@ -333,10 +343,10 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                       e.stopPropagation();
                       setIsClearMenuOpen((prev) => !prev);
                     }}
-                    className="p-1 pr-1.5 rounded-r text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
+                    className="p-1 pr-1.5 rounded-r text-zinc-400 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
                   >
                     <ChevronDown
-                      className={`w-3 h-3 stroke-[2.5] transition-transform duration-150 ${
+                      className={`w-3 h-3 stroke-[2.2] transition-transform duration-150 ${
                         isClearMenuOpen ? 'rotate-180 text-zinc-800 dark:text-zinc-100' : ''
                       }`}
                     />
@@ -344,41 +354,61 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                 </>
               )}
 
-              {/* Clear Dropdown Menu */}
-              {isClearMenuOpen && (
-                <div
-                  ref={dropdownMenuRef}
-                  className="absolute right-0 top-full mt-1 w-44 rounded-xl bg-white dark:bg-[#18181b] border border-zinc-200 dark:border-zinc-700/80 shadow-[0_12px_36px_rgba(0,0,0,0.2)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.8)] p-1 z-50 animate-in fade-in zoom-in-95 duration-100 select-none text-zinc-900 dark:text-zinc-100"
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onCloseAll();
-                      setIsClearMenuOpen(false);
+              {/* Clear Dropdown Menu rendered in portal so it is never clipped by the scroll container */}
+              {isClearMenuOpen &&
+                createPortal(
+                  <div
+                    ref={dropdownMenuRef}
+                    style={{
+                      position: 'fixed',
+                      top: `${clearMenuCoords.top}px`,
+                      right: `${clearMenuCoords.right}px`,
+                      zIndex: 99999
                     }}
-                    className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                    className="w-44 rounded-xl bg-white dark:bg-[#18181b] border border-zinc-200 dark:border-zinc-700/80 shadow-[0_12px_36px_rgba(0,0,0,0.2)] dark:shadow-[0_12px_36px_rgba(0,0,0,0.8)] p-1 animate-in fade-in zoom-in-95 duration-100 select-none text-zinc-900 dark:text-zinc-100"
                   >
-                    <Trash2 className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
-                    <span>Clear Today&apos;s tabs</span>
-                  </button>
-
-                  {onCloseAllWindowTabs && (
                     <button
                       type="button"
-                      title="Close all tabs in current window"
                       onClick={() => {
-                        onCloseAllWindowTabs();
+                        onCloseAll();
                         setIsClearMenuOpen(false);
                       }}
-                      className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                      className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                     >
-                      <X className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
-                      <span>Clear all tabs</span>
+                      <Trash2 className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
+                      <span>Clear Today&apos;s tabs</span>
                     </button>
-                  )}
-                </div>
-              )}
+
+                    {onCloseAllWindowTabs && (
+                      <button
+                        type="button"
+                        title="Close all tabs in current window"
+                        onClick={() => {
+                          onCloseAllWindowTabs();
+                          setIsClearMenuOpen(false);
+                        }}
+                        className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                      >
+                        <X className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                        <span>Clear all tabs</span>
+                      </button>
+                    )}
+                  </div>,
+                  document.body
+                )}
             </div>
+          )}
+
+          {onNewTab && (
+            <button
+              type="button"
+              title="New tab (Cmd+T)"
+              aria-label="New tab"
+              onClick={onNewTab}
+              className="p-1 rounded-md text-zinc-400 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
       </div>

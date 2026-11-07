@@ -109,6 +109,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
   const [localIsEditing, setLocalIsEditing] = useState(false);
   const [localEditTitle, setLocalEditTitle] = useState(tab.title || '');
+  const [isCopied, setIsCopied] = useState(false);
 
   const isControlled = typeof onStartRename === 'function';
   const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
@@ -569,8 +570,8 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         </div>
       </div>
 
-      {/* Right: Audio Indicator, Pin Button, Reminder, & Close Button */}
-      <div className="flex items-center space-x-1 flex-shrink-0">
+      {/* Right: Audio Indicator & Cohesive Hover Actions (Pin, Reload, Reminder, Close) */}
+      <div className="flex items-center gap-0.5 flex-shrink-0 ml-1">
         {/* Audio status */}
         {(isAudible || isMuted) && (
           <button
@@ -580,16 +581,16 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               e.stopPropagation();
               onToggleMute(tab);
             }}
-            className={`flex items-center justify-center w-5 h-5 rounded-full transition-colors ${
+            className={`flex items-center justify-center w-5 h-5 rounded-md transition-colors ${
               isMuted
                 ? 'text-rose-500 dark:text-rose-400 bg-rose-500/15 hover:bg-rose-500/25'
                 : 'text-cyan-500 dark:text-cyan-400 bg-cyan-500/15 hover:bg-cyan-500/25'
             }`}
           >
             {isMuted ? (
-              <VolumeX className="w-3 h-3 stroke-[2.5]" />
+              <VolumeX className="w-3 h-3 stroke-[2.2]" />
             ) : (
-              <Volume2 className="w-3 h-3 stroke-[2.5] animate-pulse" />
+              <Volume2 className="w-3 h-3 stroke-[2.2] animate-pulse" />
             )}
           </button>
         )}
@@ -604,25 +605,37 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               e.stopPropagation();
               onPinToWorkspace(tab);
             }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-amber-500 dark:hover:text-amber-400 hover:bg-amber-500/10 transition-all duration-100"
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md text-zinc-400/80 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.06] dark:hover:bg-white/[0.08] transition-colors"
           >
-            <Pin className="w-3 h-3 stroke-[2.2]" />
+            <Pin className="w-3 h-3 stroke-[2]" />
           </button>
         )}
 
-        {/* Reload Tab Button (visible on hover) */}
-        {typeof tabId === 'number' && (
+        {/* Copy Link Button (visible on hover) */}
+        {!isNewTab && tab.url && (
           <button
             type="button"
-            data-tooltip="Reload tab"
+            data-tooltip={isCopied ? 'Copied!' : 'Copy link'}
             data-tooltip-pos="bottom-right"
             onClick={(e) => {
               e.stopPropagation();
-              onReload(tabId);
+              if (tab.url) {
+                navigator.clipboard.writeText(tab.url);
+                setIsCopied(true);
+                setTimeout(() => setIsCopied(false), 1500);
+              }
             }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-all duration-100"
+            className={`hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md transition-colors ${
+              isCopied
+                ? 'text-emerald-500 bg-emerald-500/15'
+                : 'text-zinc-400/80 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.06] dark:hover:bg-white/[0.08]'
+            }`}
           >
-            <RotateCw className="w-3 h-3 stroke-[2.2]" />
+            {isCopied ? (
+              <Check className="w-3 h-3 stroke-[2.2]" />
+            ) : (
+              <Link2 className="w-3 h-3 stroke-[2]" />
+            )}
           </button>
         )}
 
@@ -650,15 +663,15 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
                 rect
               );
             }}
-            className={`items-center justify-center w-5 h-5 rounded-full transition-all duration-100 ${
+            className={`items-center justify-center w-5 h-5 rounded-md transition-colors ${
               reminder
                 ? reminder.status === 'fired' || reminder.triggerAt <= Date.now()
                   ? 'flex text-rose-500 bg-rose-500/15 animate-pulse'
                   : 'flex text-amber-500 dark:text-amber-400 bg-amber-500/10'
-                : 'hidden group-hover:flex text-zinc-400 hover:text-amber-500 hover:bg-amber-500/10'
+                : 'hidden group-hover:flex text-zinc-400/80 dark:text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-black/[0.06] dark:hover:bg-white/[0.08]'
             }`}
           >
-            <Bell className="w-3 h-3 stroke-[2.5]" />
+            <Bell className="w-3 h-3 stroke-[2]" />
           </button>
         )}
 
@@ -668,9 +681,9 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
             type="button"
             data-tooltip="Close tab (Cmd+W)"
             onClick={(e) => onClose(tabId, e)}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-500 dark:text-zinc-400 hover:text-rose-500 hover:bg-rose-500/10 transition-all duration-100"
+            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md text-zinc-400/80 dark:text-zinc-500 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
           >
-            <X className="w-3 h-3 stroke-[2.5]" />
+            <X className="w-3 h-3 stroke-[2.2]" />
           </button>
         )}
       </div>
