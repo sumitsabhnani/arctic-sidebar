@@ -39,6 +39,7 @@ export interface SuggestionItem {
   id: string;
   type: 'search' | 'bookmark' | 'history' | 'url' | 'command';
   title: string;
+  searchQuery?: string;
   url?: string;
   domain?: string;
   description?: string;
@@ -86,6 +87,39 @@ export function formatNavigationUrl(input: string): string {
     return `https://${trimmed}`;
   }
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+}
+
+// Fetch live Google autocomplete suggestions when a query is not found locally
+export async function fetchGoogleSuggestions(
+  query: string,
+  signal?: AbortSignal
+): Promise<string[]> {
+  const trimmed = query.trim();
+  if (!trimmed || typeof fetch !== 'function') return [];
+  try {
+    const url = `https://suggestqueries.google.com/complete/search?client=firefox&q=${encodeURIComponent(trimmed)}`;
+    const response = await fetch(url, signal ? { signal } : undefined);
+    if (!response || !response.ok) return [];
+    const data = await response.json();
+    if (Array.isArray(data) && Array.isArray(data[1])) {
+      const seen = new Set<string>([trimmed.toLowerCase()]);
+      const suggestions: string[] = [];
+      for (const item of data[1]) {
+        if (typeof item === 'string') {
+          const clean = item.trim();
+          const lower = clean.toLowerCase();
+          if (clean && !seen.has(lower)) {
+            seen.add(lower);
+            suggestions.push(clean);
+          }
+        }
+      }
+      return suggestions;
+    }
+    return [];
+  } catch {
+    return [];
+  }
 }
 
 // Fetch all bookmarks saved within Arctic (Quick Access and Spaces)
@@ -1096,15 +1130,41 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       });
 
       if (!isCancelled) {
-        setSuggestions(results);
+        setSuggestions([...results]);
         setSelectedIndex(0);
+      }
+
+      // 6. Live Google Suggestions when keyword is not found in bookmarks, history, or direct URL
+      const hasLocalBookmarkOrHistory = results.some(
+        (r) => r.type === 'bookmark' || r.type === 'history' || r.type === 'url'
+      );
+      if (!hasLocalBookmarkOrHistory && !isLikelyUrl(trimmed)) {
+        const googleSuggestions = await fetchGoogleSuggestions(
+          trimmed,
+          abortController?.signal
+        );
+        if (!isCancelled && googleSuggestions.length > 0) {
+          const suggestionItems: SuggestionItem[] = googleSuggestions
+            .slice(0, 5)
+            .map((suggestionText, idx) => ({
+              id: `google-suggest-${idx}-${suggestionText}`,
+              type: 'search',
+              title: suggestionText,
+              searchQuery: suggestionText,
+              url: `https://www.google.com/search?q=${encodeURIComponent(suggestionText)}`
+            }));
+          setSuggestions([...results, ...suggestionItems]);
+        }
       }
     };
 
+    const abortController =
+      typeof AbortController !== 'undefined' ? new AbortController() : null;
     fetchResults();
 
     return () => {
       isCancelled = true;
+      abortController?.abort();
     };
   }, [activeQuery, activeSiteEngine, getActionCommands]);
 
@@ -1402,18 +1462,20 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       selectedIndex >= 0 && selectedIndex < suggestions.length
         ? suggestions[selectedIndex]
         : null;
-    const canAutocompleteSelectedUrl =
-      Boolean(
-        selectedItem?.url &&
-          selectedItem.type !== 'command' &&
-          selectedItem.type !== 'search'
-      ) &&
+    const autocompleteTarget =
+      selectedItem?.type === 'search'
+        ? selectedItem.searchQuery
+        : selectedItem?.type !== 'command'
+          ? selectedItem?.url
+          : undefined;
+    const canAutocompleteSelectedItem =
+      Boolean(autocompleteTarget) &&
       (hasArrowNavigated || !matchedSiteEngine || Boolean(activeSiteEngine));
 
     if (e.key === 'Tab' && !e.shiftKey) {
-      if (canAutocompleteSelectedUrl && selectedItem?.url) {
+      if (canAutocompleteSelectedItem && autocompleteTarget) {
         e.preventDefault();
-        autocompleteUrlIntoInput(selectedItem.url);
+        autocompleteUrlIntoInput(autocompleteTarget);
         return;
       }
 
@@ -1758,20 +1820,29 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                       )}
                       {item.type === 'search' && (
                         <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 border border-cyan-500/20">
-                          Search
+                          {item.searchQuery ? 'Google Suggestion' : 'Search'}
                         </span>
                       )}
                       {isSelected &&
-                        item.url &&
                         item.type !== 'command' &&
-                        item.type !== 'search' && (
+                        (item.type === 'search'
+                          ? Boolean(item.searchQuery)
+                          : Boolean(item.url)) && (
                           <button
                             type="button"
                             data-testid="row-tab-to-edit-hint"
-                            title="Press Tab or click to edit URL in search bar"
+                            title={
+                              item.type === 'search'
+                                ? 'Press Tab or click to fill suggestion in search bar'
+                                : 'Press Tab or click to edit URL in search bar'
+                            }
                             onClick={(e) => {
                               e.stopPropagation();
-                              autocompleteUrlIntoInput(item.url!);
+                              autocompleteUrlIntoInput(
+                                item.type === 'search'
+                                  ? item.searchQuery!
+                                  : item.url!
+                              );
                             }}
                             className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-zinc-500 dark:text-zinc-400 border border-black/10 dark:border-white/10 transition-colors animate-in fade-in duration-100"
                           >
