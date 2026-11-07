@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/version-1.7.0-blue.svg" alt="Version 1.7.0" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT" />
   <img src="https://img.shields.io/badge/manifest-v3-orange.svg" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/tests-181%20passed-brightgreen.svg" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-239%20passed-brightgreen.svg" alt="Tests" />
   <img src="https://img.shields.io/badge/privacy-100%25_local_%26_tracker--free-teal.svg" alt="Privacy" />
 </p>
 
@@ -49,7 +49,7 @@ Install Arctic directly from the official **Chrome Web Store**:
   * `> Reopen Last Closed Tab`
   * `> Switch Space: [Space Name]`
   * `> Open Chrome Bookmarks / History / Extensions / Downloads`
-* **Instant Navigation:** Jump directly to URLs (e.g., `github.com` or `localhost:3000`), search your tabs and browsing history, or fall back to Google Search with Enter.
+* **Instant Navigation & Google Suggestions:** Jump directly to URLs (e.g., `github.com` or `localhost:3000`), search your tabs and browsing history, see live Google suggestions with `Tab ⇥` to refine, or fall back to Google Search with Enter.
 
 ### ⏰ Tab Reminders & Alerts
 * **Set Tab Reminders:** Never lose track of an article, pull request, or invoice. Schedule reminders on any tab with 1-click presets (*In 15m*, *In 1h*, *In 3h*, *Tomorrow 9 AM*) or a custom date & time picker.
@@ -119,7 +119,7 @@ cd arctic-sidebar
 # Install dependencies
 npm install
 
-# Run automated test suite (57 tests)
+# Run automated test suite (239 tests)
 npm test
 
 # Build for production

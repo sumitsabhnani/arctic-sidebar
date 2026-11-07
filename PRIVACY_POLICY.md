@@ -26,12 +26,13 @@ Arctic Sidebar only requests the minimum necessary permissions required to provi
 * **`storage`**: Uses Chrome's local storage (`chrome.storage.local` and `chrome.storage.session`) strictly to remember your preferences (such as your chosen color theme, dark/light mode preference, auto-archive timer, and collapsed folder states).
 * **`history`**: Used solely on the New Tab Command Bar page to provide instant local autocomplete suggestions from your browsing history while you type. History data is queried locally on your machine and is never transmitted anywhere.
 * **`favicon`**: Uses Google Chrome's internal favicon provider (`chrome://favicon/`) to display website icons next to your tabs, bookmarks, and search suggestions.
+* **`host_permissions` (`https://suggestqueries.google.com/*`)**: Used exclusively on the New Tab Command Bar to fetch live Google search suggestions when a typed query is not found in your local bookmarks or history. Queries are sent directly to Google's public autocomplete endpoint only to display completions and are never collected, stored, or tracked by Arctic Sidebar.
 
 ---
 
 ### 3. Third-Party Services & Analytics
 
-Arctic Sidebar does not include any third-party tracking scripts, cookies, telemetry, or analytics (such as Google Analytics, Mixpanel, or Sentry). No network requests are made by the extension in the background.
+Arctic Sidebar does not include any third-party tracking scripts, cookies, telemetry, or analytics (such as Google Analytics, Mixpanel, or Sentry). Aside from fetching search suggestions directly from Google's autocomplete endpoint when searching in the command bar, no network requests are made by the extension.
 
 ---
 
