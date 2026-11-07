@@ -653,6 +653,23 @@ export function createMockChrome() {
         badgeColor = details.color;
       })
     },
+    search: {
+      query: vi.fn(async (options: chrome.search.QueryInfo, cb?: () => void) => {
+        const text = options.text || '';
+        const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(text)}`;
+        if (typeof options.tabId === 'number') {
+          await mock.tabs.update(options.tabId, { url: searchUrl, active: true });
+        } else if (options.disposition === 'NEW_TAB') {
+          await mock.tabs.create({ url: searchUrl, active: true });
+        } else {
+          const activeTab = tabsState.find((t) => t.active) || tabsState[0];
+          if (activeTab?.id) {
+            await mock.tabs.update(activeTab.id, { url: searchUrl, active: true });
+          }
+        }
+        if (cb) cb();
+      })
+    },
 
     // Test helpers to inspect or reset internal states
     __setLocalStorage: (state: Record<string, unknown>) => {
@@ -741,6 +758,7 @@ export function createMockChrome() {
       notificationsMap.clear();
       badgeText = '';
       badgeColor = '';
+      mock.search.query.mockClear();
     },
     __triggerAlarm: async (name: string) => {
       const alarm: chrome.alarms.Alarm = alarmsMap.get(name) || { name, scheduledTime: Date.now() };

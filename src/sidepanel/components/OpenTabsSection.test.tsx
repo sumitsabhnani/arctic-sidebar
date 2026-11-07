@@ -297,4 +297,73 @@ describe('OpenTabsSection component', () => {
     moveItem.submenu[1].action();
     expect(onMoveTabToSpace).toHaveBeenCalledWith(101, 'work');
   });
+
+  it('automatically scrolls down so the latest tab is in view when a new tab is opened', () => {
+    const scrollIntoViewMock = vi.fn();
+    const scrollToMock = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    try {
+      const { rerender } = render(
+        <div
+          data-testid="scroll-container"
+          className="overflow-y-auto"
+          style={{ height: '200px' }}
+        >
+          <OpenTabsSection {...defaultProps} unpinnedTabs={mockTabs} activeTabId={101} />
+        </div>
+      );
+
+      const scrollContainer = screen.getByTestId('scroll-container');
+      Object.defineProperty(scrollContainer, 'scrollHeight', {
+        value: 850,
+        configurable: true
+      });
+      scrollContainer.scrollTop = 0;
+      scrollContainer.scrollTo = scrollToMock;
+
+      // Initial render does not trigger scroll
+      expect(scrollIntoViewMock).not.toHaveBeenCalled();
+
+      // Simulate opening a new tab (tab 103)
+      const newTab: chrome.tabs.Tab = {
+        id: 103,
+        index: 2,
+        windowId: 1,
+        highlighted: true,
+        active: true,
+        pinned: false,
+        incognito: false,
+        url: 'https://react.dev',
+        title: 'React Documentation'
+      } as chrome.tabs.Tab;
+
+      rerender(
+        <div
+          data-testid="scroll-container"
+          className="overflow-y-auto"
+          style={{ height: '200px' }}
+        >
+          <OpenTabsSection
+            {...defaultProps}
+            unpinnedTabs={[...mockTabs, newTab]}
+            activeTabId={103}
+          />
+        </div>
+      );
+
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'nearest'
+      });
+      expect(scrollToMock).toHaveBeenCalledWith({
+        top: 850,
+        behavior: 'smooth'
+      });
+      expect(scrollContainer.scrollTop).toBe(850);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
 });

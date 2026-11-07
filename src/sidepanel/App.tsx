@@ -49,6 +49,7 @@ export const App: React.FC = () => {
     tabsByTabId,
     activeTabId,
     unpinnedTabs,
+    isInitialTabsLoaded,
     tabSpaceByTabId,
     setTabSpace,
     moveTabsToSpace,
@@ -1602,6 +1603,8 @@ export const App: React.FC = () => {
         <OpenTabsSection
           unpinnedTabs={visibleUnpinnedTabs}
           activeTabId={activeTabId}
+          activeSpaceId={activeSpaceId}
+          isInitialTabsLoaded={isInitialTabsLoaded}
           spaces={spaces}
           isCollapsed={collapsedSections.todayTabs}
           densityMode={tabsDensity}

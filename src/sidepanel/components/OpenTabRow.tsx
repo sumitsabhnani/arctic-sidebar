@@ -378,6 +378,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   if (effectiveIsEditing) {
     return (
       <form
+        data-tab-id={tabId}
         onSubmit={(e) => {
           e.preventDefault();
           if (onSaveRename) {
@@ -448,6 +449,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     <div
       role="button"
       tabIndex={0}
+      data-tab-id={tabId}
       draggable={Boolean(tab.url && !isNewTab)}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}

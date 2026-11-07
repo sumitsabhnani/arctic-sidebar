@@ -200,11 +200,15 @@ describe('useTabBindings hook', () => {
     let tab = await mockChrome.tabs.get(1);
     expect(tab.url).toBe('https://github.com/trending');
 
-    // Positive: Search query input fallback
+    // Positive: Search query input uses browser default search engine via chrome.search.query
     await act(async () => {
       await result.current.navigateActiveTab('react component testing');
     });
 
+    expect(mockChrome.search.query).toHaveBeenCalledWith({
+      text: 'react component testing',
+      tabId: 1
+    });
     tab = await mockChrome.tabs.get(1);
     expect(tab.url).toBe('https://www.google.com/search?q=react%20component%20testing');
 

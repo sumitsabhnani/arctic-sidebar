@@ -40,6 +40,7 @@ export interface SuggestionItem {
   type: 'search' | 'bookmark' | 'history' | 'url' | 'command';
   title: string;
   searchQuery?: string;
+  defaultSearchText?: string;
   url?: string;
   domain?: string;
   description?: string;
@@ -1120,12 +1121,13 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         // ignore
       }
 
-      // 5. Google Search Fallback
+      // 5. Web Search Fallback (uses browser's default search engine via chrome.search)
       const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
       results.push({
         id: 'google-search',
         type: 'search',
-        title: `Search Google for "${trimmed}"`,
+        title: `Search Web for "${trimmed}"`,
+        defaultSearchText: trimmed,
         url: searchUrl
       });
 
@@ -1151,6 +1153,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
               type: 'search',
               title: suggestionText,
               searchQuery: suggestionText,
+              defaultSearchText: suggestionText,
               url: `https://www.google.com/search?q=${encodeURIComponent(suggestionText)}`
             }));
           setSuggestions([...results, ...suggestionItems]);
@@ -1401,7 +1404,83 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     [showToast]
   );
 
-  // Handle selection (URL navigation, Bookmark activation, or Command action)
+  // Execute a web search using the user's default browser search engine (with Google fallback)
+  const performWebSearch = useCallback(
+    async (rawSearchQuery: string) => {
+      const trimmed = rawSearchQuery.trim();
+      if (!trimmed || isNavigatingRef.current) return;
+
+      isNavigatingRef.current = true;
+      setIsNavigating(true);
+      inputRef.current?.blur();
+
+      if (navTimeoutRef.current) clearTimeout(navTimeoutRef.current);
+      navTimeoutRef.current = setTimeout(() => {
+        isNavigatingRef.current = false;
+        setIsNavigating(false);
+      }, 12000);
+
+      const fallbackUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+
+      try {
+        if (typeof chrome !== 'undefined' && typeof chrome.search?.query === 'function') {
+          await chrome.search.query({
+            text: trimmed,
+            disposition: 'CURRENT_TAB'
+          });
+        } else {
+          let currentTab: chrome.tabs.Tab | undefined = currentTabRef.current || undefined;
+          if (!currentTab && chrome?.tabs?.getCurrent) {
+            try {
+              const t = await chrome.tabs.getCurrent();
+              if (t) {
+                currentTab = t;
+                currentTabRef.current = t;
+              }
+            } catch {}
+          }
+          if (!currentTab && chrome?.tabs?.query) {
+            try {
+              const [activeTab] = await chrome.tabs.query({
+                active: true,
+                currentWindow: true
+              });
+              currentTab = activeTab;
+              if (currentTab) {
+                currentTabRef.current = currentTab;
+              }
+            } catch {}
+          }
+          if (currentTab?.id && chrome?.tabs?.update) {
+            await chrome.tabs.update(currentTab.id, {
+              url: fallbackUrl,
+              active: true
+            });
+          } else {
+            window.location.href = fallbackUrl;
+          }
+        }
+
+        try {
+          chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+        } catch {}
+      } catch (err) {
+        try {
+          window.location.href = fallbackUrl;
+        } catch {
+          console.warn('[Arctic] Search navigation error:', err);
+          if (navTimeoutRef.current) clearTimeout(navTimeoutRef.current);
+          isNavigatingRef.current = false;
+          setIsNavigating(false);
+          inputRef.current?.focus();
+          showToast('Could not perform search');
+        }
+      }
+    },
+    [showToast]
+  );
+
+  // Handle selection (URL navigation, Bookmark activation, Web search, or Command action)
   const handleSelect = useCallback(
     async (item: SuggestionItem) => {
       if (isNavigatingRef.current) return;
@@ -1414,6 +1493,10 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         }
         return;
       }
+      if (item.defaultSearchText) {
+        await performWebSearch(item.defaultSearchText);
+        return;
+      }
       if (item.url) {
         openBookmarkOrUrl(item.url, {
           id: item.bookmarkId,
@@ -1424,10 +1507,10 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           isArctic: item.isArctic
         });
       } else {
-        openBookmarkOrUrl(formatNavigationUrl(item.title));
+        await performWebSearch(item.title);
       }
     },
-    [openBookmarkOrUrl]
+    [openBookmarkOrUrl, performWebSearch]
   );
 
   // Load a suggestion's URL into the input box and place cursor at the end for editing
@@ -1513,13 +1596,24 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       setSelectedIndex((prev) => (prev <= 0 ? suggestions.length - 1 : prev - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      if (e.shiftKey) {
+        const rawSearch = query.trim() || siteTriggerQuery.trim();
+        if (rawSearch) {
+          performWebSearch(rawSearch);
+        }
+        return;
+      }
       const isDebouncePending = activeQuery.trim() !== query.trim();
       if (!isDebouncePending && selectedIndex >= 0 && selectedIndex < suggestions.length) {
         handleSelect(suggestions[selectedIndex]);
       } else if (activeSiteEngine) {
         openBookmarkOrUrl(buildSiteSearchUrl(activeSiteEngine, query));
       } else if (query.trim() && !query.trim().startsWith('>')) {
-        openBookmarkOrUrl(formatNavigationUrl(query));
+        if (isLikelyUrl(query.trim())) {
+          openBookmarkOrUrl(formatNavigationUrl(query));
+        } else {
+          performWebSearch(query.trim());
+        }
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -1662,7 +1756,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 placeholder={
                   activeSiteEngine
                     ? `Search ${activeSiteEngine.name}...`
-                    : 'Search Google, enter URL, or type > for commands...'
+                    : 'Search web, enter URL, or type > for commands...'
                 }
                 autoFocus
                 disabled={isNavigating}
@@ -1821,6 +1915,15 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                       {item.type === 'search' && (
                         <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 border border-cyan-500/20">
                           {item.searchQuery ? 'Google Suggestion' : 'Search'}
+                        </span>
+                      )}
+                      {item.id === 'google-search' && (
+                        <span
+                          data-testid="shift-enter-search-hint"
+                          title="Press Shift+Enter anywhere to search the web directly"
+                          className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400 border border-black/10 dark:border-white/10"
+                        >
+                          ⇧ ↵
                         </span>
                       )}
                       {isSelected &&
