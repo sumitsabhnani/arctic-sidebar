@@ -39,7 +39,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             onClose();
           }
         }}
-        placeholder="Filter bookmarks & tabs... (Esc to exit)"
+        placeholder="Filter tabs... (Esc to exit)"
         className="flex-1 bg-transparent text-xs text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-500 focus:outline-none"
       />
 

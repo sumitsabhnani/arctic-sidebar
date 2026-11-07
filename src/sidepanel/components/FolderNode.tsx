@@ -306,7 +306,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
       ...(onBookmarkCurrentPage
         ? [
             {
-              label: 'Bookmark Current Page Here',
+              label: 'Pin Current Tab Here',
               icon: <BookmarkPlus className="w-3.5 h-3.5" />,
               action: () => onBookmarkCurrentPage(node.id)
             }
@@ -541,11 +541,11 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               </button>
             )}
 
-            {/* Bookmark Current Page */}
+            {/* Pin Current Tab */}
             {onBookmarkCurrentPage && (
               <button
                 type="button"
-                data-tooltip="Bookmark current page here"
+                data-tooltip="Pin current tab here"
                 onClick={(e) => {
                   e.stopPropagation();
                   onBookmarkCurrentPage(node.id);

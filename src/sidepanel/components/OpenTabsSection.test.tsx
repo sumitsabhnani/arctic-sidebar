@@ -156,12 +156,12 @@ describe('OpenTabsSection component', () => {
     const firstTabRow = screen.getByText('Hacker News').closest('[role="button"]')!;
     const actionButtons = Array.from(
       firstTabRow.querySelectorAll(
-        'button[data-tooltip="Pin to Bookmarks"], button[data-tooltip="Reload tab"], button[data-tooltip="Set reminder"], button[data-tooltip="Close tab (Cmd+W)"]'
+        'button[data-tooltip="Pin to Active Space"], button[data-tooltip="Reload tab"], button[data-tooltip="Set reminder"], button[data-tooltip="Close tab (Cmd+W)"]'
       )
     );
 
     expect(actionButtons.length).toBe(4);
-    expect(actionButtons[0]).toHaveAttribute('data-tooltip', 'Pin to Bookmarks');
+    expect(actionButtons[0]).toHaveAttribute('data-tooltip', 'Pin to Active Space');
     expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Reload tab');
     expect(actionButtons[2]).toHaveAttribute('data-tooltip', 'Set reminder');
     expect(actionButtons[3]).toHaveAttribute('data-tooltip', 'Close tab (Cmd+W)');
@@ -174,9 +174,9 @@ describe('OpenTabsSection component', () => {
     expect(defaultProps.onFocusTab).toHaveBeenCalledWith(102);
   });
 
-  it('keeps Pin to Bookmarks button hidden on unhovered tabs (including active tab) to avoid layout shift', () => {
+  it('keeps Pin to Active Space button hidden on unhovered tabs (including active tab) to avoid layout shift', () => {
     const { container } = render(<OpenTabsSection {...defaultProps} />);
-    const pinButtons = container.querySelectorAll('button[data-tooltip="Pin to Bookmarks"]');
+    const pinButtons = container.querySelectorAll('button[data-tooltip="Pin to Active Space"]');
     expect(pinButtons.length).toBe(2);
     pinButtons.forEach((btn) => {
       expect(btn.className).toContain('hidden');

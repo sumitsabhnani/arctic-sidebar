@@ -594,11 +594,11 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           </button>
         )}
 
-        {/* Quick Pin to Bookmarks Button (visible on hover) */}
+        {/* Quick Pin to Active Space Button (visible on hover) */}
         {!isNewTab && (
           <button
             type="button"
-            data-tooltip="Pin to Bookmarks"
+            data-tooltip="Pin to Active Space"
             data-tooltip-pos="bottom-right"
             onClick={(e) => {
               e.stopPropagation();

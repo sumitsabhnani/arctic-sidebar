@@ -91,7 +91,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
       <div className="px-3 py-3 rounded-xl border border-dashed border-zinc-300 dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02] text-center">
         <p className="text-xs text-zinc-500 dark:text-zinc-400">No Quick Access favorites yet.</p>
         <p className="text-[11px] text-zinc-400 dark:text-zinc-600 mt-0.5">
-          Right-click any tab or bookmark to pin it here.
+          Right-click any tab to pin it here.
         </p>
       </div>
     );

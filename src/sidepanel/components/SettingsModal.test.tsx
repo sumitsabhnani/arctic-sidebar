@@ -43,7 +43,7 @@ describe('SettingsModal component', () => {
     expect(screen.getByText('Settings & Appearance')).toBeInTheDocument();
     expect(screen.getByText('Theme & Appearance')).toBeInTheDocument();
     expect(screen.getByText('Quick Access Density')).toBeInTheDocument();
-    expect(screen.getByText('Tabs & Bookmarks Density')).toBeInTheDocument();
+    expect(screen.getByText('Tabs Density')).toBeInTheDocument();
     expect(screen.getByText('Memory Saver Status Bar')).toBeInTheDocument();
     expect(screen.getByText('Folder Mapping')).toBeInTheDocument();
   });

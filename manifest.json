@@ -3,7 +3,7 @@
   "name": "Arctic: Sidebar & Commands",
   "short_name": "Arctic",
   "version": "1.7.0",
-  "description": "Vertical bookmark sidebar, spaces, and lightning-fast command bar.",
+  "description": "Vertical tab sidebar, spaces, and lightning-fast command bar.",
   "permissions": [
     "sidePanel",
     "bookmarks",

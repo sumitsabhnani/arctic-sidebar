@@ -588,7 +588,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         id: 'cmd-open-sidebar',
         type: 'command',
         title: 'Open Arctic Sidebar',
-        description: 'Open the vertical bookmarks and tabs panel',
+        description: 'Open the vertical tabs and spaces panel',
         commandCategory: 'Navigation',
         icon: <PanelLeft className="w-4 h-4 text-cyan-400" />,
         action: async () => {
@@ -1729,7 +1729,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                       )}
                       {item.type === 'bookmark' && (
                         <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-300 border border-amber-500/20">
-                          {item.domain?.startsWith('Space:') ? 'Space Bookmark' : 'Bookmark'}
+                          {item.domain?.startsWith('Space:') ? 'Space Tab' : 'Tab'}
                         </span>
                       )}
                       {item.type === 'history' && (
