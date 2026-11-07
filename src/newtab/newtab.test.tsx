@@ -108,6 +108,99 @@ describe('newtab url detection and formatting', () => {
 
       expect(screen.getByText(/Theme switched to (light|dark) mode/i)).toBeInTheDocument();
     });
+
+    it('opens Arctic settings when searching for "Settings" in the command bar', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'Settings' } });
+      });
+
+      const settingsCmd = await screen.findByText('Open Arctic Settings');
+      expect(settingsCmd).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(settingsCmd);
+      });
+
+      expect(chrome.sidePanel.open).toHaveBeenCalledWith({ windowId: 10 });
+      expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'OPEN_ARCTIC_SETTINGS' });
+      const local = await chrome.storage.local.get(['openArcticSettings']);
+      expect(local.openArcticSettings).toBeTruthy();
+      expect(screen.getByText('Opened Arctic Settings')).toBeInTheDocument();
+    });
+
+    it('auto-applies system light/dark theme when Theme is set to "System"', async () => {
+      let changeListener: ((e: MediaQueryListEvent) => void) | null = null;
+      const originalMatchMedia = window.matchMedia;
+      window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+        matches: true, // OS is in dark mode
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn((event: string, cb: (e: MediaQueryListEvent) => void) => {
+          if (event === 'change') changeListener = cb;
+        }),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn()
+      }));
+
+      try {
+        render(<App />);
+        const input = screen.getByPlaceholderText(/type > for commands/i);
+
+        await act(async () => {
+          fireEvent.change(input, { target: { value: 'system' } });
+        });
+
+        const systemThemeCmd = await screen.findByText('Theme: System (Auto Light/Dark)');
+        expect(systemThemeCmd).toBeInTheDocument();
+
+        await act(async () => {
+          fireEvent.click(systemThemeCmd);
+        });
+
+        const local = await chrome.storage.local.get(['theme']);
+        expect(local.theme).toBe('system');
+        expect(document.documentElement.classList.contains('dark')).toBe(true);
+        expect(screen.getByText('Theme set to System (auto light/dark)')).toBeInTheDocument();
+
+        // Simulate OS switching from Dark to Light mode while in 'system' mode
+        expect(changeListener).not.toBeNull();
+        await act(async () => {
+          changeListener?.({ matches: false } as MediaQueryListEvent);
+        });
+        expect(document.documentElement.classList.contains('light')).toBe(true);
+        expect(document.documentElement.classList.contains('dark')).toBe(false);
+      } finally {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+
+    it('supports new Aqua and multi-tone color themes in the command bar', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: '> aqua' } });
+      });
+
+      const crystalAquaCmd = screen.getByText('Palette: Crystal Aqua');
+      const aquaLagoonCmd = screen.getByText('Palette: Aqua Lagoon');
+      expect(crystalAquaCmd).toBeInTheDocument();
+      expect(aquaLagoonCmd).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(aquaLagoonCmd);
+      });
+
+      const local = await chrome.storage.local.get(['colorTheme']);
+      expect(local.colorTheme).toBe('aqua-lagoon');
+      expect(document.documentElement.getAttribute('data-color-theme')).toBe('aqua-lagoon');
+      expect(screen.getByText('Color palette set to Aqua Lagoon')).toBeInTheDocument();
+    });
   });
 
   describe('Bookmark Search and Tab Binding Navigation', () => {

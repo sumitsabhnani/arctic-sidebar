@@ -89,6 +89,7 @@ export function createMockChrome() {
   const bookmarkRemovedListeners = new Set<(id: string, removeInfo: { parentId: string; index: number }) => void>();
   const bookmarkChangedListeners = new Set<(id: string, changeInfo: { title: string; url?: string }) => void>();
   const bookmarkMovedListeners = new Set<(id: string, moveInfo: { parentId: string; index: number; oldParentId: string; oldIndex: number }) => void>();
+  const runtimeMessageListeners = new Set<(message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => void>();
 
   function findNode(nodes: MockBookmarkNode[], id: string): MockBookmarkNode | null {
     for (const n of nodes) {
@@ -124,10 +125,21 @@ export function createMockChrome() {
       id: 'mock-extension-id',
       getURL: vi.fn((path: string) => `chrome-extension://mock-extension-id/${path}`),
       onInstalled: { addListener: vi.fn() },
-      onStartup: { addListener: vi.fn() }
+      onStartup: { addListener: vi.fn() },
+      sendMessage: vi.fn((message: unknown) => {
+        for (const listener of runtimeMessageListeners) {
+          listener(message, {} as chrome.runtime.MessageSender, () => {});
+        }
+        return Promise.resolve();
+      }),
+      onMessage: {
+        addListener: vi.fn((fn) => runtimeMessageListeners.add(fn)),
+        removeListener: vi.fn((fn) => runtimeMessageListeners.delete(fn))
+      }
     },
     sidePanel: {
-      setPanelBehavior: vi.fn().mockResolvedValue(undefined)
+      setPanelBehavior: vi.fn().mockResolvedValue(undefined),
+      open: vi.fn().mockResolvedValue(undefined)
     },
     storage: {
       local: {
@@ -720,6 +732,7 @@ export function createMockChrome() {
       bookmarkRemovedListeners.clear();
       bookmarkChangedListeners.clear();
       bookmarkMovedListeners.clear();
+      runtimeMessageListeners.clear();
       alarmListeners.clear();
       notifClickedListeners.clear();
       notifButtonClickedListeners.clear();
