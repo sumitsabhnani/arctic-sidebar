@@ -8,6 +8,7 @@ import {
   X,
   Moon,
   Sun,
+  Monitor,
   Palette,
   PanelLeft,
   Layers,
@@ -21,6 +22,12 @@ import {
 } from 'lucide-react';
 import type { ColorThemeId, ThemeMode, SpaceItem, TabBinding, SiteSearchEngine } from '../types';
 import { getFaviconUrl, getDomainFromUrl, normalizeUrl } from '../sidepanel/utils/url';
+import {
+  COLOR_THEMES,
+  isValidColorTheme,
+  isValidThemeMode,
+  resolveEffectiveTheme
+} from '../sidepanel/utils/theme';
 import {
   findMatchingSiteEngine,
   getGhostAutocomplete,
@@ -300,6 +307,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   const arcticBookmarksRef = useRef<ArcticBookmarkItem[]>([]);
   const isNavigatingRef = useRef(false);
   const currentTabRef = useRef<chrome.tabs.Tab | null>(null);
+  const currentWindowIdRef = useRef<number | null>(null);
   const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Pre-load Arctic bookmarks for fast lookup and URL matching
@@ -309,12 +317,26 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     });
   }, []);
 
-  // Pre-resolve current tab for instantaneous navigation dispatch
+  // Pre-resolve current tab and window for instantaneous navigation & sidePanel dispatch
   useEffect(() => {
     if (chrome?.tabs?.getCurrent) {
       Promise.resolve(chrome.tabs.getCurrent())
         .then((tab) => {
-          if (tab) currentTabRef.current = tab;
+          if (tab) {
+            currentTabRef.current = tab;
+            if (typeof tab.windowId === 'number') {
+              currentWindowIdRef.current = tab.windowId;
+            }
+          }
+        })
+        .catch(() => {});
+    }
+    if (chrome?.windows?.getCurrent) {
+      Promise.resolve(chrome.windows.getCurrent())
+        .then((win) => {
+          if (win && typeof win.id === 'number') {
+            currentWindowIdRef.current = win.id;
+          }
         })
         .catch(() => {});
     }
@@ -340,21 +362,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   // Sync theme, palettes, and custom search engines with Arctic storage
   useEffect(() => {
     chrome.storage.local.get(['theme', 'colorTheme', 'customSearchEngines'], (res) => {
-      if (res.theme === 'light' || res.theme === 'dark') {
-        setTheme(res.theme as ThemeMode);
+      if (isValidThemeMode(res.theme)) {
+        setTheme(res.theme);
       }
-      if (
-        typeof res.colorTheme === 'string' &&
-        [
-          'glacier-blue',
-          'midnight-amethyst',
-          'forest-sage',
-          'warm-terracotta',
-          'pure-monochrome',
-          'slate-grey'
-        ].includes(res.colorTheme)
-      ) {
-        setColorTheme(res.colorTheme as ColorThemeId);
+      if (isValidColorTheme(res.colorTheme)) {
+        setColorTheme(res.colorTheme);
       }
       if (Array.isArray(res.customSearchEngines)) {
         setCustomSearchEngines(res.customSearchEngines as SiteSearchEngine[]);
@@ -366,11 +378,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       areaName: string
     ) => {
       if (areaName === 'local') {
-        if (changes.theme) {
-          setTheme(changes.theme.newValue as ThemeMode);
+        if (changes.theme && isValidThemeMode(changes.theme.newValue)) {
+          setTheme(changes.theme.newValue);
         }
-        if (changes.colorTheme) {
-          setColorTheme(changes.colorTheme.newValue as ColorThemeId);
+        if (changes.colorTheme && isValidColorTheme(changes.colorTheme.newValue)) {
+          setColorTheme(changes.colorTheme.newValue);
         }
         if (changes.customSearchEngines) {
           setCustomSearchEngines(
@@ -428,16 +440,34 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     };
   }, []);
 
-  // Apply theme & color palette classes
+  // Apply theme & color palette classes (including live OS system theme tracking)
   useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('light');
-    } else {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.classList.add('light');
-    }
+    const applyEffectiveTheme = (effective: 'dark' | 'light') => {
+      if (effective === 'dark') {
+        document.documentElement.classList.add('dark');
+        document.documentElement.classList.remove('light');
+      } else {
+        document.documentElement.classList.remove('dark');
+        document.documentElement.classList.add('light');
+      }
+    };
+
+    applyEffectiveTheme(resolveEffectiveTheme(theme));
     document.documentElement.setAttribute('data-color-theme', colorTheme);
+
+    if (theme === 'system' && typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const handleChange = (e: MediaQueryListEvent) => {
+        applyEffectiveTheme(e.matches ? 'dark' : 'light');
+      };
+      if (typeof mediaQuery.addEventListener === 'function') {
+        mediaQuery.addEventListener('change', handleChange);
+        return () => mediaQuery.removeEventListener('change', handleChange);
+      } else if (typeof mediaQuery.addListener === 'function') {
+        mediaQuery.addListener(handleChange);
+        return () => mediaQuery.removeListener(handleChange);
+      }
+    }
   }, [theme, colorTheme]);
 
   // Keep input focused automatically
@@ -483,107 +513,90 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
   // Action commands registry
   const getActionCommands = useCallback((): SuggestionItem[] => {
+    const effectiveTheme = resolveEffectiveTheme(theme);
+
     const cmds: SuggestionItem[] = [
-      // 1. Theme Toggle
+      // 1. Open Arctic Settings
+      {
+        id: 'cmd-open-settings',
+        type: 'command',
+        title: 'Open Arctic Settings',
+        description: 'Configure Arctic theme, appearance, density, and folder mapping',
+        commandCategory: 'Settings',
+        icon: <Settings className="w-4 h-4 text-cyan-400" />,
+        action: async () => {
+          const openSidePanelPromise = (async () => {
+            const cachedWinId = currentWindowIdRef.current ?? currentTabRef.current?.windowId;
+            if (typeof cachedWinId === 'number' && chrome?.sidePanel?.open) {
+              await chrome.sidePanel.open({ windowId: cachedWinId });
+              return true;
+            }
+            const win = await chrome?.windows?.getCurrent();
+            if (win?.id && chrome?.sidePanel?.open) {
+              await chrome.sidePanel.open({ windowId: win.id });
+              return true;
+            }
+            return false;
+          })().catch(() => false);
+
+          await chrome?.storage?.local?.set({ openArcticSettings: Date.now() });
+          try {
+            chrome.runtime?.sendMessage?.({ type: 'OPEN_ARCTIC_SETTINGS' });
+          } catch {
+            // ignore
+          }
+          await openSidePanelPromise;
+          showToast('Opened Arctic Settings');
+        }
+      },
+      // 2. Theme Toggle & System Theme
       {
         id: 'cmd-toggle-theme',
         type: 'command',
-        title: theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode',
+        title: effectiveTheme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode',
         description: `Toggle theme (currently ${theme} mode)`,
         commandCategory: 'Theme',
         icon:
-          theme === 'dark' ? (
+          effectiveTheme === 'dark' ? (
             <Sun className="w-4 h-4 text-amber-400" />
           ) : (
             <Moon className="w-4 h-4 text-indigo-400" />
           ),
         action: async () => {
-          const nextTheme: ThemeMode = theme === 'dark' ? 'light' : 'dark';
+          const nextTheme: ThemeMode = effectiveTheme === 'dark' ? 'light' : 'dark';
           setTheme(nextTheme);
           await chrome?.storage?.local?.set({ theme: nextTheme });
           showToast(`Theme switched to ${nextTheme} mode`);
         }
       },
-      // 2. Color Palettes
       {
-        id: 'cmd-palette-glacier',
+        id: 'cmd-theme-system',
         type: 'command',
-        title: 'Palette: Glacier Blue',
-        description: 'Cyan glacier accent color',
-        commandCategory: 'Palette',
-        icon: <Palette className="w-4 h-4 text-cyan-400" />,
+        title: 'Theme: System (Auto Light/Dark)',
+        description: 'Automatically apply your system light or dark theme',
+        commandCategory: 'Theme',
+        icon: <Monitor className="w-4 h-4 text-cyan-400" />,
         action: async () => {
-          setColorTheme('glacier-blue');
-          await chrome?.storage?.local?.set({ colorTheme: 'glacier-blue' });
-          showToast('Color palette set to Glacier Blue');
+          setTheme('system');
+          await chrome?.storage?.local?.set({ theme: 'system' });
+          showToast('Theme set to System (auto light/dark)');
         }
       },
-      {
-        id: 'cmd-palette-amethyst',
-        type: 'command',
-        title: 'Palette: Midnight Amethyst',
-        description: 'Deep violet amethyst accent color',
+      // 3. Color Palettes (all themes including Aqua & multi-tone palettes)
+      ...COLOR_THEMES.map((t) => ({
+        id: `cmd-palette-${t.id}`,
+        type: 'command' as const,
+        title: `Palette: ${t.name}`,
+        description: `${t.tag} — ${t.description}`,
         commandCategory: 'Palette',
-        icon: <Palette className="w-4 h-4 text-purple-400" />,
+        icon: <Palette className="w-4 h-4" style={{ color: t.accentColor }} />,
         action: async () => {
-          setColorTheme('midnight-amethyst');
-          await chrome?.storage?.local?.set({ colorTheme: 'midnight-amethyst' });
-          showToast('Color palette set to Midnight Amethyst');
+          setColorTheme(t.id);
+          await chrome?.storage?.local?.set({ colorTheme: t.id });
+          showToast(`Color palette set to ${t.name}`);
         }
-      },
-      {
-        id: 'cmd-palette-sage',
-        type: 'command',
-        title: 'Palette: Forest Sage',
-        description: 'Lush natural emerald sage accent color',
-        commandCategory: 'Palette',
-        icon: <Palette className="w-4 h-4 text-emerald-400" />,
-        action: async () => {
-          setColorTheme('forest-sage');
-          await chrome?.storage?.local?.set({ colorTheme: 'forest-sage' });
-          showToast('Color palette set to Forest Sage');
-        }
-      },
-      {
-        id: 'cmd-palette-terracotta',
-        type: 'command',
-        title: 'Palette: Warm Terracotta',
-        description: 'Earthy warm terracotta orange accent',
-        commandCategory: 'Palette',
-        icon: <Palette className="w-4 h-4 text-orange-400" />,
-        action: async () => {
-          setColorTheme('warm-terracotta');
-          await chrome?.storage?.local?.set({ colorTheme: 'warm-terracotta' });
-          showToast('Color palette set to Warm Terracotta');
-        }
-      },
-      {
-        id: 'cmd-palette-mono',
-        type: 'command',
-        title: 'Palette: Pure Monochrome',
-        description: 'Clean zinc monochrome palette',
-        commandCategory: 'Palette',
-        icon: <Palette className="w-4 h-4 text-zinc-400" />,
-        action: async () => {
-          setColorTheme('pure-monochrome');
-          await chrome?.storage?.local?.set({ colorTheme: 'pure-monochrome' });
-          showToast('Color palette set to Pure Monochrome');
-        }
-      },
-      {
-        id: 'cmd-palette-slate',
-        type: 'command',
-        title: 'Palette: Slate Grey',
-        description: 'Subtle slate steel accent',
-        commandCategory: 'Palette',
-        icon: <Palette className="w-4 h-4 text-slate-400" />,
-        action: async () => {
-          setColorTheme('slate-grey');
-          await chrome?.storage?.local?.set({ colorTheme: 'slate-grey' });
-          showToast('Color palette set to Slate Grey');
-        }
-      },
-      // 3. Side Panel
+      })),
+      // 4. Side Panel
       {
         id: 'cmd-open-sidebar',
         type: 'command',
@@ -593,6 +606,12 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         icon: <PanelLeft className="w-4 h-4 text-cyan-400" />,
         action: async () => {
           try {
+            const cachedWinId = currentWindowIdRef.current ?? currentTabRef.current?.windowId;
+            if (typeof cachedWinId === 'number' && chrome?.sidePanel?.open) {
+              await chrome.sidePanel.open({ windowId: cachedWinId });
+              showToast('Arctic Sidebar opened');
+              return;
+            }
             const win = await chrome?.windows?.getCurrent();
             if (win?.id && chrome?.sidePanel?.open) {
               await chrome.sidePanel.open({ windowId: win.id });

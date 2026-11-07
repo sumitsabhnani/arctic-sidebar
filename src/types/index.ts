@@ -14,13 +14,17 @@ export interface SessionState {
 }
 
 export type ColorThemeId =
+  | 'crystal-aqua'
+  | 'aqua-lagoon'
+  | 'arctic-aurora'
+  | 'coral-breeze'
   | 'glacier-blue'
   | 'midnight-amethyst'
   | 'forest-sage'
   | 'warm-terracotta'
   | 'pure-monochrome'
   | 'slate-grey';
-export type ThemeMode = 'dark' | 'light';
+export type ThemeMode = 'dark' | 'light' | 'system';
 
 export const QUICK_ACCESS_FOLDER_NAME = 'Quick Access';
 
@@ -63,6 +67,7 @@ export interface LocalSettings {
     todayTabs?: boolean;
   };
   customSearchEngines?: SiteSearchEngine[];
+  openArcticSettings?: number | boolean;
 }
 
 export interface BookmarkFolderOption {

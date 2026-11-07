@@ -55,11 +55,27 @@ describe('SettingsModal component', () => {
     expect(defaultProps.onToggleTheme).toHaveBeenCalled();
   });
 
-  it('allows selecting a color theme', () => {
+  it('allows selecting System theme mode', () => {
+    const onSelectThemeMode = vi.fn();
+    render(<SettingsModal {...defaultProps} onSelectThemeMode={onSelectThemeMode} />);
+    const systemBtn = screen.getByRole('button', { name: /System/i });
+    fireEvent.click(systemBtn);
+    expect(onSelectThemeMode).toHaveBeenCalledWith('system');
+  });
+
+  it('allows selecting a color theme including new Aqua palettes', () => {
     render(<SettingsModal {...defaultProps} />);
     const midnightBtn = screen.getByText('Midnight Amethyst');
     fireEvent.click(midnightBtn);
     expect(defaultProps.onSelectColorTheme).toHaveBeenCalledWith('midnight-amethyst');
+
+    const aquaLagoonBtn = screen.getByText('Aqua Lagoon');
+    fireEvent.click(aquaLagoonBtn);
+    expect(defaultProps.onSelectColorTheme).toHaveBeenCalledWith('aqua-lagoon');
+
+    const crystalAquaBtn = screen.getByText('Crystal Aqua');
+    fireEvent.click(crystalAquaBtn);
+    expect(defaultProps.onSelectColorTheme).toHaveBeenCalledWith('crystal-aqua');
   });
 
   it('allows switching between relaxed and compact density modes separately', () => {

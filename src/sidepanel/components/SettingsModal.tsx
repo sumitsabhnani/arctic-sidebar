@@ -4,6 +4,7 @@ import {
   Palette,
   Moon,
   Sun,
+  Monitor,
   Check,
   FolderTree,
   RotateCcw,
@@ -36,6 +37,7 @@ interface SettingsModalProps {
   };
   autoArchiveInterval: 'never' | '12h' | '24h' | '7d';
   onToggleTheme: () => void;
+  onSelectThemeMode?: (mode: ThemeMode) => void;
   onSelectColorTheme: (themeId: ColorThemeId) => void;
   onToggleQuickAccessDensity?: (mode: 'relaxed' | 'compact') => void;
   onToggleTabsDensity?: (mode: 'relaxed' | 'compact') => void;
@@ -59,6 +61,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   activeFolderIds,
   autoArchiveInterval,
   onToggleTheme,
+  onSelectThemeMode,
   onSelectColorTheme,
   onToggleQuickAccessDensity,
   onToggleTabsDensity,
@@ -141,7 +144,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="flex items-center space-x-1 bg-black/5 dark:bg-white/5 p-0.5 rounded-lg border border-black/5 dark:border-white/5">
                 <button
                   type="button"
-                  onClick={() => theme === 'light' && onToggleTheme()}
+                  onClick={() => {
+                    if (onSelectThemeMode) {
+                      onSelectThemeMode('dark');
+                    } else if (theme !== 'dark') {
+                      onToggleTheme();
+                    }
+                  }}
                   className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
                     theme === 'dark'
                       ? 'bg-black/20 dark:bg-white/15 text-zinc-900 dark:text-white shadow-sm'
@@ -153,7 +162,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => theme === 'dark' && onToggleTheme()}
+                  onClick={() => {
+                    if (onSelectThemeMode) {
+                      onSelectThemeMode('light');
+                    } else if (theme !== 'light') {
+                      onToggleTheme();
+                    }
+                  }}
                   className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
                     theme === 'light'
                       ? 'bg-white dark:bg-white/20 text-zinc-900 dark:text-white shadow-sm'
@@ -162,6 +177,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 >
                   <Sun className="w-3 h-3 text-amber-500" />
                   <span>Light</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelectThemeMode?.('system');
+                  }}
+                  className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors flex items-center gap-1 ${
+                    theme === 'system'
+                      ? 'bg-white dark:bg-white/20 text-zinc-900 dark:text-white shadow-sm'
+                      : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400'
+                  }`}
+                >
+                  <Monitor className="w-3 h-3 text-cyan-500" />
+                  <span>System</span>
                 </button>
               </div>
             </div>

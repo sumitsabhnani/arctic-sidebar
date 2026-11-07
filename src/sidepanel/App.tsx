@@ -14,6 +14,7 @@ import { useScratchpad } from './hooks/useScratchpad';
 import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
+import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
 import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -145,24 +146,15 @@ export const App: React.FC = () => {
         'quickAccessDensity',
         'tabsDensity',
         'densityMode',
-        'showMemorySaverBar'
+        'showMemorySaverBar',
+        'openArcticSettings'
       ],
       (res) => {
-        if (res.theme === 'light' || res.theme === 'dark') {
-          setTheme(res.theme as ThemeMode);
+        if (isValidThemeMode(res.theme)) {
+          setTheme(res.theme);
         }
-        if (
-          typeof res.colorTheme === 'string' &&
-          [
-            'glacier-blue',
-            'midnight-amethyst',
-            'forest-sage',
-            'warm-terracotta',
-            'pure-monochrome',
-            'slate-grey'
-          ].includes(res.colorTheme)
-        ) {
-          setColorTheme(res.colorTheme as ColorThemeId);
+        if (isValidColorTheme(res.colorTheme)) {
+          setColorTheme(res.colorTheme);
         }
         const qaDensity = res.quickAccessDensity || res.densityMode;
         if (qaDensity === 'relaxed' || qaDensity === 'compact') {
@@ -178,6 +170,14 @@ export const App: React.FC = () => {
         if (res.collapsedSections) {
           setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
         }
+        if (res.openArcticSettings) {
+          setIsSettingsOpen(true);
+          try {
+            chrome.storage.local.remove('openArcticSettings');
+          } catch {
+            // ignore
+          }
+        }
       }
     );
 
@@ -186,22 +186,11 @@ export const App: React.FC = () => {
       areaName: string
     ) => {
       if (areaName === 'local') {
-        if (changes.theme && (changes.theme.newValue === 'light' || changes.theme.newValue === 'dark')) {
-          setTheme(changes.theme.newValue as ThemeMode);
+        if (changes.theme && isValidThemeMode(changes.theme.newValue)) {
+          setTheme(changes.theme.newValue);
         }
-        if (
-          changes.colorTheme &&
-          typeof changes.colorTheme.newValue === 'string' &&
-          [
-            'glacier-blue',
-            'midnight-amethyst',
-            'forest-sage',
-            'warm-terracotta',
-            'pure-monochrome',
-            'slate-grey'
-          ].includes(changes.colorTheme.newValue)
-        ) {
-          setColorTheme(changes.colorTheme.newValue as ColorThemeId);
+        if (changes.colorTheme && isValidColorTheme(changes.colorTheme.newValue)) {
+          setColorTheme(changes.colorTheme.newValue);
         }
         if (changes.quickAccessDensity && (changes.quickAccessDensity.newValue === 'relaxed' || changes.quickAccessDensity.newValue === 'compact')) {
           setQuickAccessDensity(changes.quickAccessDensity.newValue);
@@ -221,36 +210,80 @@ export const App: React.FC = () => {
             }
           );
         }
+        if (changes.openArcticSettings && changes.openArcticSettings.newValue) {
+          setIsSettingsOpen(true);
+          try {
+            chrome.storage.local.remove('openArcticSettings');
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+
+    const handleRuntimeMessage = (message: { type?: string }) => {
+      if (message && message.type === 'OPEN_ARCTIC_SETTINGS') {
+        setIsSettingsOpen(true);
       }
     };
 
     if (chrome.storage?.onChanged) {
       chrome.storage.onChanged.addListener(handleStorageChange);
     }
+    if (chrome.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener(handleRuntimeMessage);
+    }
     return () => {
       if (chrome.storage?.onChanged) {
         chrome.storage.onChanged.removeListener(handleStorageChange);
+      }
+      if (chrome.runtime?.onMessage) {
+        chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
       }
     };
   }, []);
 
   useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('light');
-    } else {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.classList.add('light');
-    }
+    const applyEffectiveTheme = (effective: 'dark' | 'light') => {
+      if (effective === 'dark') {
+        document.documentElement.classList.add('dark');
+        document.documentElement.classList.remove('light');
+      } else {
+        document.documentElement.classList.remove('dark');
+        document.documentElement.classList.add('light');
+      }
+    };
+
+    applyEffectiveTheme(resolveEffectiveTheme(theme));
     document.documentElement.setAttribute('data-color-theme', colorTheme);
+
+    if (theme === 'system' && typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      const handleChange = (e: MediaQueryListEvent) => {
+        applyEffectiveTheme(e.matches ? 'dark' : 'light');
+      };
+      if (typeof mediaQuery.addEventListener === 'function') {
+        mediaQuery.addEventListener('change', handleChange);
+        return () => mediaQuery.removeEventListener('change', handleChange);
+      } else if (typeof mediaQuery.addListener === 'function') {
+        mediaQuery.addListener(handleChange);
+        return () => mediaQuery.removeListener(handleChange);
+      }
+    }
   }, [theme, colorTheme]);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
-      const next: ThemeMode = prev === 'dark' ? 'light' : 'dark';
+      const currentEffective = resolveEffectiveTheme(prev);
+      const next: ThemeMode = currentEffective === 'dark' ? 'light' : 'dark';
       chrome.storage.local.set({ theme: next } as LocalSettings);
       return next;
     });
+  }, []);
+
+  const handleSelectThemeMode = useCallback((mode: ThemeMode) => {
+    setTheme(mode);
+    chrome.storage.local.set({ theme: mode } as LocalSettings);
   }, []);
 
   const handleSelectColorTheme = useCallback((newTheme: ColorThemeId) => {
@@ -1679,6 +1712,7 @@ export const App: React.FC = () => {
         activeFolderIds={activeFolderIds}
         autoArchiveInterval={autoArchiveInterval}
         onToggleTheme={toggleTheme}
+        onSelectThemeMode={handleSelectThemeMode}
         onSelectColorTheme={handleSelectColorTheme}
         onToggleQuickAccessDensity={handleToggleQuickAccessDensity}
         onToggleTabsDensity={handleToggleTabsDensity}

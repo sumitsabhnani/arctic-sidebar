@@ -145,4 +145,15 @@ describe('Sidepanel App Integration', () => {
     // Quick Access should still NOT appear as a folder in the vertical tree
     expect(screen.queryAllByText('Quick Access').length).toBe(0);
   });
+
+  it('automatically opens SettingsModal when openArcticSettings is triggered from Command Bar', async () => {
+    mockChrome.__setLocalStorage({ openArcticSettings: Date.now() });
+    mockChrome.__setSyncStorage({});
+
+    render(<App />);
+
+    expect(await screen.findByText('Settings & Appearance')).toBeInTheDocument();
+    // Flag is cleared after opening
+    expect(mockChrome.__getLocalStorage().openArcticSettings).toBeUndefined();
+  });
 });

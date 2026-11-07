@@ -244,6 +244,158 @@ html:not(.dark)[data-color-theme="slate-grey"] {
   --theme-scrollbar-thumb: rgba(0, 0, 0, 0.16);
 }
 
+/* 7. Crystal Aqua (Crisp White & Aqua) - Dark */
+html.dark[data-color-theme="crystal-aqua"] {
+  --theme-bg-gradient: linear-gradient(145deg, #0b1d21 0%, #072a30 50%, #041f24 100%);
+  --theme-header-bg: rgba(11, 29, 33, 0.88);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(45, 212, 191, 0.14);
+  --theme-accent: #2dd4bf;
+  --theme-accent-hover: #5eead4;
+  --theme-accent-bg: rgba(45, 212, 191, 0.14);
+  --theme-accent-border: rgba(45, 212, 191, 0.36);
+  --theme-accent-glow: 0 0 12px rgba(45, 212, 191, 0.25);
+  --theme-indicator: #5eead4;
+  --theme-active-card-bg: rgba(20, 184, 166, 0.16);
+  --theme-active-card-border: rgba(45, 212, 191, 0.42);
+  --theme-active-card-glow: 0 0 14px rgba(45, 212, 191, 0.26);
+  --theme-scrollbar-thumb: rgba(45, 212, 191, 0.20);
+}
+
+/* 7. Crystal Aqua (Crisp White & Aqua) - Light */
+html:not(.dark)[data-color-theme="crystal-aqua"] {
+  --theme-bg-gradient: linear-gradient(145deg, #ffffff 0%, #f0fdfa 55%, #ccfbf1 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.94);
+  --theme-surface-bg: rgba(13, 148, 136, 0.03);
+  --theme-surface-hover: rgba(13, 148, 136, 0.07);
+  --theme-border-subtle: rgba(13, 148, 136, 0.14);
+  --theme-accent: #0d9488;
+  --theme-accent-hover: #0f766e;
+  --theme-accent-bg: rgba(13, 148, 136, 0.10);
+  --theme-accent-border: rgba(13, 148, 136, 0.30);
+  --theme-accent-glow: 0 0 10px rgba(13, 148, 136, 0.18);
+  --theme-indicator: #14b8a6;
+  --theme-active-card-bg: rgba(20, 184, 166, 0.12);
+  --theme-active-card-border: rgba(13, 148, 136, 0.35);
+  --theme-active-card-glow: 0 0 10px rgba(20, 184, 166, 0.18);
+  --theme-scrollbar-thumb: rgba(13, 148, 136, 0.20);
+}
+
+/* 8. Aqua Lagoon (Tropical Aqua & Turquoise) - Dark */
+html.dark[data-color-theme="aqua-lagoon"] {
+  --theme-bg-gradient: linear-gradient(135deg, #042f2e 0%, #083344 50%, #0f172a 100%);
+  --theme-header-bg: rgba(6, 42, 48, 0.88);
+  --theme-surface-bg: rgba(255, 255, 255, 0.05);
+  --theme-surface-hover: rgba(255, 255, 255, 0.09);
+  --theme-border-subtle: rgba(34, 211, 238, 0.15);
+  --theme-accent: #22d3ee;
+  --theme-accent-hover: #67e8f9;
+  --theme-accent-bg: rgba(34, 211, 238, 0.14);
+  --theme-accent-border: rgba(34, 211, 238, 0.38);
+  --theme-accent-glow: 0 0 12px rgba(34, 211, 238, 0.28);
+  --theme-indicator: #2dd4bf;
+  --theme-active-card-bg: rgba(6, 182, 212, 0.18);
+  --theme-active-card-border: rgba(45, 212, 191, 0.45);
+  --theme-active-card-glow: 0 0 14px rgba(34, 211, 238, 0.28);
+  --theme-scrollbar-thumb: rgba(34, 211, 238, 0.22);
+}
+
+/* 8. Aqua Lagoon (Tropical Aqua & Turquoise) - Light */
+html:not(.dark)[data-color-theme="aqua-lagoon"] {
+  --theme-bg-gradient: linear-gradient(135deg, #ecfeff 0%, #cffafe 45%, #99f6e4 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.90);
+  --theme-surface-bg: rgba(8, 145, 178, 0.04);
+  --theme-surface-hover: rgba(8, 145, 178, 0.08);
+  --theme-border-subtle: rgba(8, 145, 178, 0.16);
+  --theme-accent: #0891b2;
+  --theme-accent-hover: #0e7490;
+  --theme-accent-bg: rgba(8, 145, 178, 0.12);
+  --theme-accent-border: rgba(8, 145, 178, 0.32);
+  --theme-accent-glow: 0 0 10px rgba(8, 145, 178, 0.20);
+  --theme-indicator: #0d9488;
+  --theme-active-card-bg: rgba(6, 182, 212, 0.14);
+  --theme-active-card-border: rgba(8, 145, 178, 0.38);
+  --theme-active-card-glow: 0 0 10px rgba(6, 182, 212, 0.20);
+  --theme-scrollbar-thumb: rgba(8, 145, 178, 0.22);
+}
+
+/* 9. Arctic Aurora (Mint, Sky & Lavender) - Dark */
+html.dark[data-color-theme="arctic-aurora"] {
+  --theme-bg-gradient: linear-gradient(135deg, #062c30 0%, #0f1e36 50%, #1e1b4b 100%);
+  --theme-header-bg: rgba(12, 28, 44, 0.88);
+  --theme-surface-bg: rgba(255, 255, 255, 0.05);
+  --theme-surface-hover: rgba(255, 255, 255, 0.09);
+  --theme-border-subtle: rgba(56, 189, 248, 0.14);
+  --theme-accent: #38bdf8;
+  --theme-accent-hover: #7dd3fc;
+  --theme-accent-bg: rgba(56, 189, 248, 0.14);
+  --theme-accent-border: rgba(56, 189, 248, 0.36);
+  --theme-accent-glow: 0 0 12px rgba(56, 189, 248, 0.26);
+  --theme-indicator: #2dd4bf;
+  --theme-active-card-bg: rgba(56, 189, 248, 0.16);
+  --theme-active-card-border: rgba(45, 212, 191, 0.42);
+  --theme-active-card-glow: 0 0 14px rgba(56, 189, 248, 0.26);
+  --theme-scrollbar-thumb: rgba(56, 189, 248, 0.20);
+}
+
+/* 9. Arctic Aurora (Mint, Sky & Lavender) - Light */
+html:not(.dark)[data-color-theme="arctic-aurora"] {
+  --theme-bg-gradient: linear-gradient(135deg, #f0fdfa 0%, #e0f2fe 50%, #ede9fe 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.92);
+  --theme-surface-bg: rgba(2, 132, 199, 0.03);
+  --theme-surface-hover: rgba(2, 132, 199, 0.07);
+  --theme-border-subtle: rgba(2, 132, 199, 0.14);
+  --theme-accent: #0284c7;
+  --theme-accent-hover: #0369a1;
+  --theme-accent-bg: rgba(2, 132, 199, 0.10);
+  --theme-accent-border: rgba(2, 132, 199, 0.30);
+  --theme-accent-glow: 0 0 10px rgba(2, 132, 199, 0.18);
+  --theme-indicator: #14b8a6;
+  --theme-active-card-bg: rgba(14, 165, 233, 0.12);
+  --theme-active-card-border: rgba(20, 184, 166, 0.35);
+  --theme-active-card-glow: 0 0 10px rgba(14, 165, 233, 0.18);
+  --theme-scrollbar-thumb: rgba(2, 132, 199, 0.20);
+}
+
+/* 10. Coral Breeze (Rose & Warm Peach) - Dark */
+html.dark[data-color-theme="coral-breeze"] {
+  --theme-bg-gradient: linear-gradient(135deg, #2a0f1d 0%, #1f1024 50%, #1c100b 100%);
+  --theme-header-bg: rgba(38, 15, 28, 0.88);
+  --theme-surface-bg: rgba(255, 255, 255, 0.04);
+  --theme-surface-hover: rgba(255, 255, 255, 0.08);
+  --theme-border-subtle: rgba(251, 113, 133, 0.14);
+  --theme-accent: #fb7185;
+  --theme-accent-hover: #fda4af;
+  --theme-accent-bg: rgba(251, 113, 133, 0.14);
+  --theme-accent-border: rgba(251, 113, 133, 0.36);
+  --theme-accent-glow: 0 0 12px rgba(251, 113, 133, 0.25);
+  --theme-indicator: #fb923c;
+  --theme-active-card-bg: rgba(244, 63, 94, 0.16);
+  --theme-active-card-border: rgba(251, 113, 133, 0.42);
+  --theme-active-card-glow: 0 0 14px rgba(251, 113, 133, 0.26);
+  --theme-scrollbar-thumb: rgba(251, 113, 133, 0.20);
+}
+
+/* 10. Coral Breeze (Rose & Warm Peach) - Light */
+html:not(.dark)[data-color-theme="coral-breeze"] {
+  --theme-bg-gradient: linear-gradient(135deg, #fffbfe 0%, #ffe4e6 50%, #ffedd5 100%);
+  --theme-header-bg: rgba(255, 255, 255, 0.92);
+  --theme-surface-bg: rgba(225, 29, 72, 0.03);
+  --theme-surface-hover: rgba(225, 29, 72, 0.06);
+  --theme-border-subtle: rgba(225, 29, 72, 0.13);
+  --theme-accent: #e11d48;
+  --theme-accent-hover: #be123c;
+  --theme-accent-bg: rgba(225, 29, 72, 0.10);
+  --theme-accent-border: rgba(225, 29, 72, 0.28);
+  --theme-accent-glow: 0 0 10px rgba(225, 29, 72, 0.18);
+  --theme-indicator: #f97316;
+  --theme-active-card-bg: rgba(244, 63, 94, 0.11);
+  --theme-active-card-border: rgba(244, 63, 94, 0.32);
+  --theme-active-card-glow: 0 0 10px rgba(244, 63, 94, 0.18);
+  --theme-scrollbar-thumb: rgba(225, 29, 72, 0.18);
+}
+
 /* -------------------------------------------------------------
    GLOBAL BODY & TYPOGRAPHY
    ------------------------------------------------------------- */
