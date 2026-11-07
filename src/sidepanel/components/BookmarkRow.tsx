@@ -19,11 +19,10 @@ import {
   Folder,
   Bell,
   PinOff,
-  StickyNote,
   FileText
 } from 'lucide-react';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
-import { getFaviconUrl, isScratchpadUrl, isGoogleDocUrl } from '../utils/url';
+import { getFaviconUrl, isGoogleDocUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
 function formatSubdomain(rawUrl?: string): string {
@@ -72,7 +71,6 @@ interface BookmarkRowProps {
   onSelectBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onDeleteMultipleBookmarks?: (ids: string[]) => void;
   onMoveMultipleBookmarksToSpace?: (ids: string[], targetSpaceFolderId: string) => void;
-  onOpenScratchpadNote?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   isEditing?: boolean;
   editTitle?: string;
   onStartRename?: () => void;
@@ -115,7 +113,6 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onSelectBookmark,
   onDeleteMultipleBookmarks,
   onMoveMultipleBookmarksToSpace,
-  onOpenScratchpadNote,
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
   onStartRename,
@@ -134,19 +131,16 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
   const effectiveEditTitle = isControlled && typeof controlledEditTitle === 'string' ? controlledEditTitle : localEditTitle;
 
-  const isNote = isScratchpadUrl(bookmark.url);
   const isGoogleDoc = isGoogleDocUrl(bookmark.url);
   const isNavAway = binding?.isNavigatedAway ?? false;
   const isRunning = Boolean(binding);
   const isAudible = Boolean(boundTab?.audible);
   const isMuted = Boolean(boundTab?.mutedInfo?.muted);
   const isBoundTabLoading = boundTab?.status === 'loading';
-  const titleText = bookmark.title || (isNote ? 'Scratchpad Note' : bookmark.url || 'Untitled Bookmark');
+  const titleText = bookmark.title || bookmark.url || 'Untitled Bookmark';
 
   let tooltip = titleText;
-  if (isNote) {
-    tooltip = `${titleText} (Click to open note)`;
-  } else if (isNavAway && binding) {
+  if (isNavAway && binding) {
     tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to bookmark)`;
   } else if (bookmark.url) {
     tooltip = `${titleText}\n${bookmark.url}`;
@@ -155,7 +149,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     tooltip += '\n(Sleeping to save memory - click to wake)';
   }
 
-  const faviconSrc = bookmark.url && !isNote && !isGoogleDoc ? getFaviconUrl(bookmark.url, 32) : '';
+  const faviconSrc = bookmark.url && !isGoogleDoc ? getFaviconUrl(bookmark.url, 32) : '';
 
   const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
 
@@ -193,82 +187,6 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           : [])
       ];
       onOpenContextMenu(e, multiItems);
-      return;
-    }
-
-    if (isNote) {
-      const noteItems: ContextMenuItem[] = [
-        ...(onOpenScratchpadNote
-          ? [
-              {
-                label: 'Open Note',
-                icon: <StickyNote className="w-3.5 h-3.5" />,
-                action: () => onOpenScratchpadNote(bookmark)
-              }
-            ]
-          : []),
-        ...(onRenameBookmark
-          ? [
-              {
-                label: 'Rename Note',
-                icon: <Edit2 className="w-3.5 h-3.5" />,
-                action: () => {
-                  if (onStartRename) {
-                    onStartRename();
-                  } else {
-                    setLocalEditTitle(bookmark.title || '');
-                    setLocalIsEditing(true);
-                  }
-                }
-              }
-            ]
-          : []),
-        ...(onOpenReminderPopover && bookmark.url
-          ? [
-              {
-                label: reminder ? 'Edit Reminder' : 'Set Reminder',
-                icon: <Bell className="w-3.5 h-3.5" />,
-                action: () => {
-                  const rect = (e.target as HTMLElement).getBoundingClientRect();
-                  onOpenReminderPopover(
-                    {
-                      type: 'bookmark',
-                      bookmarkId: bookmark.id,
-                      url: bookmark.url || '',
-                      title: bookmark.title || ''
-                    },
-                    rect
-                  );
-                }
-              }
-            ]
-          : []),
-        ...(onMoveToSpace && otherSpaces.length > 0
-          ? [
-              {
-                label: 'Move to Space',
-                icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
-                submenu: otherSpaces.map((sp) => ({
-                  label: sp.name,
-                  icon: <Folder className="w-3.5 h-3.5" />,
-                  action: () => onMoveToSpace(bookmark.id, sp.folderId)
-                }))
-              }
-            ]
-          : []),
-        ...(onDeleteBookmark
-          ? [
-              {
-                label: 'Delete Note',
-                icon: <Trash2 className="w-3.5 h-3.5" />,
-                action: () => onDeleteBookmark(bookmark.id),
-                danger: true,
-                dividerBefore: true
-              }
-            ]
-          : [])
-      ];
-      onOpenContextMenu(e, noteItems);
       return;
     }
 
@@ -593,21 +511,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           return;
         }
         onSelectBookmark?.(bookmark, e);
-        if (isNote && onOpenScratchpadNote) {
-          onOpenScratchpadNote(bookmark);
-        } else {
-          onRowClick(bookmark);
-        }
+        onRowClick(bookmark);
       }}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          if (isNote && onOpenScratchpadNote) {
-            onOpenScratchpadNote(bookmark);
-          } else {
-            onRowClick(bookmark);
-          }
+          onRowClick(bookmark);
         }
       }}
       style={{ paddingLeft: `${12 + depth * 14}px` }}
@@ -637,41 +547,28 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         <div
           role="button"
           tabIndex={0}
-          title={isNote ? 'Scratchpad Note (Click to open note)' : isNavAway ? 'Reset tab to bookmarked URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
+          title={isNavAway ? 'Reset tab to bookmarked URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey) {
-              return;
-            }
-            if (isNote && onOpenScratchpadNote) {
-              e.stopPropagation();
-              onOpenScratchpadNote(bookmark);
               return;
             }
             onFaviconClick(bookmark, e);
           }}
           onDoubleClick={(e) => {
             e.stopPropagation();
-            if (!isNote) {
-              onFaviconDoubleClick?.(bookmark, e);
-            }
+            onFaviconDoubleClick?.(bookmark, e);
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
-              if (isNote && onOpenScratchpadNote) {
-                onOpenScratchpadNote(bookmark);
-              } else {
-                onFaviconClick(bookmark, e as unknown as React.MouseEvent);
-              }
+              onFaviconClick(bookmark, e as unknown as React.MouseEvent);
             }
           }}
           onMouseEnter={() => setIsHoveringFavicon(true)}
           onMouseLeave={() => setIsHoveringFavicon(false)}
           className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center rounded transition-transform active:scale-90"
         >
-          {isNote ? (
-            <StickyNote className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-opacity duration-150 flex-shrink-0" />
-          ) : isGoogleDoc ? (
+          {isGoogleDoc ? (
             <FileText className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 transition-opacity duration-150 flex-shrink-0" />
           ) : isBoundTabLoading ? (
             <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text flex-shrink-0" />
@@ -694,12 +591,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           )}
 
           {/* Sleep icon overlay on favicon if hibernated */}
-          {isDiscarded && !isNote && !isBoundTabLoading && (
+          {isDiscarded && !isBoundTabLoading && (
             <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
           )}
 
           {/* Reset Icon Overlay on Favicon Hover when Navigated Away */}
-          {isNavAway && !isNote && !isBoundTabLoading && (
+          {isNavAway && !isBoundTabLoading && (
             <div
               className={`absolute inset-0 flex items-center justify-center rounded-sm transition-all duration-150 ${
                 isHoveringFavicon
@@ -728,7 +625,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           <span
             title={tooltip}
             className={`truncate text-[12.5px] leading-tight transition-colors duration-150 select-none ${
-              isNavAway && !isNote
+              isNavAway
                 ? 'italic text-amber-600 dark:text-amber-200/90 font-normal'
                 : isActive
                 ? 'font-semibold text-zinc-900 dark:text-white'
@@ -741,7 +638,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           </span>
           {densityMode === 'relaxed' && bookmark.url && (
             <span className="truncate text-[10px] text-zinc-400 dark:text-zinc-500 leading-none select-none pt-0.5 font-mono">
-              {isNote ? 'Scratchpad Note' : formatSubdomain(bookmark.url)}
+              {formatSubdomain(bookmark.url)}
             </span>
           )}
         </div>
@@ -749,22 +646,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
 
       {/* Right: Audio Mute Indicator, Split View, Copy Link, Reload, & Status */}
       <div className="flex items-center space-x-1 flex-shrink-0 ml-1">
-        {/* Note quick delete button */}
-        {isNote && onDeleteBookmark && (
-          <button
-            type="button"
-            data-tooltip="Delete note"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDeleteBookmark(bookmark.id);
-            }}
-            className="hidden group-hover:flex items-center justify-center w-5 h-5 rounded-full text-zinc-400 hover:text-rose-500 hover:bg-rose-500/10 transition-all duration-100"
-          >
-            <Trash2 className="w-3 h-3 stroke-[2.2]" />
-          </button>
-        )}
         {/* Quick Audio Mute Indicator on Pinned Bookmark Tab */}
-        {!isNote && isRunning && binding && (isAudible || isMuted) && (
+        {isRunning && binding && (isAudible || isMuted) && (
           <button
             type="button"
             data-tooltip={isMuted ? 'Tab is muted (Click to unmute)' : 'Tab is playing audio (Click to mute)'}
@@ -787,7 +670,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         )}
 
         {/* Unpin Bookmark to Today's Tabs Button (on hover) */}
-        {!isNote && onUnpinBookmark && (
+        {onUnpinBookmark && (
           <button
             type="button"
             data-tooltip="Unpin to Today's Tabs (Removes bookmark)"
@@ -803,7 +686,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         )}
 
         {/* Reload Tab Button (visible on hover, only for open/running tabs) */}
-        {!isNote && isRunning && binding && typeof binding.tabId === 'number' && (
+        {isRunning && binding && typeof binding.tabId === 'number' && (
           <button
             type="button"
             data-tooltip="Reload tab"
@@ -857,7 +740,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         )}
 
         {/* Running status / close tab button */}
-        {!isNote && isRunning && (
+        {isRunning && (
           <>
             <div
               className={`w-1.5 h-1.5 rounded-full transition-opacity duration-150 ${

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { ScratchpadDrawer } from './ScratchpadDrawer';
 
 describe('ScratchpadDrawer component', () => {
@@ -13,16 +13,22 @@ describe('ScratchpadDrawer component', () => {
     maxChars: 28000
   };
 
-  it('renders header, sync badge, character counter, and textarea when open', () => {
+  it('renders header, character counter, and textarea when open, omitting Synced badge', () => {
     render(<ScratchpadDrawer {...defaultProps} />);
 
     expect(screen.getByText('Scratchpad')).toBeInTheDocument();
-    expect(screen.getByText('Synced')).toBeInTheDocument();
+    expect(screen.queryByText('Synced')).not.toBeInTheDocument();
     expect(screen.getByText('23 / 28,000')).toBeInTheDocument();
 
     const textarea = screen.getByPlaceholderText(/Quick notes, URLs, or snippets/i);
     expect(textarea).toBeInTheDocument();
     expect(textarea).toHaveValue('Test scratchpad content');
+  });
+
+  it('renders Saving... badge when syncStatus is Saving...', () => {
+    render(<ScratchpadDrawer {...defaultProps} syncStatus="Saving..." />);
+
+    expect(screen.getByText('Saving...')).toBeInTheDocument();
   });
 
   it('returns null when isOpen is false', () => {
@@ -48,11 +54,11 @@ describe('ScratchpadDrawer component', () => {
     expect(defaultProps.onClose).toHaveBeenCalled();
   });
 
-  it('calls onClose when close button is clicked', () => {
+  it('calls onClose when minimize button is clicked', () => {
     render(<ScratchpadDrawer {...defaultProps} />);
 
-    const closeBtn = screen.getByTitle(/Close Scratchpad/i);
-    fireEvent.click(closeBtn);
+    const minimizeBtn = screen.getByTitle(/Minimize Scratchpad/i);
+    fireEvent.click(minimizeBtn);
 
     expect(defaultProps.onClose).toHaveBeenCalled();
   });
@@ -66,23 +72,5 @@ describe('ScratchpadDrawer component', () => {
 
     expect(window.confirm).toHaveBeenCalled();
     expect(defaultProps.onClear).toHaveBeenCalled();
-  });
-
-  it('copies text when Copy All button is clicked', async () => {
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, {
-      clipboard: {
-        writeText: writeTextMock
-      }
-    });
-
-    render(<ScratchpadDrawer {...defaultProps} />);
-
-    const copyBtn = screen.getByTitle(/Copy All/i);
-    await act(async () => {
-      fireEvent.click(copyBtn);
-    });
-
-    expect(writeTextMock).toHaveBeenCalledWith('Test scratchpad content');
   });
 });

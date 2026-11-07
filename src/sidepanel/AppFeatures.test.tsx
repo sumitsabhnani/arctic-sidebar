@@ -411,9 +411,8 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     }
   });
 
-  it('FolderNode right-click context menu offers "New Scratchpad" and "New Google Doc"', () => {
+  it('FolderNode right-click context menu offers "New Document" submenu with Google Doc, Sheet, Slides, Notion, and GitHub Gist', () => {
     const onOpenContextMenu = vi.fn();
-    const onCreateScratchpad = vi.fn();
     const onCreateGoogleDoc = vi.fn();
 
     const mockFolder: chrome.bookmarks.BookmarkTreeNode = {
@@ -434,7 +433,6 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
         onCloseTab={vi.fn()}
         onCreateFolder={vi.fn()}
         onOpenContextMenu={onOpenContextMenu}
-        onCreateScratchpad={onCreateScratchpad}
         onCreateGoogleDoc={onCreateGoogleDoc}
       />
     );
@@ -445,44 +443,19 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     expect(onOpenContextMenu).toHaveBeenCalled();
     const items = onOpenContextMenu.mock.calls[0][1];
 
-    const scratchpadItem = items.find((i: { label: string }) => i.label === 'New Scratchpad');
-    expect(scratchpadItem).toBeDefined();
-    scratchpadItem.action();
-    expect(onCreateScratchpad).toHaveBeenCalledWith('f-1');
+    const newDocMenu = items.find((i: { label: string }) => i.label === 'New Document');
+    expect(newDocMenu).toBeDefined();
+    expect(newDocMenu.submenu).toHaveLength(5);
 
-    const gdocItem = items.find((i: { label: string }) => i.label === 'New Google Doc');
+    const gdocItem = newDocMenu.submenu.find((i: { label: string }) => i.label === 'Google Doc');
     expect(gdocItem).toBeDefined();
     gdocItem.action();
-    expect(onCreateGoogleDoc).toHaveBeenCalledWith('f-1');
-  });
+    expect(onCreateGoogleDoc).toHaveBeenCalledWith('f-1', 'https://docs.new', 'New Google Doc');
 
-  it('BookmarkRow renders note bookmark with sticky note icon and opens note on click', () => {
-    const onOpenScratchpadNote = vi.fn();
-    const onRowClick = vi.fn();
-
-    const noteBookmark: chrome.bookmarks.BookmarkTreeNode = {
-      id: 'note-bm-1',
-      title: 'Sprint Planning Notes',
-      url: 'https://arctic.local/note/note_123'
-    };
-
-    render(
-      <BookmarkRow
-        bookmark={noteBookmark}
-        isActive={false}
-        onRowClick={onRowClick}
-        onFaviconClick={vi.fn()}
-        onCloseTab={vi.fn()}
-        onOpenScratchpadNote={onOpenScratchpadNote}
-      />
-    );
-
-    expect(screen.getByText('Sprint Planning Notes')).toBeInTheDocument();
-    const row = screen.getByText('Sprint Planning Notes').closest('div[role="button"]')!;
-    fireEvent.click(row);
-
-    expect(onOpenScratchpadNote).toHaveBeenCalledWith(noteBookmark);
-    expect(onRowClick).not.toHaveBeenCalled();
+    const notionItem = newDocMenu.submenu.find((i: { label: string }) => i.label === 'Notion Page');
+    expect(notionItem).toBeDefined();
+    notionItem.action();
+    expect(onCreateGoogleDoc).toHaveBeenCalledWith('f-1', 'https://notion.new', 'New Notion Page');
   });
 
   it('supports multi-select on BookmarkRow with Ctrl/Cmd + click and Shift + click', () => {
@@ -730,13 +703,12 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
                     id: '12',
                     title: 'Home',
                     children: [
-                      {
+                       {
                         id: '11',
                         title: 'Quick Access',
                         children: [{ id: '111', title: 'Google', url: 'https://google.com' }]
                       },
-                      { id: 'gdoc-1', title: 'Q4 Strategy Doc', url: 'https://docs.google.com/document/d/123/edit' },
-                      { id: 'note-1', title: 'Quick Notes', url: 'https://arctic.local/note/note_abc' }
+                      { id: 'gdoc-1', title: 'Q4 Strategy Doc', url: 'https://docs.google.com/document/d/123/edit' }
                     ]
                   }
                 ]
@@ -752,84 +724,12 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     render(<App />);
 
     expect(await screen.findByText('Q4 Strategy Doc')).toBeInTheDocument();
-    expect(await screen.findByText('Quick Notes')).toBeInTheDocument();
 
     const gdocRow = screen.getByText('Q4 Strategy Doc').closest('div[role="button"]')!;
-    const noteRow = screen.getByText('Quick Notes').closest('div[role="button"]')!;
 
     // Google Doc has lucide-file-text icon in monochrome styling
     const gdocSvg = gdocRow.querySelector('svg.lucide-file-text');
     expect(gdocSvg).toBeInTheDocument();
     expect(gdocSvg?.getAttribute('class')).toContain('text-zinc-400');
-
-    // Scratchpad note has lucide-sticky-note icon in monochrome styling
-    const noteSvg = noteRow.querySelector('svg.lucide-sticky-note');
-    expect(noteSvg).toBeInTheDocument();
-    expect(noteSvg?.getAttribute('class')).toContain('text-zinc-400');
-  });
-
-  it('clicking scratchpad tab highlights it, shows reminder bell icon, and clicking again closes drawer', async () => {
-    mockChrome.__setBookmarksTree([
-      {
-        id: '0',
-        title: 'Root',
-        children: [
-          {
-            id: '2',
-            title: 'Other Bookmarks',
-            children: [
-              {
-                id: '10',
-                title: 'Arctic',
-                children: [
-                  {
-                    id: '12',
-                    title: 'Home',
-                    children: [
-                      {
-                        id: '11',
-                        title: 'Quick Access',
-                        children: [{ id: '111', title: 'Google', url: 'https://google.com' }]
-                      },
-                      { id: 'note-test-1', title: 'Meeting Scratchpad', url: 'https://arctic.local/note/note_meeting' }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        ]
-      }
-    ]);
-    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
-    mockChrome.__setSyncStorage({});
-
-    render(<App />);
-
-    expect(await screen.findByText('Meeting Scratchpad')).toBeInTheDocument();
-    const noteRow = screen.getByText('Meeting Scratchpad').closest('div[role="button"]')!;
-
-    // Scratchpad has reminder bell icon available
-    const bellBtn = noteRow.querySelector('button[data-tooltip*="reminder"]');
-    expect(bellBtn).toBeInTheDocument();
-
-    // Initially not active
-    expect(noteRow.className).not.toContain('theme-active-card');
-
-    // 1. Click scratchpad tab: drawer opens and row highlights
-    await act(async () => {
-      fireEvent.click(noteRow);
-    });
-
-    expect(noteRow.className).toContain('theme-active-card');
-    expect(await screen.findByPlaceholderText('Write notes for this folder...')).toBeInTheDocument();
-
-    // 2. Click scratchpad tab again: drawer closes and tab un-highlights
-    await act(async () => {
-      fireEvent.click(noteRow);
-    });
-
-    expect(noteRow.className).not.toContain('theme-active-card');
-    expect(screen.queryByPlaceholderText('Write notes for this folder...')).not.toBeInTheDocument();
   });
 });

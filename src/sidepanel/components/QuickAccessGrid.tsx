@@ -13,11 +13,10 @@ import {
   Edit2,
   Volume2,
   VolumeX,
-  StickyNote,
   FileText
 } from 'lucide-react';
 import type { TabBinding } from '../../types';
-import { getFaviconUrl, isScratchpadUrl, isGoogleDocUrl } from '../utils/url';
+import { getFaviconUrl, isGoogleDocUrl } from '../utils/url';
 import type { ContextMenuItem } from './ContextMenu';
 
 interface QuickAccessGridProps {
@@ -183,10 +182,9 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const isRelaxed = densityMode === 'relaxed';
   const shortTitle = getShortTitle(bookmark.title, bookmark.url);
 
-  const isNote = isScratchpadUrl(bookmark.url);
   const isGoogleDoc = isGoogleDocUrl(bookmark.url);
-  const titleText = bookmark.title || (isNote ? 'Scratchpad' : bookmark.url || 'Favorite');
-  const faviconSrc = bookmark.url && !isNote && !isGoogleDoc ? getFaviconUrl(bookmark.url, 48) : '';
+  const titleText = bookmark.title || bookmark.url || 'Favorite';
+  const faviconSrc = bookmark.url && !isGoogleDoc ? getFaviconUrl(bookmark.url, 48) : '';
 
   let tooltip = `${titleText} (Double-click to reload original page)`;
   if (isActive && isNavAway) {
@@ -468,8 +466,6 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           <RotateCcw className="w-4 h-4 text-amber-500 dark:text-amber-300 animate-spin-reverse stroke-[2.5]" />
         ) : isBoundTabLoading ? (
           <RotateCw className="w-4 h-4 animate-spin theme-accent-text" />
-        ) : isNote ? (
-          <StickyNote className="w-4 h-4 text-zinc-400 dark:text-zinc-400 group-hover:text-zinc-600 dark:group-hover:text-zinc-200" />
         ) : isGoogleDoc ? (
           <FileText className="w-4 h-4 text-zinc-400 dark:text-zinc-400 group-hover:text-zinc-600 dark:group-hover:text-zinc-200" />
         ) : !faviconError && faviconSrc ? (

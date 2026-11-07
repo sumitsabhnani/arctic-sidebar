@@ -5,7 +5,6 @@ import {
   type LocalSettings,
   type SpaceItem
 } from '../../types';
-import { isScratchpadUrl, getScratchpadNoteId, extractNoteContentFromUrl } from '../utils/url';
 
 function inferSpaceIcon(name: string): string {
   const lower = name.trim().toLowerCase();
@@ -590,39 +589,6 @@ export function useBookmarks() {
       const defaultIds = await ensureDefaultFolders(activeSpaceNamesLower);
       const homeFolderId = settings.workspaceFolderId || defaultIds.workspaceId;
       const children = defaultIds.arcticSidebarSubtree.children || [];
-
-      // Restore any folder notes from their bookmark URL hash if local storage was wiped (reinstall scenario)
-      try {
-        const notesToRestore: Record<string, string> = {};
-        const scanNotes = (node: chrome.bookmarks.BookmarkTreeNode) => {
-          if (node.url && isScratchpadUrl(node.url)) {
-            const nId = getScratchpadNoteId(node.url);
-            const content = extractNoteContentFromUrl(node.url);
-            if (nId && content) {
-              notesToRestore[`arctic_note_${nId}`] = content;
-            }
-          }
-          if (node.children) {
-            for (const c of node.children) scanNotes(c);
-          }
-        };
-        scanNotes(defaultIds.arcticSidebarSubtree);
-        const noteKeys = Object.keys(notesToRestore);
-        if (noteKeys.length > 0) {
-          const currentStorage = await chrome.storage.local.get(noteKeys);
-          const missingPayload: Record<string, string> = {};
-          for (const k of noteKeys) {
-            if (!currentStorage[k]) {
-              missingPayload[k] = notesToRestore[k];
-            }
-          }
-          if (Object.keys(missingPayload).length > 0) {
-            await chrome.storage.local.set(missingPayload);
-          }
-        }
-      } catch (noteRestoreErr) {
-        console.warn('[Arctic] Could not auto-restore notes from bookmarks:', noteRestoreErr);
-      }
 
       // Ensure home space is present and valid, and automatically discover any Space folders under Arctic root
       let hasHome = false;

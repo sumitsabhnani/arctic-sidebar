@@ -355,20 +355,34 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
           const currentUrl = tab.url || existing.currentUrl;
           const currentTitle = tab.title || existing.currentTitle;
-          const isNavAway = isUrlNavigatedAway(currentUrl, existing.originalUrl);
+          let isNavAway = isUrlNavigatedAway(currentUrl, existing.originalUrl);
 
-          // If this was a docs.new link and it redirected to an active Google Doc, update bookmark URL
-          if (
-            existing.originalUrl === 'https://docs.new' &&
-            currentUrl &&
-            currentUrl.startsWith('https://docs.google.com/document/d/')
-          ) {
+          // If this was a .new document shortcut and it redirected to the created document, update bookmark URL
+          const isDotNewRedirect =
+            (existing.originalUrl === 'https://docs.new' && currentUrl?.startsWith('https://docs.google.com/document/d/')) ||
+            (existing.originalUrl === 'https://sheets.new' && currentUrl?.startsWith('https://docs.google.com/spreadsheets/d/')) ||
+            (existing.originalUrl === 'https://slides.new' && currentUrl?.startsWith('https://docs.google.com/presentation/d/')) ||
+            (existing.originalUrl === 'https://notion.new' && currentUrl?.startsWith('https://www.notion.so/') && !currentUrl.includes('/login')) ||
+            (existing.originalUrl === 'https://gist.new' && currentUrl?.startsWith('https://gist.github.com/'));
+
+          if (isDotNewRedirect && currentUrl) {
             existing.originalUrl = currentUrl;
+            isNavAway = false;
+            const cleanedTitle = tab.title
+              ? tab.title
+                  .replace(/ - Google (Docs|Sheets|Slides)$/i, '')
+                  .trim()
+              : '';
+            const isDefaultPlaceholderTitle =
+              !cleanedTitle ||
+              cleanedTitle.includes('.new') ||
+              cleanedTitle.startsWith('New Google ') ||
+              cleanedTitle === 'New Notion Page' ||
+              cleanedTitle === 'New GitHub Gist';
+
             chrome.bookmarks.update(bookmarkId, {
               url: currentUrl,
-              ...(tab.title && !tab.title.includes('docs.new') && tab.title !== 'New Google Doc'
-                ? { title: tab.title.replace(' - Google Docs', '').trim() }
-                : {})
+              ...(!isDefaultPlaceholderTitle ? { title: cleanedTitle } : {})
             }).catch(() => {});
           }
 
