@@ -705,4 +705,99 @@ describe('newtab url detection and formatting', () => {
       }
     });
   });
+
+  describe('Google Autocomplete Suggestions', () => {
+    it('fetches and shows Google suggestions when keyword is not in bookmarks or history', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => [
+          'quantum computing',
+          [
+            'quantum computing',
+            'quantum computing explained',
+            'quantum computing stocks',
+            'quantum computing news'
+          ]
+        ]
+      } as unknown as Response);
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'quantum computing' } });
+      });
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        'https://suggestqueries.google.com/complete/search?client=firefox&q=quantum%20computing',
+        expect.any(Object)
+      );
+
+      expect(await screen.findByText('Search Google for "quantum computing"')).toBeInTheDocument();
+      expect(await screen.findByText('quantum computing explained')).toBeInTheDocument();
+      expect(screen.getByText('quantum computing stocks')).toBeInTheDocument();
+      expect(screen.getByText('quantum computing news')).toBeInTheDocument();
+      expect(screen.getAllByText('Google Suggestion')).toHaveLength(3);
+    });
+
+    it('navigates to selected Google suggestion on ArrowDown + Enter and supports Tab to refine query', async () => {
+      vi.mocked(chrome.tabs.update).mockClear();
+      vi.mocked(globalThis.fetch).mockResolvedValue({
+        ok: true,
+        json: async () => [
+          'how to center',
+          ['how to center a div', 'how to center text in css']
+        ]
+      } as unknown as Response);
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'how to center' } });
+      });
+
+      expect(await screen.findByText('how to center a div')).toBeInTheDocument();
+
+      // ArrowDown to select "how to center a div"
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'ArrowDown', code: 'ArrowDown' });
+      });
+
+      // Press Tab to populate "how to center a div" into the input box
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Tab', code: 'Tab' });
+      });
+
+      expect(input.value).toBe('how to center a div');
+
+      // ArrowDown to select "how to center text in css" and press Enter to search
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'ArrowDown', code: 'ArrowDown' });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      });
+
+      expect(chrome.tabs.update).toHaveBeenCalledWith(1, {
+        url: 'https://www.google.com/search?q=how%20to%20center%20text%20in%20css',
+        active: true
+      });
+    });
+
+    it('does not fetch Google suggestions when keyword already matches local history or bookmarks', async () => {
+      vi.mocked(globalThis.fetch).mockClear();
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      // "github" matches default mockChrome history item
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'github' } });
+      });
+
+      expect(await screen.findByText(/GitHub: Let’s build from here/i)).toBeInTheDocument();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    });
+  });
 });

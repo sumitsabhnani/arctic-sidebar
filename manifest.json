@@ -15,6 +15,9 @@
     "notifications",
     "sessions"
   ],
+  "host_permissions": [
+    "https://suggestqueries.google.com/*"
+  ],
   "chrome_url_overrides": {
     "newtab": "newtab.html"
   },

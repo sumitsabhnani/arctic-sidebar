@@ -1,4 +1,4 @@
-import { beforeEach } from 'vitest';
+import { beforeEach, vi } from 'vitest';
 import '@testing-library/jest-dom';
 import { createMockChrome } from './mockChrome';
 
@@ -9,4 +9,8 @@ export const mockChrome = createMockChrome();
 
 beforeEach(() => {
   mockChrome.__resetAll();
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ['', []]
+  } as unknown as Response);
 });
