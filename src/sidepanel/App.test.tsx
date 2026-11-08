@@ -156,4 +156,66 @@ describe('Sidepanel App Integration', () => {
     // Flag is cleared after opening
     expect(mockChrome.__getLocalStorage().openArcticSettings).toBeUndefined();
   });
+
+  it("displays Clear button in Today's Tabs when there are no temporary tabs but active space tabs are open", async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '131',
+                        title: 'Example Bookmark',
+                        url: 'https://example.com'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    // Tab 1 (https://example.com) is bound to bookmark '131' in active space, so 0 temporary unpinned tabs exist
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        '131': {
+          bookmarkId: '131',
+          tabId: 1,
+          windowId: 10,
+          originalUrl: 'https://example.com',
+          currentUrl: 'https://example.com',
+          currentTitle: 'Example Domain',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: {
+        1: '131'
+      }
+    });
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+
+    render(<App />);
+
+    expect(await screen.findByText('Example Bookmark')).toBeInTheDocument();
+    expect(screen.getByText('No unpinned tabs open.')).toBeInTheDocument();
+
+    // Clear button and Clear options must still be visible in Today's Tabs header
+    expect(screen.getByTitle("Close temporary Today's tabs")).toBeInTheDocument();
+    expect(screen.getByTitle('Clear options')).toBeInTheDocument();
+  });
 });

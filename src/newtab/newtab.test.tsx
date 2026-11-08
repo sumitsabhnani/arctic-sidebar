@@ -831,5 +831,62 @@ describe('newtab url detection and formatting', () => {
       expect(await screen.findByText(/GitHub: Let’s build from here/i)).toBeInTheDocument();
       expect(globalThis.fetch).not.toHaveBeenCalled();
     });
+
+    it('keeps command bar anchored at top (justify-start) and preserves previous Google suggestions while typing new letters to prevent layout flicker', async () => {
+      let resolveSecondFetch: ((val: Response) => void) | null = null;
+      vi.mocked(globalThis.fetch)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => [
+            'quantum',
+            ['quantum physics', 'quantum mechanics']
+          ]
+        } as unknown as Response)
+        .mockImplementationOnce(
+          () =>
+            new Promise<Response>((resolve) => {
+              resolveSecondFetch = resolve;
+            })
+        );
+
+      const { container } = render(<App />);
+      const rootWrapper = container.firstElementChild as HTMLElement;
+      expect(rootWrapper.className).toContain('justify-start');
+      expect(rootWrapper.className).not.toContain('justify-center');
+
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      // Type first query
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'quantum' } });
+      });
+
+      expect(await screen.findByText('quantum physics')).toBeInTheDocument();
+      expect(screen.getByText('quantum mechanics')).toBeInTheDocument();
+
+      // Type next character while second network fetch is still pending
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'quantum c' } });
+      });
+
+      // Primary search item updates immediately AND previous Google suggestions stay visible (no collapse to 1 item)
+      expect(screen.getByText('Search Web for "quantum c"')).toBeInTheDocument();
+      expect(screen.getByText('quantum physics')).toBeInTheDocument();
+      expect(screen.getByText('quantum mechanics')).toBeInTheDocument();
+
+      // Resolve second fetch and verify suggestions update smoothly in place
+      await act(async () => {
+        resolveSecondFetch?.({
+          ok: true,
+          json: async () => [
+            'quantum c',
+            ['quantum computing', 'quantum computer']
+          ]
+        } as unknown as Response);
+      });
+
+      expect(await screen.findByText('quantum computing')).toBeInTheDocument();
+      expect(screen.getByText('quantum computer')).toBeInTheDocument();
+    });
   });
 });

@@ -507,6 +507,21 @@ export const App: React.FC = () => {
       .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   }, [unpinnedTabs, tabSpaceByTabId, activeSpaceId]);
 
+  const hasOpenActiveSpaceTabs = useMemo(() => {
+    const checkNodes = (nodes: chrome.bookmarks.BookmarkTreeNode[]): boolean => {
+      for (const node of nodes) {
+        if (node.url && bindingsByBookmarkId[node.id]) {
+          return true;
+        }
+        if (node.children && checkNodes(node.children)) {
+          return true;
+        }
+      }
+      return false;
+    };
+    return checkNodes(workspaceBookmarks) || checkNodes(quickAccessBookmarks);
+  }, [workspaceBookmarks, quickAccessBookmarks, bindingsByBookmarkId]);
+
   // Inline Space / Home Root Folder Renaming
   const [isRenamingWorkspace, setIsRenamingWorkspace] = useState(false);
   const [workspaceRenameTitle, setWorkspaceRenameTitle] = useState('');
@@ -1591,6 +1606,7 @@ export const App: React.FC = () => {
         {/* Section 3: Today's Tabs / Open Tabs (Ephemeral Unpinned Tabs) */}
         <OpenTabsSection
           unpinnedTabs={visibleUnpinnedTabs}
+          hasOpenActiveSpaceTabs={hasOpenActiveSpaceTabs}
           activeTabId={activeTabId}
           activeSpaceId={activeSpaceId}
           isInitialTabsLoaded={isInitialTabsLoaded}

@@ -281,10 +281,7 @@ export async function getArcticBookmarks(): Promise<ArcticBookmarkItem[]> {
 }
 
 export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
-  const isJsdom =
-    typeof navigator !== 'undefined' && /jsdom/i.test(navigator.userAgent);
-  const effectiveDebounceMs =
-    typeof debounceMs === 'number' ? debounceMs : isJsdom ? 0 : 120;
+  const effectiveDebounceMs = typeof debounceMs === 'number' ? debounceMs : 0;
 
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
@@ -301,7 +298,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   const [dismissedEngineId, setDismissedEngineId] = useState<string | null>(null);
   const [customSearchEngines, setCustomSearchEngines] = useState<SiteSearchEngine[]>([]);
 
-  // Smoothly debounce query changes so the command bar doesn't feel jumpy while typing
+  // Smoothly debounce query changes when debounceMs is configured
   useEffect(() => {
     if (effectiveDebounceMs <= 0 || !query.trim()) {
       setDebouncedQuery(query);
@@ -323,15 +320,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       ? candidateSiteEngine
       : null;
 
-  const visualCandidateSiteEngine = activeSiteEngine
-    ? null
-    : findMatchingSiteEngine(activeQuery, customSearchEngines);
-  const visualMatchedSiteEngine =
-    visualCandidateSiteEngine &&
-    visualCandidateSiteEngine.id !== dismissedEngineId &&
-    activeQuery === query
-      ? visualCandidateSiteEngine
-      : null;
+  const visualMatchedSiteEngine = matchedSiteEngine;
   const ghostSuffix = activeSiteEngine
     ? ''
     : getGhostAutocomplete(query, visualMatchedSiteEngine);
@@ -340,17 +329,58 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const arcticBookmarksRef = useRef<ArcticBookmarkItem[]>([]);
+  const arcticBookmarksLoadedRef = useRef(false);
+  const arcticBookmarksPromiseRef = useRef<Promise<ArcticBookmarkItem[]> | null>(null);
+  const lastGoogleSuggestionsRef = useRef<SuggestionItem[]>([]);
   const isNavigatingRef = useRef(false);
   const currentTabRef = useRef<chrome.tabs.Tab | null>(null);
   const currentWindowIdRef = useRef<number | null>(null);
   const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Pre-load Arctic bookmarks for fast lookup and URL matching
-  useEffect(() => {
-    getArcticBookmarks().then((items) => {
-      arcticBookmarksRef.current = items;
-    });
+  const loadArcticBookmarks = useCallback(() => {
+    if (!arcticBookmarksPromiseRef.current) {
+      arcticBookmarksPromiseRef.current = getArcticBookmarks().then((items) => {
+        arcticBookmarksRef.current = items;
+        arcticBookmarksLoadedRef.current = true;
+        return items;
+      });
+    }
+    return arcticBookmarksPromiseRef.current;
   }, []);
+
+  // Pre-load Arctic bookmarks for fast lookup and URL matching, and invalidate cache on bookmark/space changes
+  useEffect(() => {
+    loadArcticBookmarks();
+
+    const invalidateBookmarksCache = () => {
+      arcticBookmarksLoadedRef.current = false;
+      arcticBookmarksPromiseRef.current = null;
+      loadArcticBookmarks();
+    };
+
+    const handleStorageChange = (
+      changes: { [key: string]: chrome.storage.StorageChange },
+      areaName: string
+    ) => {
+      if (areaName === 'local' && (changes.spaces || changes.quickAccessFolderId)) {
+        invalidateBookmarksCache();
+      }
+    };
+
+    chrome.bookmarks?.onCreated?.addListener(invalidateBookmarksCache);
+    chrome.bookmarks?.onRemoved?.addListener(invalidateBookmarksCache);
+    chrome.bookmarks?.onChanged?.addListener(invalidateBookmarksCache);
+    chrome.bookmarks?.onMoved?.addListener(invalidateBookmarksCache);
+    chrome.storage?.onChanged?.addListener(handleStorageChange);
+
+    return () => {
+      chrome.bookmarks?.onCreated?.removeListener(invalidateBookmarksCache);
+      chrome.bookmarks?.onRemoved?.removeListener(invalidateBookmarksCache);
+      chrome.bookmarks?.onChanged?.removeListener(invalidateBookmarksCache);
+      chrome.bookmarks?.onMoved?.removeListener(invalidateBookmarksCache);
+      chrome.storage?.onChanged?.removeListener(handleStorageChange);
+    };
+  }, [loadArcticBookmarks]);
 
   // Pre-resolve current tab and window for instantaneous navigation & sidePanel dispatch
   useEffect(() => {
@@ -819,6 +849,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
     // SITE SEARCH MODE (activated via Tab on a matched site engine)
     if (activeSiteEngine) {
+      lastGoogleSuggestionsRef.current = [];
       const fetchSiteResults = async () => {
         const results: SuggestionItem[] = [];
         const seenUrls = new Set<string>();
@@ -850,8 +881,9 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
         // 2. Domain-scoped Arctic Bookmarks
         try {
-          const arcticBm = await getArcticBookmarks();
-          arcticBookmarksRef.current = arcticBm;
+          const arcticBm = arcticBookmarksLoadedRef.current
+            ? arcticBookmarksRef.current
+            : await loadArcticBookmarks();
           const matchingArctic = arcticBm.filter(
             (bm) =>
               doesUrlMatchEngineDomain(bm.url, activeSiteEngine) &&
@@ -938,6 +970,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
     // EXPLICIT COMMAND MODE (starts with '>')
     if (trimmed.startsWith('>')) {
+      lastGoogleSuggestionsRef.current = [];
       const allCmds = getActionCommands();
       const filterTerm = trimmed.slice(1).trim().toLowerCase();
 
@@ -957,6 +990,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
     // EMPTY QUERY: fetch top 6 most visited / recent history items
     if (!trimmed) {
+      lastGoogleSuggestionsRef.current = [];
       if (chrome?.history?.search) {
         chrome.history.search(
           { text: '', maxResults: 6, startTime: 0 },
@@ -1009,15 +1043,18 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       results.push(...matchedCmds);
 
       // 2. Bookmarks Search (Prioritizes Arctic Bookmarks)
+      let matchingArcticCount = 0;
       try {
-        const arcticBm = await getArcticBookmarks();
-        arcticBookmarksRef.current = arcticBm;
+        const arcticBm = arcticBookmarksLoadedRef.current
+          ? arcticBookmarksRef.current
+          : await loadArcticBookmarks();
         const lowerTrimmed = trimmed.toLowerCase();
         const matchingArctic = arcticBm.filter(
           (bm) =>
             bm.title.toLowerCase().includes(lowerTrimmed) ||
             bm.url.toLowerCase().includes(lowerTrimmed)
         );
+        matchingArcticCount = matchingArctic.length;
 
         for (const bm of matchingArctic) {
           const norm = normalizeUrl(bm.url).toLowerCase();
@@ -1042,32 +1079,44 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
             if (results.length >= 8) break;
           }
         }
-
-        // General Chrome Bookmarks fallback
-        if (matchingArctic.length === 0 && chrome?.bookmarks?.search) {
-          const generalNodes = await chrome.bookmarks.search(trimmed);
-          for (const bm of generalNodes) {
-            if (bm.url) {
-              const norm = normalizeUrl(bm.url).toLowerCase();
-              if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
-                seenUrls.add(bm.url.toLowerCase());
-                seenUrls.add(norm);
-                results.push({
-                  id: `chrome-bm-${bm.id}`,
-                  type: 'bookmark',
-                  title: bm.title || bm.url,
-                  url: bm.url,
-                  bookmarkId: bm.id,
-                  isArctic: false,
-                  domain: getDomainFromUrl(bm.url)
-                });
-                if (results.length >= 8) break;
-              }
-            }
-          }
-        }
       } catch {
         // ignore
+      }
+
+      // Run General Chrome Bookmarks fallback and History search in parallel
+      const [generalNodes, historyItems] = await Promise.all([
+        matchingArcticCount === 0 && chrome?.bookmarks?.search
+          ? chrome.bookmarks.search(trimmed).catch(() => [])
+          : Promise.resolve([]),
+        chrome?.history?.search
+          ? chrome.history
+              .search({
+                text: trimmed,
+                maxResults: 8,
+                startTime: 0
+              })
+              .catch(() => [])
+          : Promise.resolve([])
+      ]);
+
+      for (const bm of generalNodes) {
+        if (bm.url) {
+          const norm = normalizeUrl(bm.url).toLowerCase();
+          if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
+            seenUrls.add(bm.url.toLowerCase());
+            seenUrls.add(norm);
+            results.push({
+              id: `chrome-bm-${bm.id}`,
+              type: 'bookmark',
+              title: bm.title || bm.url,
+              url: bm.url,
+              bookmarkId: bm.id,
+              isArctic: false,
+              domain: getDomainFromUrl(bm.url)
+            });
+            if (results.length >= 8) break;
+          }
+        }
       }
 
       // 3. Direct URL suggestion (if likely URL and not already shown as bookmark)
@@ -1088,37 +1137,26 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       }
 
       // 4. History
-      try {
-        if (chrome?.history?.search) {
-          const historyItems = await chrome.history.search({
-            text: trimmed,
-            maxResults: 8,
-            startTime: 0
-          });
-          for (const item of historyItems) {
-            if (
-              item.url &&
-              !item.url.startsWith('chrome://') &&
-              !item.url.startsWith('chrome-extension://')
-            ) {
-              const norm = normalizeUrl(item.url).toLowerCase();
-              if (!seenUrls.has(item.url.toLowerCase()) && !seenUrls.has(norm)) {
-                seenUrls.add(item.url.toLowerCase());
-                seenUrls.add(norm);
-                results.push({
-                  id: `hist-${item.id}`,
-                  type: 'history',
-                  title: item.title || item.url,
-                  url: item.url,
-                  domain: getDomainFromUrl(item.url)
-                });
-                if (results.length >= 9) break;
-              }
-            }
+      for (const item of historyItems) {
+        if (
+          item.url &&
+          !item.url.startsWith('chrome://') &&
+          !item.url.startsWith('chrome-extension://')
+        ) {
+          const norm = normalizeUrl(item.url).toLowerCase();
+          if (!seenUrls.has(item.url.toLowerCase()) && !seenUrls.has(norm)) {
+            seenUrls.add(item.url.toLowerCase());
+            seenUrls.add(norm);
+            results.push({
+              id: `hist-${item.id}`,
+              type: 'history',
+              title: item.title || item.url,
+              url: item.url,
+              domain: getDomainFromUrl(item.url)
+            });
+            if (results.length >= 9) break;
           }
         }
-      } catch {
-        // ignore
       }
 
       // 5. Web Search Fallback (uses browser's default search engine via chrome.search)
@@ -1131,31 +1169,43 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         url: searchUrl
       });
 
+      const hasLocalBookmarkOrHistory = results.some(
+        (r) => r.type === 'bookmark' || r.type === 'history' || r.type === 'url'
+      );
+      const shouldFetchGoogleSuggestions =
+        !hasLocalBookmarkOrHistory && !isLikelyUrl(trimmed);
+
+      if (!shouldFetchGoogleSuggestions) {
+        lastGoogleSuggestionsRef.current = [];
+      }
+
       if (!isCancelled) {
-        setSuggestions([...results]);
+        setSuggestions(
+          shouldFetchGoogleSuggestions && lastGoogleSuggestionsRef.current.length > 0
+            ? [...results, ...lastGoogleSuggestionsRef.current]
+            : [...results]
+        );
         setSelectedIndex(0);
       }
 
       // 6. Live Google Suggestions when keyword is not found in bookmarks, history, or direct URL
-      const hasLocalBookmarkOrHistory = results.some(
-        (r) => r.type === 'bookmark' || r.type === 'history' || r.type === 'url'
-      );
-      if (!hasLocalBookmarkOrHistory && !isLikelyUrl(trimmed)) {
+      if (shouldFetchGoogleSuggestions) {
         const googleSuggestions = await fetchGoogleSuggestions(
           trimmed,
           abortController?.signal
         );
-        if (!isCancelled && googleSuggestions.length > 0) {
+        if (!isCancelled) {
           const suggestionItems: SuggestionItem[] = googleSuggestions
             .slice(0, 5)
             .map((suggestionText, idx) => ({
-              id: `google-suggest-${idx}-${suggestionText}`,
+              id: `google-suggest-${idx}`,
               type: 'search',
               title: suggestionText,
               searchQuery: suggestionText,
               defaultSearchText: suggestionText,
               url: `https://www.google.com/search?q=${encodeURIComponent(suggestionText)}`
             }));
+          lastGoogleSuggestionsRef.current = suggestionItems;
           setSuggestions([...results, ...suggestionItems]);
         }
       }
@@ -1169,7 +1219,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       isCancelled = true;
       abortController?.abort();
     };
-  }, [activeQuery, activeSiteEngine, getActionCommands]);
+  }, [activeQuery, activeSiteEngine, getActionCommands, loadArcticBookmarks]);
 
   // Navigate to destination (handling bookmark bindings and space switching)
   const openBookmarkOrUrl = useCallback(
@@ -1650,7 +1700,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           inputRef.current?.focus();
         }
       }}
-      className="min-h-screen w-full flex flex-col items-center justify-center p-6 text-zinc-900 dark:text-zinc-100 select-none transition-colors duration-300 relative overflow-hidden"
+      className="min-h-screen w-full flex flex-col items-center justify-start pt-[18vh] sm:pt-[20vh] px-6 pb-6 text-zinc-900 dark:text-zinc-100 select-none transition-colors duration-300 relative overflow-hidden"
     >
       {/* Top Navigation Progress Bar */}
       {isNavigating && (
@@ -1669,10 +1719,10 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       {/* Center Command Palette Container */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`w-full max-w-[620px] flex flex-col space-y-4 transition-all duration-150 ease-out ${
+        className={`w-full max-w-[620px] flex flex-col space-y-4 transition-[opacity,transform] duration-150 ease-out ${
           isNavigating
             ? 'opacity-0 scale-95 -translate-y-2 pointer-events-none'
-            : 'animate-in fade-in zoom-in-95 duration-150'
+            : ''
         }`}
       >
         {/* Command Card */}
@@ -1681,14 +1731,14 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
             borderColor: 'var(--theme-accent-border)',
             boxShadow: '0 20px 60px rgba(0, 0, 0, 0.25)'
           }}
-          className="w-full rounded-2xl bg-white/90 dark:bg-[#18181c]/90 backdrop-blur-2xl border transition-all duration-200 overflow-hidden"
+          className="w-full rounded-2xl bg-white/90 dark:bg-[#18181c]/90 backdrop-blur-2xl border transition-colors duration-200 overflow-hidden"
         >
           {/* Top Search Input Box */}
           <div className="flex items-center px-4 py-3.5 space-x-3 border-b border-zinc-200/80 dark:border-white/10">
             {activeSiteEngine ? (
               <div
                 data-testid="active-site-pill"
-                className="flex items-center space-x-1.5 pl-2.5 pr-1.5 py-1 rounded-lg theme-active-card border text-xs font-semibold text-zinc-900 dark:text-white flex-shrink-0 animate-in fade-in zoom-in-95 duration-100"
+                className="flex items-center space-x-1.5 pl-2.5 pr-1.5 py-1 rounded-lg theme-active-card border text-xs font-semibold text-zinc-900 dark:text-white flex-shrink-0"
               >
                 {activeSiteFavicon ? (
                   <img
@@ -1722,7 +1772,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 </button>
               </div>
             ) : query.trim().startsWith('>') ? (
-              <Command className="w-5 h-5 theme-accent-text flex-shrink-0 animate-in fade-in duration-100" />
+              <Command className="w-5 h-5 theme-accent-text flex-shrink-0" />
             ) : (
               <Search className="w-5 h-5 text-zinc-400 flex-shrink-0" />
             )}
@@ -1778,7 +1828,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                   setSelectedIndex(0);
                   inputRef.current?.focus();
                 }}
-                className="flex items-center space-x-1.5 px-2 py-1 rounded-lg bg-zinc-200/70 dark:bg-white/10 hover:bg-zinc-300/70 dark:hover:bg-white/15 border border-black/10 dark:border-white/10 text-zinc-700 dark:text-zinc-200 text-[11px] font-medium transition-colors flex-shrink-0 animate-in fade-in duration-100"
+                className="flex items-center space-x-1.5 px-2 py-1 rounded-lg bg-zinc-200/70 dark:bg-white/10 hover:bg-zinc-300/70 dark:hover:bg-white/15 border border-black/10 dark:border-white/10 text-zinc-700 dark:text-zinc-200 text-[11px] font-medium transition-colors flex-shrink-0"
               >
                 <span className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/15 text-[10px] font-mono leading-none">
                   Tab ⇥
@@ -1844,7 +1894,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                     tabIndex={0}
                     onClick={() => handleSelect(item)}
                     onMouseEnter={() => setSelectedIndex(index)}
-                    className={`flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer transition-all duration-100 outline-none ${
+                    className={`flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer transition-colors duration-75 outline-none ${
                       isSelected
                         ? 'theme-active-card text-zinc-950 dark:text-white'
                         : 'text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/5'
@@ -1947,13 +1997,13 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                                   : item.url!
                               );
                             }}
-                            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-zinc-500 dark:text-zinc-400 border border-black/10 dark:border-white/10 transition-colors animate-in fade-in duration-100"
+                            className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-zinc-500 dark:text-zinc-400 border border-black/10 dark:border-white/10 transition-colors"
                           >
                             <span>Tab ⇥</span>
                           </button>
                         )}
                       {isSelected && (
-                        <CornerDownLeft className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 animate-in fade-in duration-100" />
+                        <CornerDownLeft className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500" />
                       )}
                     </div>
                   </div>

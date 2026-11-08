@@ -366,4 +366,47 @@ describe('OpenTabsSection component', () => {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }
   });
+
+  it('shows Clear button and Clear options when unpinnedTabs is empty but hasOpenActiveSpaceTabs is true', () => {
+    const onCloseAll = vi.fn();
+    const onCloseAllWindowTabs = vi.fn();
+
+    render(
+      <OpenTabsSection
+        {...defaultProps}
+        unpinnedTabs={[]}
+        hasOpenActiveSpaceTabs={true}
+        onCloseAll={onCloseAll}
+        onCloseAllWindowTabs={onCloseAllWindowTabs}
+      />
+    );
+
+    expect(screen.getByText('No unpinned tabs open.')).toBeInTheDocument();
+
+    const clearBtn = screen.getByTitle("Close temporary Today's tabs");
+    const clearOptionsBtn = screen.getByTitle('Clear options');
+    expect(clearBtn).toBeInTheDocument();
+    expect(clearOptionsBtn).toBeInTheDocument();
+
+    // Clicking the clear button when unpinnedTabs is empty opens the Clear options menu
+    fireEvent.click(clearBtn);
+    const clearAllOption = screen.getByTitle('Close all tabs in current window');
+    expect(clearAllOption).toBeInTheDocument();
+
+    fireEvent.click(clearAllOption);
+    expect(onCloseAllWindowTabs).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Clear button when both unpinnedTabs is empty and hasOpenActiveSpaceTabs is false', () => {
+    render(
+      <OpenTabsSection
+        {...defaultProps}
+        unpinnedTabs={[]}
+        hasOpenActiveSpaceTabs={false}
+      />
+    );
+
+    expect(screen.queryByTitle("Close temporary Today's tabs")).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Clear options')).not.toBeInTheDocument();
+  });
 });
