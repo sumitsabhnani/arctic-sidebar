@@ -795,4 +795,106 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
       encodeURIComponent('https://docs.google.com/document/d/123/edit')
     );
   });
+
+  it('moves an open pinned tab to Today’s Tabs when unpinned via context menu without losing the tab', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: []
+                      }
+                    ]
+                  },
+                  {
+                    id: '20',
+                    title: 'Work',
+                    children: [
+                      {
+                        id: 'bm-open',
+                        title: 'Pinned Dashboard',
+                        url: 'https://dashboard.example.com/overview'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    mockChrome.__setLocalStorage({
+      hasDismissedLeftSideTip: true,
+      spaces: [
+        { id: 'home', name: 'Home', folderId: '12', icon: 'home' },
+        { id: 'space-work', name: 'Work', folderId: '20', icon: 'briefcase' }
+      ],
+      activeSpaceId: 'space-work'
+    });
+    mockChrome.__setSyncStorage({});
+
+    // Open browser tab 99 is bound to 'bm-open' (without an explicit tabSpaceByTabId entry, as on startup)
+    mockChrome.__setTabs([
+      {
+        id: 99,
+        windowId: 1,
+        index: 0,
+        url: 'https://dashboard.example.com/overview',
+        title: 'Live Dashboard Page',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-open': {
+          bookmarkId: 'bm-open',
+          tabId: 99,
+          windowId: 1,
+          originalUrl: 'https://dashboard.example.com/overview',
+          currentUrl: 'https://dashboard.example.com/overview',
+          currentTitle: 'Live Dashboard Page',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 99: 'bm-open' }
+    });
+
+    render(<App />);
+
+    // Bookmark row is visible in Active Space ("Work"), and Today's Tabs is initially empty
+    const pinnedRowText = await screen.findByText('Pinned Dashboard');
+    expect(pinnedRowText).toBeInTheDocument();
+    expect(screen.getByText('No unpinned tabs open.')).toBeInTheDocument();
+
+    // Right-click the pinned bookmark row and click "Unpin to Today's Tabs"
+    const pinnedRow = pinnedRowText.closest('[role="button"]')!;
+    fireEvent.contextMenu(pinnedRow);
+
+    const unpinMenuItem = await screen.findByText("Unpin to Today's Tabs");
+    await act(async () => {
+      fireEvent.click(unpinMenuItem);
+    });
+
+    // The bookmark is removed and the open browser tab immediately appears in Today's Tabs
+    expect(await screen.findByText('Live Dashboard Page')).toBeInTheDocument();
+    expect(screen.queryByText('Pinned Dashboard')).not.toBeInTheDocument();
+    expect(screen.queryByText('No unpinned tabs open.')).not.toBeInTheDocument();
+  });
 });

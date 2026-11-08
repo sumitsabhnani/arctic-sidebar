@@ -3,8 +3,9 @@ import type { TabBinding, LocalSettings } from '../../types';
 import { normalizeUrl, isUrlNavigatedAway, isScratchpadUrl } from '../utils/url';
 
 export function isArcticCommandTab(tab: chrome.tabs.Tab): boolean {
-  const rawUrl = (tab.url || tab.pendingUrl || '').trim().toLowerCase();
+  const actualUrl = (tab.url || '').trim().toLowerCase();
   const pendingUrl = (tab.pendingUrl || '').trim().toLowerCase();
+  const rawUrl = actualUrl || pendingUrl;
   const rawTitle = (tab.title || '').trim();
 
   const isCommandOrNewTabUrl = (u: string) =>
@@ -13,6 +14,14 @@ export function isArcticCommandTab(tab: chrome.tabs.Tab): boolean {
     u === 'about:newtab' ||
     u.includes('/newtab.html') ||
     u.includes('/command.html');
+
+  // Once a tab has navigated to a real non-newtab URL, it is no longer an Arctic Command tab
+  if (actualUrl && actualUrl !== 'about:blank' && !isCommandOrNewTabUrl(actualUrl)) {
+    if (rawTitle === 'Arctic Command' && actualUrl.startsWith('chrome-extension://')) {
+      return true;
+    }
+    return false;
+  }
 
   if (isCommandOrNewTabUrl(rawUrl) || isCommandOrNewTabUrl(pendingUrl)) {
     return true;
@@ -31,6 +40,12 @@ export function isArcticCommandTab(tab: chrome.tabs.Tab): boolean {
 export function useTabBindings(activeSpaceId: string = 'home') {
   const [bindingsByBookmarkId, setBindingsByBookmarkId] = useState<Record<string, TabBinding>>({});
   const [bookmarkIdByTabId, setBookmarkIdByTabId] = useState<Record<number, string>>({});
+  const bindingsByBookmarkIdRef = useRef<Record<string, TabBinding>>({});
+  bindingsByBookmarkIdRef.current = bindingsByBookmarkId;
+  const bookmarkIdByTabIdRef = useRef<Record<number, string>>({});
+  bookmarkIdByTabIdRef.current = bookmarkIdByTabId;
+  const unpinnedTabIdsRef = useRef<Set<number>>(new Set());
+  const unpinnedBookmarkIdsRef = useRef<Set<string>>(new Set());
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [windowTabs, setWindowTabs] = useState<chrome.tabs.Tab[]>([]);
   const [isInitialTabsLoaded, setIsInitialTabsLoaded] = useState<boolean>(false);
@@ -133,6 +148,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       setBindingsByBookmarkId(cleanBindings);
       setBookmarkIdByTabId(cleanByTab);
+      bindingsByBookmarkIdRef.current = cleanBindings;
+      bookmarkIdByTabIdRef.current = cleanByTab;
 
       // Prune dead tab spaces
       const existingSpaces: Record<number, string> =
@@ -221,6 +238,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       newBindings: Record<string, TabBinding>,
       newByTab: Record<number, string>
     ) => {
+      bindingsByBookmarkIdRef.current = newBindings;
+      bookmarkIdByTabIdRef.current = newByTab;
       setBindingsByBookmarkId(newBindings);
       setBookmarkIdByTabId(newByTab);
       try {
@@ -329,7 +348,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           const merged = {
             ...t,
             ...tab,
-            ...changeInfo
+            ...changeInfo,
+            pendingUrl: changeInfo.url ? undefined : tab.pendingUrl
           };
           const rawCandidateTitle = changeInfo.title || tab.title || t.title;
           const cleanTitle =
@@ -432,14 +452,16 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     ) => {
       if (areaName === 'session') {
         if (changes.bindingsByBookmarkId) {
-          setBindingsByBookmarkId(
-            (changes.bindingsByBookmarkId.newValue as Record<string, TabBinding>) || {}
-          );
+          const nextBindings =
+            (changes.bindingsByBookmarkId.newValue as Record<string, TabBinding>) || {};
+          bindingsByBookmarkIdRef.current = nextBindings;
+          setBindingsByBookmarkId(nextBindings);
         }
         if (changes.bookmarkIdByTabId) {
-          setBookmarkIdByTabId(
-            (changes.bookmarkIdByTabId.newValue as Record<number, string>) || {}
-          );
+          const nextByTab =
+            (changes.bookmarkIdByTabId.newValue as Record<number, string>) || {};
+          bookmarkIdByTabIdRef.current = nextByTab;
+          setBookmarkIdByTabId(nextByTab);
         }
       }
     };
@@ -466,6 +488,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           };
 
           const next = { ...prevBindings, [id]: updatedBinding };
+          bindingsByBookmarkIdRef.current = next;
           chrome.storage.session.set({ bindingsByBookmarkId: next });
           return next;
         });
@@ -701,14 +724,22 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         const currentTabs = await chrome.tabs.query({ currentWindow: true });
         const session = await chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']);
         const currentBindings: Record<string, TabBinding> =
-          (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+          (session.bindingsByBookmarkId as Record<string, TabBinding>) ||
+          bindingsByBookmarkIdRef.current ||
+          {};
         const currentByTab: Record<number, string> =
-          (session.bookmarkIdByTabId as Record<number, string>) || {};
+          (session.bookmarkIdByTabId as Record<number, string>) ||
+          bookmarkIdByTabIdRef.current ||
+          {};
 
         const allBookmarkLeaves: chrome.bookmarks.BookmarkTreeNode[] = [];
         const collect = (nodes: chrome.bookmarks.BookmarkTreeNode[]) => {
           for (const node of nodes) {
-            if (node.url && !isScratchpadUrl(node.url)) {
+            if (
+              node.url &&
+              !isScratchpadUrl(node.url) &&
+              !unpinnedBookmarkIdsRef.current.has(node.id)
+            ) {
               allBookmarkLeaves.push(node);
             }
             if (node.children) {
@@ -721,8 +752,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         if (allBookmarkLeaves.length === 0 || currentTabs.length === 0) return;
 
         let hasNewBindings = false;
-        const nextBindings = { ...bindingsByBookmarkId, ...currentBindings };
-        const nextByTab = { ...bookmarkIdByTabId, ...currentByTab };
+        const nextBindings: Record<string, TabBinding> = { ...currentBindings };
+        const nextByTab: Record<number, string> = { ...currentByTab };
 
         const boundTabIds = new Set(Object.keys(nextByTab).map(Number));
         const boundBookmarkIds = new Set(Object.keys(nextBindings));
@@ -730,6 +761,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         for (const tab of currentTabs) {
           if (typeof tab.id !== 'number' || !tab.url) continue;
           if (boundTabIds.has(tab.id)) continue;
+          if (unpinnedTabIdsRef.current.has(tab.id)) continue;
 
           if (
             tab.url.startsWith('chrome://newtab') ||
@@ -744,6 +776,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           const matchingBookmark = allBookmarkLeaves.find(
             (b) =>
               !boundBookmarkIds.has(b.id) &&
+              !unpinnedBookmarkIdsRef.current.has(b.id) &&
               b.url &&
               normalizeUrl(b.url) === tabNormalized
           );
@@ -775,7 +808,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         console.warn('[Arctic] Could not reconcile tabs with bookmarks:', err);
       }
     },
-    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
+    [persistSession, refreshWindowTabs]
   );
 
   /**
@@ -797,17 +830,28 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       }
 
       const nextBindings: Record<string, TabBinding> = {
-        ...bindingsByBookmarkId,
-        ...storedBindings
+        ...storedBindings,
+        ...bindingsByBookmarkIdRef.current
       };
       const nextByTab: Record<number, string> = {
-        ...bookmarkIdByTabId,
-        ...storedByTab
+        ...storedByTab,
+        ...bookmarkIdByTabIdRef.current
       };
+
+      // Clean out any bookmarks that were previously unpinned/deleted
+      for (const bId of unpinnedBookmarkIdsRef.current) {
+        delete nextBindings[bId];
+      }
+      for (const [tIdStr, bId] of Object.entries(nextByTab)) {
+        if (unpinnedBookmarkIdsRef.current.has(bId)) {
+          delete nextByTab[Number(tIdStr)];
+        }
+      }
 
       let curIndex = targetIndex;
       for (const tab of tabs) {
         if (typeof tab.id !== 'number' || !tab.url) continue;
+        unpinnedTabIdsRef.current.delete(tab.id);
 
         const existingBookmarkId = nextByTab[tab.id];
         if (existingBookmarkId) {
@@ -850,7 +894,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       await persistSession(nextBindings, nextByTab);
       await refreshWindowTabs();
     },
-    [bindingsByBookmarkId, bookmarkIdByTabId, persistSession, refreshWindowTabs]
+    [persistSession, refreshWindowTabs]
   );
 
   /**
@@ -861,6 +905,57 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       await pinMultipleTabs([tab], targetFolderId, targetIndex);
     },
     [pinMultipleTabs]
+  );
+
+  /**
+   * Unpin a bookmark so its open tab (or a newly opened tab if not currently open)
+   * moves cleanly into Today's Tabs for the active space and is never auto-rebound.
+   */
+  const unpinBookmarkTab = useCallback(
+    async (bookmark: chrome.bookmarks.BookmarkTreeNode, spaceId?: string) => {
+      const targetSpace = spaceId || currentActiveSpaceIdRef.current || 'home';
+      unpinnedBookmarkIdsRef.current.add(bookmark.id);
+
+      const nextBindings = { ...bindingsByBookmarkIdRef.current };
+      const nextByTab = { ...bookmarkIdByTabIdRef.current };
+      const binding = nextBindings[bookmark.id];
+      const targetTabId = binding?.tabId ?? null;
+
+      delete nextBindings[bookmark.id];
+      if (typeof targetTabId === 'number') {
+        delete nextByTab[targetTabId];
+      }
+      for (const [tIdStr, bId] of Object.entries(nextByTab)) {
+        if (bId === bookmark.id) {
+          delete nextByTab[Number(tIdStr)];
+        }
+      }
+
+      await persistSession(nextBindings, nextByTab);
+
+      if (typeof targetTabId === 'number') {
+        unpinnedTabIdsRef.current.add(targetTabId);
+        setTabSpaceByTabId((prev) => {
+          const next = { ...prev, [targetTabId]: targetSpace };
+          chrome.storage.local.set({ tabSpaceByTabId: next });
+          return next;
+        });
+      } else if (bookmark.url) {
+        const newTab = await chrome.tabs.create({ url: bookmark.url, active: true });
+        if (typeof newTab.id === 'number') {
+          unpinnedTabIdsRef.current.add(newTab.id);
+          setActiveTabId(newTab.id);
+          setTabSpaceByTabId((prev) => {
+            const next = { ...prev, [newTab.id!]: targetSpace };
+            chrome.storage.local.set({ tabSpaceByTabId: next });
+            return next;
+          });
+        }
+      }
+
+      await refreshWindowTabs();
+    },
+    [persistSession, refreshWindowTabs]
   );
 
   /**
@@ -1112,6 +1207,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       if (unboundMatch && typeof unboundMatch.id === 'number') {
         const tabId = unboundMatch.id;
+        unpinnedTabIdsRef.current.delete(tabId);
+        unpinnedBookmarkIdsRef.current.delete(bookmark.id);
         const newBinding: TabBinding = {
           bookmarkId: bookmark.id,
           tabId,
@@ -1140,6 +1237,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       if (typeof createdTab.id === 'number') {
         const tabId = createdTab.id;
+        unpinnedTabIdsRef.current.delete(tabId);
+        unpinnedBookmarkIdsRef.current.delete(bookmark.id);
         const newBinding: TabBinding = {
           bookmarkId: bookmark.id,
           tabId,
@@ -1340,6 +1439,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     closeAllWindowTabs,
     pinTab,
     pinMultipleTabs,
+    unpinBookmarkTab,
     duplicateTab,
     reloadTab,
     reloadActiveTab,

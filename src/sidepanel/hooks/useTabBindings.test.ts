@@ -591,4 +591,76 @@ describe('useTabBindings hook', () => {
     expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([301, 302]);
     expect(result.current.unpinnedTabs.find((t) => t.id === 302)?.title).toBe('music - YouTube');
   });
+
+  it('unpins an open bound tab via unpinBookmarkTab so it immediately appears in unpinnedTabs and is not re-bound by reconcileTabsWithBookmarks', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 401,
+        windowId: 10,
+        url: 'https://linear.app/issue/123',
+        title: 'Linear Issue 123',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-linear': {
+          bookmarkId: 'bm-linear',
+          tabId: 401,
+          windowId: 10,
+          originalUrl: 'https://linear.app/issue/123',
+          currentUrl: 'https://linear.app/issue/123',
+          currentTitle: 'Linear Issue 123',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 401: 'bm-linear' }
+    });
+
+    const { result } = renderHook(() => useTabBindings('space-work'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Initially bound to bm-linear, so unpinnedTabs is empty
+    expect(result.current.unpinnedTabs).toHaveLength(0);
+
+    // Unpin the bookmark in space-work
+    await act(async () => {
+      await result.current.unpinBookmarkTab(
+        {
+          id: 'bm-linear',
+          title: 'Linear Issue 123',
+          url: 'https://linear.app/issue/123'
+        },
+        'space-work'
+      );
+    });
+
+    // Tab 401 is now unbound and assigned to space-work
+    expect(result.current.bindingsByBookmarkId['bm-linear']).toBeUndefined();
+    expect(result.current.bookmarkIdByTabId[401]).toBeUndefined();
+    expect(result.current.tabSpaceByTabId[401]).toBe('space-work');
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([401]);
+
+    // Even if reconcileTabsWithBookmarks runs while bookmark tree still has bm-linear, it must NOT re-bind tab 401
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks([
+        {
+          id: 'folder-work',
+          title: 'Work',
+          children: [
+            {
+              id: 'bm-linear',
+              title: 'Linear Issue 123',
+              url: 'https://linear.app/issue/123'
+            }
+          ]
+        }
+      ]);
+    });
+
+    expect(result.current.bookmarkIdByTabId[401]).toBeUndefined();
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([401]);
+  });
 });
