@@ -1142,14 +1142,39 @@ export function useBookmarks() {
   };
 
   // Remove bookmark or folder
-  const removeBookmarkOrFolder = async (id: string) => {
-    try {
-      await chrome.bookmarks.removeTree(id);
-    } catch {
-      await chrome.bookmarks.remove(id);
-    }
-    loadBookmarks();
-  };
+  const removeBookmarkOrFolder = useCallback(
+    async (id: string) => {
+      const pruneNode = (
+        node: chrome.bookmarks.BookmarkTreeNode | null
+      ): chrome.bookmarks.BookmarkTreeNode | null => {
+        if (!node) return null;
+        if (node.id === id) return null;
+        if (!node.children) return node;
+        return {
+          ...node,
+          children: node.children
+            .filter((child) => child.id !== id)
+            .map((child) => pruneNode(child)!)
+            .filter(Boolean)
+        };
+      };
+
+      setWorkspaceNode((prev) => pruneNode(prev));
+      setQuickAccessNode((prev) => pruneNode(prev));
+
+      try {
+        await chrome.bookmarks.removeTree(id);
+      } catch {
+        try {
+          await chrome.bookmarks.remove(id);
+        } catch {
+          // ignore if already removed
+        }
+      }
+      await loadBookmarks();
+    },
+    [loadBookmarks]
+  );
 
   // Move a bookmark or folder to another Space's root folder
   const moveNodeToSpace = useCallback(

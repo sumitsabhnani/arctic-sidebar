@@ -65,6 +65,7 @@ export const App: React.FC = () => {
     closeAllWindowTabs,
     pinTab,
     pinMultipleTabs,
+    unpinBookmarkTab,
     duplicateTab,
     reloadTab,
     reloadActiveTab,
@@ -1085,25 +1086,13 @@ export const App: React.FC = () => {
   const handleUnpinBookmarkToTodayTabs = useCallback(
     async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
       try {
-        const binding = bindingsByBookmarkId[bookmark.id];
-        if (binding) {
-          const updatedBindings = { ...bindingsByBookmarkId };
-          delete updatedBindings[bookmark.id];
-          const updatedTabIdMap = { ...bookmarkIdByTabId };
-          delete updatedTabIdMap[binding.tabId];
-          await chrome.storage.session.set({
-            bindingsByBookmarkId: updatedBindings,
-            bookmarkIdByTabId: updatedTabIdMap
-          });
-        } else if (bookmark.url) {
-          await chrome.tabs.create({ url: bookmark.url, active: true });
-        }
+        await unpinBookmarkTab(bookmark, activeSpaceId);
         await removeBookmarkOrFolder(bookmark.id);
       } catch (err) {
         console.warn('[Arctic] Could not unpin bookmark:', err);
       }
     },
-    [bindingsByBookmarkId, bookmarkIdByTabId, removeBookmarkOrFolder]
+    [unpinBookmarkTab, activeSpaceId, removeBookmarkOrFolder]
   );
 
   /**
