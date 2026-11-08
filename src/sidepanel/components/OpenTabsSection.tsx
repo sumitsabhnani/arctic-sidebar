@@ -7,6 +7,7 @@ import type { ContextMenuItem } from './ContextMenu';
 
 interface OpenTabsSectionProps {
   unpinnedTabs: chrome.tabs.Tab[];
+  hasOpenActiveSpaceTabs?: boolean;
   activeTabId: number | null;
   activeSpaceId?: string;
   isInitialTabsLoaded?: boolean;
@@ -49,6 +50,7 @@ interface OpenTabsSectionProps {
 
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   unpinnedTabs,
+  hasOpenActiveSpaceTabs = false,
   activeTabId,
   activeSpaceId,
   isInitialTabsLoaded = true,
@@ -223,11 +225,13 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
     };
   }, [isClearMenuOpen]);
 
+  const hasClearableTabs = unpinnedTabs.length > 0 || hasOpenActiveSpaceTabs;
+
   useEffect(() => {
-    if (unpinnedTabs.length === 0) {
+    if (!hasClearableTabs) {
       setIsClearMenuOpen(false);
     }
-  }, [unpinnedTabs.length]);
+  }, [hasClearableTabs]);
 
   const isControlled = typeof controlledOnStartRename === 'function';
   const effectiveEditingTabId = isControlled ? controlledEditingTabId : localEditingTabId;
@@ -358,7 +362,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
 
         {/* Action Buttons: Clear with Chevron & New Tab */}
         <div className="flex items-center space-x-1">
-          {unpinnedTabs.length > 0 && (
+          {hasClearableTabs && (
             <div
               ref={clearDropdownRef}
               className={`relative flex items-center rounded-md transition-colors ${
@@ -371,7 +375,12 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                 type="button"
                 title="Close temporary Today's tabs"
                 aria-label="Close temporary Today's tabs"
-                onClick={onCloseAll}
+                onClick={() => {
+                  onCloseAll();
+                  if (unpinnedTabs.length === 0 && onCloseAllWindowTabs) {
+                    setIsClearMenuOpen((prev) => !prev);
+                  }
+                }}
                 onContextMenu={(e) => {
                   if (onCloseAllWindowTabs) {
                     e.preventDefault();
