@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useBookmarks } from './useBookmarks';
 import { mockChrome } from '../../test/setup';
@@ -662,5 +662,62 @@ describe('useBookmarks hook', () => {
 
     expect(targetFolder?.children?.map((c) => c.id)).toContain('b1');
     expect(targetFolder?.children?.map((c) => c.id)).toContain('b2');
+  });
+
+  it('preserves Scratchpad Backup bookmark under Arctic and ignores its bookmark change events', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: 'bm-scratch',
+                    title: 'Scratchpad Backup',
+                    url: 'https://arctic.local/scratchpad#initial%20note'
+                  },
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: '11', title: 'Quick Access', children: [] },
+                      { id: 'b1', title: 'Example', url: 'https://example.com' }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Scratchpad Backup bookmark should remain untouched under Arctic (not moved into Home)
+    const treeBefore = mockChrome.__getBookmarksTree();
+    const arcticBefore = treeBefore[0].children?.find((c) => c.id === '2')?.children?.find((c) => c.id === '10');
+    expect(arcticBefore?.children?.some((c) => c.id === 'bm-scratch')).toBe(true);
+
+    vi.mocked(chrome.bookmarks.getTree).mockClear();
+
+    // Updating the Scratchpad Backup bookmark URL should NOT trigger loadBookmarks (getTree)
+    await act(async () => {
+      await chrome.bookmarks.update('bm-scratch', {
+        url: 'https://arctic.local/scratchpad#updated%20note'
+      });
+    });
+
+    expect(chrome.bookmarks.getTree).not.toHaveBeenCalled();
   });
 });

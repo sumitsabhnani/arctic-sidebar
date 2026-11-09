@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ARCTIC_GLOBAL_SCRATCHPAD_URL,
   encodeNoteHash,
-  extractNoteContentFromUrl
+  extractNoteContentFromUrl,
+  isScratchpadUrl
 } from '../utils/url';
 
 export const CHUNK_SIZE = 7000;
@@ -12,6 +13,7 @@ export const MAX_CHARS = CHUNK_SIZE * MAX_CHUNKS; // 28,000 chars
 export const SCRATCHPAD_META_KEY = 'scratchpad_meta';
 export const SCRATCHPAD_LOCAL_DRAFT_KEY = 'scratchpad_local_draft';
 export const SCRATCHPAD_CHUNK_PREFIX = 'scratchpad_chunk_';
+export const SCRATCHPAD_BACKUP_TITLE = 'Scratchpad Backup';
 
 export interface ScratchpadMeta {
   updatedAt: number;
@@ -55,6 +57,342 @@ export function assembleChunks(items: Record<string, unknown>, chunkCount: numbe
   return assembled;
 }
 
+function isScratchpadBackupNode(node: chrome.bookmarks.BookmarkTreeNode): boolean {
+  if (!node.url) return false;
+  return (
+    node.url.includes('arctic.local/scratchpad') ||
+    isScratchpadUrl(node.url) ||
+    node.title === SCRATCHPAD_BACKUP_TITLE
+  );
+}
+
+/**
+ * Locate all scratchpad backup bookmarks using both direct bookmark tree inspection
+ * (under Other Bookmarks / Arctic and root folders) and chrome.bookmarks.search fallbacks.
+ */
+export async function findScratchpadBackupBookmarks(): Promise<{
+  bookmarks: chrome.bookmarks.BookmarkTreeNode[];
+  arcticFolderId: string | null;
+  otherFolderId: string | null;
+}> {
+  const seenIds = new Set<string>();
+  const bookmarks: chrome.bookmarks.BookmarkTreeNode[] = [];
+  let arcticFolderId: string | null = null;
+  let otherFolderId: string | null = null;
+
+  const addMatch = (node: chrome.bookmarks.BookmarkTreeNode) => {
+    if (node && node.id && !seenIds.has(node.id) && isScratchpadBackupNode(node)) {
+      seenIds.add(node.id);
+      bookmarks.push(node);
+    }
+  };
+
+  // 1. Direct tree inspection (immune to chrome.bookmarks.search URL tokenizer / truncation quirks)
+  if (typeof chrome !== 'undefined' && chrome.bookmarks?.getChildren) {
+    try {
+      const roots = await chrome.bookmarks.getChildren('0');
+      const otherNode =
+        roots.find((r) => r.id === '2' || r.title.toLowerCase().includes('other')) ||
+        roots[1] ||
+        roots[0];
+
+      if (otherNode) {
+        otherFolderId = otherNode.id;
+      }
+
+      // Inspect Other Bookmarks first, then any remaining root folders
+      const orderedRoots = otherNode
+        ? [otherNode, ...roots.filter((r) => r.id !== otherNode.id)]
+        : roots;
+
+      for (const root of orderedRoots) {
+        try {
+          const children = await chrome.bookmarks.getChildren(root.id);
+          const legacyPrefix = 'Ar' + 'c Sidebar';
+          const arcticFolders = children.filter(
+            (c) =>
+              !c.url &&
+              (c.title === 'Arctic' || c.title === 'Arctic Sidebar' || c.title === legacyPrefix)
+          );
+
+          for (const af of arcticFolders) {
+            if (!arcticFolderId) {
+              arcticFolderId = af.id;
+            }
+            try {
+              const arcticChildren = await chrome.bookmarks.getChildren(af.id);
+              for (const ac of arcticChildren) {
+                addMatch(ac);
+              }
+            } catch {
+              // ignore
+            }
+          }
+
+          for (const child of children) {
+            addMatch(child);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. Search API fallback (covers custom folder locations and unit test mocks)
+  if (typeof chrome !== 'undefined' && chrome.bookmarks?.search) {
+    try {
+      const urlMatches = await chrome.bookmarks.search('arctic.local/scratchpad');
+      if (Array.isArray(urlMatches)) {
+        for (const m of urlMatches) {
+          addMatch(m);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (bookmarks.length === 0) {
+      try {
+        const titleMatches = await chrome.bookmarks.search(SCRATCHPAD_BACKUP_TITLE);
+        if (Array.isArray(titleMatches)) {
+          for (const m of titleMatches) {
+            addMatch(m);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  return { bookmarks, arcticFolderId, otherFolderId };
+}
+
+let bookmarkMirrorLock: Promise<void> = Promise.resolve();
+
+/**
+ * Mirror scratchpad content to the backup bookmark in Other Bookmarks / Arctic.
+ * Serialized via bookmarkMirrorLock and deduplicates any redundant backup bookmarks.
+ */
+export function mirrorScratchpadToBookmark(contentToSave: string): Promise<void> {
+  const bounded = contentToSave.slice(0, MAX_CHARS);
+  bookmarkMirrorLock = bookmarkMirrorLock
+    .catch(() => {})
+    .then(async () => {
+      if (typeof chrome === 'undefined' || !chrome.bookmarks) return;
+
+      try {
+        const { bookmarks, arcticFolderId, otherFolderId } = await findScratchpadBackupBookmarks();
+        const newUrl = bounded
+          ? `${ARCTIC_GLOBAL_SCRATCHPAD_URL}#${encodeNoteHash(bounded)}`
+          : ARCTIC_GLOBAL_SCRATCHPAD_URL;
+
+        const createBackupBookmark = async () => {
+          if (!bounded || !chrome.bookmarks.create) return;
+          let parentId = arcticFolderId || otherFolderId || '2';
+          if (!arcticFolderId && otherFolderId) {
+            try {
+              const createdArctic = await chrome.bookmarks.create({
+                parentId: otherFolderId,
+                title: 'Arctic'
+              });
+              parentId = createdArctic.id;
+            } catch {
+              parentId = otherFolderId;
+            }
+          }
+
+          await chrome.bookmarks.create({
+            parentId,
+            title: SCRATCHPAD_BACKUP_TITLE,
+            url: newUrl
+          });
+        };
+
+        if (bookmarks.length > 0) {
+          // Prefer a bookmark that already has content or is inside the Arctic folder
+          const primary =
+            bookmarks.find((b) => b.parentId === arcticFolderId && extractNoteContentFromUrl(b.url)) ||
+            bookmarks.find((b) => Boolean(extractNoteContentFromUrl(b.url))) ||
+            bookmarks.find((b) => b.parentId === arcticFolderId) ||
+            bookmarks[0];
+
+          if (primary.url !== newUrl && chrome.bookmarks.update) {
+            try {
+              await chrome.bookmarks.update(primary.id, { url: newUrl });
+            } catch {
+              await createBackupBookmark();
+            }
+          }
+
+          // Clean up any duplicate Scratchpad Backup bookmarks so stale/empty nodes never shadow the primary
+          if (bookmarks.length > 1 && chrome.bookmarks.remove) {
+            for (const dup of bookmarks) {
+              if (dup.id !== primary.id) {
+                try {
+                  await chrome.bookmarks.remove(dup.id);
+                } catch {
+                  // ignore
+                }
+              }
+            }
+          }
+        } else {
+          await createBackupBookmark();
+        }
+      } catch (bmErr) {
+        console.warn('[Arctic Scratchpad] Failed to mirror note to bookmark backup:', bmErr);
+      }
+    });
+
+  return bookmarkMirrorLock;
+}
+
+/**
+ * Restore scratchpad note content from backup bookmark if present.
+ * Prefers bookmarks with non-empty hash content in case multiple backup nodes exist.
+ */
+export async function restoreScratchpadFromBookmark(): Promise<string> {
+  try {
+    const { bookmarks } = await findScratchpadBackupBookmarks();
+    for (const bm of bookmarks) {
+      if (bm.url) {
+        const restored = extractNoteContentFromUrl(bm.url);
+        if (restored) {
+          return restored.slice(0, MAX_CHARS);
+        }
+      }
+    }
+  } catch (recoveryErr) {
+    console.warn('[Arctic Scratchpad] Error restoring from backup bookmark:', recoveryErr);
+  }
+  return '';
+}
+
+/**
+ * Background / startup reconciliation helper:
+ * - If storage (local or sync) has scratchpad text, ensures both storage areas and the backup bookmark are synced.
+ * - If storage is empty (e.g. fresh reinstall), restores from the backup bookmark into local and sync storage.
+ */
+export async function reconcileScratchpadStorageAndBookmark(): Promise<string> {
+  let localDraft: ScratchpadLocalDraft | null = null;
+  let syncText = '';
+  let syncTime = 0;
+
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      const localData = await chrome.storage.local.get(SCRATCHPAD_LOCAL_DRAFT_KEY);
+      if (localData[SCRATCHPAD_LOCAL_DRAFT_KEY]) {
+        localDraft = localData[SCRATCHPAD_LOCAL_DRAFT_KEY] as ScratchpadLocalDraft;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
+      const allChunkKeys = [
+        SCRATCHPAD_META_KEY,
+        `${SCRATCHPAD_CHUNK_PREFIX}0`,
+        `${SCRATCHPAD_CHUNK_PREFIX}1`,
+        `${SCRATCHPAD_CHUNK_PREFIX}2`,
+        `${SCRATCHPAD_CHUNK_PREFIX}3`
+      ];
+      const syncData = await chrome.storage.sync.get(allChunkKeys);
+      const meta = syncData[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
+      if (meta && typeof meta.updatedAt === 'number') {
+        syncTime = meta.updatedAt;
+        syncText = assembleChunks(syncData, meta.chunkCount || 0);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const localTime = localDraft?.updatedAt || 0;
+  const localText = typeof localDraft?.text === 'string' ? localDraft.text : '';
+
+  const resolvedText =
+    syncTime >= localTime ? syncText || localText : localText || syncText;
+  const resolvedTime = Math.max(syncTime, localTime) || Date.now();
+
+  if (resolvedText) {
+    // Ensure local draft, sync chunks, and bookmark backup all have the existing note
+    try {
+      if (chrome.storage?.local && (!localDraft || localDraft.text !== resolvedText)) {
+        await chrome.storage.local.set({
+          [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
+            text: resolvedText,
+            updatedAt: resolvedTime
+          } as ScratchpadLocalDraft
+        });
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      if (chrome.storage?.sync && syncText !== resolvedText) {
+        const { chunks, chunkCount } = splitIntoChunks(resolvedText);
+        const payload: Record<string, unknown> = {
+          [SCRATCHPAD_META_KEY]: { updatedAt: resolvedTime, chunkCount } as ScratchpadMeta
+        };
+        for (let i = 0; i < chunkCount; i++) {
+          payload[`${SCRATCHPAD_CHUNK_PREFIX}${i}`] = chunks[i];
+        }
+        await chrome.storage.sync.set(payload);
+      }
+    } catch {
+      // ignore
+    }
+
+    await mirrorScratchpadToBookmark(resolvedText);
+    return resolvedText;
+  }
+
+  // Storage has no text: check bookmark backup (reinstall scenario)
+  const restored = await restoreScratchpadFromBookmark();
+  if (restored) {
+    const now = Date.now();
+    try {
+      if (chrome.storage?.local) {
+        await chrome.storage.local.set({
+          [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
+            text: restored,
+            updatedAt: now
+          } as ScratchpadLocalDraft
+        });
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      if (chrome.storage?.sync) {
+        const { chunks, chunkCount } = splitIntoChunks(restored);
+        const payload: Record<string, unknown> = {
+          [SCRATCHPAD_META_KEY]: { updatedAt: now, chunkCount } as ScratchpadMeta
+        };
+        for (let i = 0; i < chunkCount; i++) {
+          payload[`${SCRATCHPAD_CHUNK_PREFIX}${i}`] = chunks[i];
+        }
+        await chrome.storage.sync.set(payload);
+      }
+    } catch {
+      // ignore
+    }
+
+    await mirrorScratchpadToBookmark(restored);
+    return restored;
+  }
+
+  return '';
+}
+
 export function useScratchpad() {
   const [text, setTextState] = useState<string>('');
   const [syncStatus, setSyncStatus] = useState<ScratchpadSyncStatus>('Synced');
@@ -68,7 +406,7 @@ export function useScratchpad() {
   currentTextRef.current = text;
 
   /**
-   * Save text to chrome.storage.sync across chunks with local backup
+   * Save text to chrome.storage.sync across chunks with local & bookmark backup
    */
   const flushToSync = useCallback(async (contentToSave: string, timestamp = Date.now()) => {
     const { chunks, chunkCount } = splitIntoChunks(contentToSave);
@@ -110,47 +448,13 @@ export function useScratchpad() {
       } else {
         setSyncStatus('Offline - Saved locally');
       }
-
-      // Mirror content into bookmark hash to preserve notes across extension reinstalls
-      try {
-        if (chrome.bookmarks && chrome.bookmarks.search) {
-          const matches = await chrome.bookmarks.search('arctic.local/scratchpad');
-          const existing = matches.find((m) => m.url && m.url.includes('arctic.local/scratchpad'));
-          const newUrl = contentToSave
-            ? `${ARCTIC_GLOBAL_SCRATCHPAD_URL}#${encodeNoteHash(contentToSave)}`
-            : ARCTIC_GLOBAL_SCRATCHPAD_URL;
-
-          if (existing) {
-            if (existing.url !== newUrl) {
-              await chrome.bookmarks.update(existing.id, { url: newUrl });
-            }
-          } else if (contentToSave) {
-            let parentId = '2';
-            try {
-              const roots = await chrome.bookmarks.getChildren('0');
-              const other = roots.find((r) => r.id === '2' || r.title.toLowerCase().includes('other')) || roots[0];
-              if (other) {
-                const otherChildren = await chrome.bookmarks.getChildren(other.id);
-                const arcticFolder = otherChildren.find((c) => !c.url && c.title === 'Arctic');
-                parentId = arcticFolder ? arcticFolder.id : other.id;
-              }
-            } catch {
-              // fallback to default parentId
-            }
-            await chrome.bookmarks.create({
-              parentId,
-              title: 'Scratchpad Backup',
-              url: newUrl
-            });
-          }
-        }
-      } catch (bmErr) {
-        console.warn('[Arctic Scratchpad] Failed to mirror note to bookmark backup:', bmErr);
-      }
     } catch (err) {
       console.warn('[Arctic Scratchpad] Failed to save to storage.sync, keeping local backup:', err);
       setSyncStatus('Offline - Saved locally');
     }
+
+    // Always mirror content into bookmark hash even if storage.sync failed or quota was exceeded
+    await mirrorScratchpadToBookmark(contentToSave);
   }, []);
 
   /**
@@ -177,6 +481,9 @@ export function useScratchpad() {
         console.warn('[Arctic Scratchpad] Error saving local draft:', err);
       }
     }
+
+    // Immediately mirror to bookmark backup so closing sidepanel or reinstalling before 1000ms never loses notes
+    mirrorScratchpadToBookmark(bounded);
 
     // Debounce sync write by 1000ms
     if (debounceTimerRef.current) {
@@ -230,7 +537,7 @@ export function useScratchpad() {
   }, []);
 
   /**
-   * Initial load: reconcile local draft and sync storage
+   * Initial load: reconcile local draft, sync storage, and bookmark backup
    */
   useEffect(() => {
     let isMounted = true;
@@ -255,6 +562,8 @@ export function useScratchpad() {
       }
 
       // 2. Fetch sync storage chunks
+      let meta: ScratchpadMeta | undefined;
+      let syncAssembled = '';
       try {
         if (chrome.storage && chrome.storage.sync) {
           const allChunkKeys = [
@@ -265,73 +574,61 @@ export function useScratchpad() {
             `${SCRATCHPAD_CHUNK_PREFIX}3`
           ];
           const syncData = await chrome.storage.sync.get(allChunkKeys);
-          const meta = syncData[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
-
+          meta = syncData[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
           if (meta && typeof meta.updatedAt === 'number') {
-            const syncTime = meta.updatedAt;
-            const localTime = localDraft?.updatedAt || 0;
-
-            if (syncTime >= localTime) {
-              const assembled = assembleChunks(syncData, meta.chunkCount || 0);
-              if (isMounted) {
-                setTextState(assembled);
-                lastSavedAtRef.current = syncTime;
-                lastChunkCountRef.current = meta.chunkCount || 0;
-                setSyncStatus('Synced');
-                // Synchronize local draft
-                if (chrome.storage && chrome.storage.local) {
-                  chrome.storage.local.set({
-                    [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-                      text: assembled,
-                      updatedAt: syncTime
-                    } as ScratchpadLocalDraft
-                  });
-                }
-              }
-            } else if (localDraft && localDraft.text) {
-              // Local draft is newer than sync (sidebar closed before debounce finished)
-              if (isMounted) {
-                flushToSync(localDraft.text, localDraft.updatedAt);
-              }
-            }
-          } else if (localDraft && localDraft.text) {
-            // No sync data yet, flush local draft to sync
-            if (isMounted) {
-              flushToSync(localDraft.text, localDraft.updatedAt);
-            }
-          } else {
-            // 3. Fallback: Storage is empty (reinstall scenario) - restore from bookmark hash if present
-            try {
-              if (chrome.bookmarks && chrome.bookmarks.search) {
-                const matches = await chrome.bookmarks.search('arctic.local/scratchpad');
-                const target = matches.find((m) => m.url && m.url.includes('arctic.local/scratchpad'));
-                if (target?.url) {
-                  const restored = extractNoteContentFromUrl(target.url);
-                  if (restored && isMounted) {
-                    setTextState(restored);
-                    lastSavedAtRef.current = Date.now();
-                    setSyncStatus('Synced');
-                    if (chrome.storage && chrome.storage.local) {
-                      chrome.storage.local.set({
-                        [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-                          text: restored,
-                          updatedAt: Date.now()
-                        } as ScratchpadLocalDraft
-                      });
-                    }
-                    flushToSync(restored, Date.now());
-                  }
-                }
-              }
-            } catch (recoveryErr) {
-              console.warn('[Arctic Scratchpad] Error restoring from backup bookmark:', recoveryErr);
-            }
+            syncAssembled = assembleChunks(syncData, meta.chunkCount || 0);
           }
         }
       } catch (err) {
         console.warn('[Arctic Scratchpad] Error loading from storage.sync:', err);
         if (isMounted) {
           setSyncStatus('Offline - Saved locally');
+        }
+      }
+
+      const syncTime = meta && typeof meta.updatedAt === 'number' ? meta.updatedAt : 0;
+      const localTime = localDraft?.updatedAt || 0;
+      const localText = typeof localDraft?.text === 'string' ? localDraft.text : '';
+
+      if (meta && typeof meta.updatedAt === 'number' && syncTime >= localTime && syncAssembled) {
+        if (isMounted) {
+          setTextState(syncAssembled);
+          lastSavedAtRef.current = syncTime;
+          lastChunkCountRef.current = meta.chunkCount || 0;
+          setSyncStatus('Synced');
+          if (chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({
+              [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
+                text: syncAssembled,
+                updatedAt: syncTime
+              } as ScratchpadLocalDraft
+            });
+          }
+        }
+        // Ensure existing synced notes are mirrored into the backup bookmark for reinstall retention
+        await mirrorScratchpadToBookmark(syncAssembled);
+      } else if (localText) {
+        // Local draft is newer than sync (or sync has no text yet): flush local draft to sync & bookmark
+        if (isMounted) {
+          await flushToSync(localText, localDraft?.updatedAt || Date.now());
+        }
+      } else {
+        // 3. Fallback: Both local and sync storage have no text (reinstall scenario) - restore from bookmark hash if present
+        const restored = await restoreScratchpadFromBookmark();
+        if (restored && isMounted) {
+          const now = Date.now();
+          setTextState(restored);
+          lastSavedAtRef.current = now;
+          setSyncStatus('Synced');
+          if (chrome.storage && chrome.storage.local) {
+            chrome.storage.local.set({
+              [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
+                text: restored,
+                updatedAt: now
+              } as ScratchpadLocalDraft
+            });
+          }
+          await flushToSync(restored, now);
         }
       }
     }
@@ -396,6 +693,8 @@ export function useScratchpad() {
               } as ScratchpadLocalDraft
             });
           }
+
+          await mirrorScratchpadToBookmark(assembled);
         }
       } catch (err) {
         console.warn('[Arctic Scratchpad] Error handling cross-device sync change:', err);

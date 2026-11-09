@@ -218,4 +218,63 @@ describe('Sidepanel App Integration', () => {
     expect(screen.getByTitle("Close temporary Today's tabs")).toBeInTheDocument();
     expect(screen.getByTitle('Clear options')).toBeInTheDocument();
   });
+
+  it('filters out Scratchpad Backup bookmarks from Quick Access and workspace bookmark tree', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [
+                          { id: '111', title: 'Gmail', url: 'https://mail.google.com' },
+                          {
+                            id: '112',
+                            title: 'Scratchpad Backup',
+                            url: 'https://arctic.local/scratchpad#secret'
+                          }
+                        ]
+                      },
+                      {
+                        id: '131',
+                        title: 'Example Bookmark',
+                        url: 'https://example.com'
+                      },
+                      {
+                        id: '132',
+                        title: 'Scratchpad Backup',
+                        url: 'https://arctic.local/scratchpad#secret'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+
+    render(<App />);
+
+    expect(await screen.findByText('Gmail')).toBeInTheDocument();
+    expect(await screen.findByText('Example Bookmark')).toBeInTheDocument();
+    expect(screen.queryByText('Scratchpad Backup')).not.toBeInTheDocument();
+  });
 });

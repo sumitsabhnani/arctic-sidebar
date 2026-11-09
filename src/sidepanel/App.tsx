@@ -15,6 +15,7 @@ import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
 import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
+import { isScratchpadUrl } from './utils/url';
 import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -477,12 +478,18 @@ export const App: React.FC = () => {
     (workspaceNode?.title?.toLowerCase() === 'workspace' ? 'Home' : workspaceNode?.title) ||
     'Home';
 
-  const quickAccessBookmarks = quickAccessNode?.children || [];
-  // Filter out the Quick Access subfolder from the Active Space tree so it only renders in the top Quick Access grid
+  const quickAccessBookmarks = useMemo(() => {
+    return (quickAccessNode?.children || []).filter(
+      (child) => !isScratchpadUrl(child.url) && child.title !== 'Scratchpad Backup'
+    );
+  }, [quickAccessNode?.children]);
+  // Filter out the Quick Access subfolder and internal Scratchpad Backup node from the Active Space tree
   const workspaceBookmarks = useMemo(() => {
     return (workspaceNode?.children || []).filter(
       (child) =>
         child.id !== activeFolderIds.quickAccessId &&
+        !isScratchpadUrl(child.url) &&
+        child.title !== 'Scratchpad Backup' &&
         !(!child.url && child.title.trim().toLowerCase() === 'quick access')
     );
   }, [workspaceNode?.children, activeFolderIds.quickAccessId]);

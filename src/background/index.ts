@@ -6,9 +6,10 @@ import {
   updateBadgeCount,
   REMINDERS_STORAGE_KEY
 } from '../sidepanel/utils/reminderStorage';
+import { reconcileScratchpadStorageAndBookmark } from '../sidepanel/hooks/useScratchpad';
 
 // Configure side panel behavior on installation & startup
-chrome.runtime.onInstalled.addListener(async () => {
+export async function handleInstalled(): Promise<void> {
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   }
@@ -24,18 +25,27 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
   }
 
+  // Reconcile scratchpad backup bookmark & storage on install / update
+  await reconcileScratchpadStorageAndBookmark();
+
   // Reconcile and schedule alarms on installation
   await reconcileReminders();
-});
+}
 
-chrome.runtime.onStartup.addListener(async () => {
+export async function handleStartup(): Promise<void> {
   if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   }
 
+  // Reconcile scratchpad backup bookmark & storage on startup
+  await reconcileScratchpadStorageAndBookmark();
+
   // Reconcile and schedule alarms on startup
   await reconcileReminders();
-});
+}
+
+chrome.runtime.onInstalled.addListener(handleInstalled);
+chrome.runtime.onStartup.addListener(handleStartup);
 
 /**
  * Helper to fetch session state safely

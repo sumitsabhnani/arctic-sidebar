@@ -5,6 +5,7 @@ import {
   type LocalSettings,
   type SpaceItem
 } from '../../types';
+import { isScratchpadUrl } from '../utils/url';
 
 function inferSpaceIcon(name: string): string {
   const lower = name.trim().toLowerCase();
@@ -1231,8 +1232,16 @@ export function useBookmarks() {
   useEffect(() => {
     loadBookmarks();
 
-    const handleBookmarkChange = () => {
+    const handleBookmarkChange = (_id?: string, info?: unknown) => {
       if (isInternalMutationRef.current) return;
+      const obj = info as
+        | { url?: string; title?: string; node?: chrome.bookmarks.BookmarkTreeNode }
+        | undefined;
+      const candidateUrl = obj?.url || obj?.node?.url;
+      const candidateTitle = obj?.title || obj?.node?.title;
+      if (isScratchpadUrl(candidateUrl) || candidateTitle === 'Scratchpad Backup') {
+        return;
+      }
       if (bookmarkDebounceTimerRef.current) {
         clearTimeout(bookmarkDebounceTimerRef.current);
       }

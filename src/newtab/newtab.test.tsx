@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { isLikelyUrl, formatNavigationUrl, getArcticBookmarks, App } from './App';
+import { mockChrome } from '../test/setup';
 import {
   findMatchingSiteEngine,
   getGhostAutocomplete,
@@ -887,6 +888,59 @@ describe('newtab url detection and formatting', () => {
 
       expect(await screen.findByText('quantum computing')).toBeInTheDocument();
       expect(screen.getByText('quantum computer')).toBeInTheDocument();
+    });
+
+    it('excludes Scratchpad Backup bookmarks from getArcticBookmarks and Command Bar search suggestions', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: 'bm-scratch',
+                      title: 'Scratchpad Backup',
+                      url: 'https://arctic.local/scratchpad#secret_scratchpad_keyword'
+                    },
+                    {
+                      id: '12',
+                      title: 'Home',
+                      children: [
+                        {
+                          id: 'b1',
+                          title: 'Secret Project Docs',
+                          url: 'https://docs.example.com/secret'
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      const arcticItems = await getArcticBookmarks();
+      expect(arcticItems.some((item) => item.title === 'Scratchpad Backup')).toBe(false);
+      expect(arcticItems.some((item) => item.title === 'Secret Project Docs')).toBe(true);
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'secret' } });
+      });
+
+      expect(await screen.findByText('Secret Project Docs')).toBeInTheDocument();
+      expect(screen.queryByText('Scratchpad Backup')).not.toBeInTheDocument();
     });
   });
 });
