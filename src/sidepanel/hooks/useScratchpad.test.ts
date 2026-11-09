@@ -4,11 +4,13 @@ import {
   useScratchpad,
   splitIntoChunks,
   assembleChunks,
+  reconcileScratchpadStorageAndBookmark,
   MAX_CHARS,
   SCRATCHPAD_META_KEY,
   SCRATCHPAD_CHUNK_PREFIX,
   SCRATCHPAD_LOCAL_DRAFT_KEY
 } from './useScratchpad';
+import { mockChrome } from '../../test/setup';
 
 describe('useScratchpad and chunking helpers', () => {
   beforeEach(() => {
@@ -150,7 +152,7 @@ describe('useScratchpad and chunking helpers', () => {
           url: 'https://arctic.local/scratchpad#Restored%20From%20Reinstall%20Backup'
         }
       ];
-      vi.mocked(chrome.bookmarks.search).mockResolvedValue(mockBookmarks as unknown as chrome.bookmarks.BookmarkTreeNode[]);
+      vi.mocked(chrome.bookmarks.search).mockResolvedValueOnce(mockBookmarks as unknown as chrome.bookmarks.BookmarkTreeNode[]);
 
       const { result } = renderHook(() => useScratchpad());
 
@@ -162,6 +164,134 @@ describe('useScratchpad and chunking helpers', () => {
 
       expect(result.current.text).toBe('Restored From Reinstall Backup');
       expect(result.current.syncStatus).toBe('Synced');
+    });
+
+    it('restores scratchpad note from Arctic folder via direct tree inspection even if bookmarks.search returns empty', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            { id: '1', title: 'Bookmarks Bar', children: [] },
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: 'bm-tree-backup',
+                      parentId: '10',
+                      title: 'Scratchpad Backup',
+                      url: 'https://arctic.local/scratchpad#Direct%20Tree%20Recovery%20Note'
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+      vi.mocked(chrome.bookmarks.search).mockResolvedValue([]);
+
+      const { result } = renderHook(() => useScratchpad());
+
+      await act(async () => {
+        await Promise.resolve();
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(result.current.text).toBe('Direct Tree Recovery Note');
+    });
+
+    it('restores from bookmark backup even if storage.sync has an empty scratchpad_meta record', async () => {
+      await chrome.storage.sync.set({
+        [SCRATCHPAD_META_KEY]: { updatedAt: 1000, chunkCount: 0 }
+      });
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: 'bm-empty-rescue',
+                      parentId: '10',
+                      title: 'Scratchpad Backup',
+                      url: 'https://arctic.local/scratchpad#Rescued%20When%20Meta%20Empty'
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      const { result } = renderHook(() => useScratchpad());
+
+      await act(async () => {
+        await Promise.resolve();
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(result.current.text).toBe('Rescued When Meta Empty');
+    });
+
+    it('automatically mirrors existing storage.sync notes to bookmark backup on initial load without requiring user edits', async () => {
+      await chrome.storage.sync.set({
+        [SCRATCHPAD_META_KEY]: { updatedAt: 5000, chunkCount: 1 },
+        [`${SCRATCHPAD_CHUNK_PREFIX}0`]: 'Existing Pre-Update Note'
+      });
+
+      const { result } = renderHook(() => useScratchpad());
+
+      await act(async () => {
+        await Promise.resolve();
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(result.current.text).toBe('Existing Pre-Update Note');
+      expect(chrome.bookmarks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Scratchpad Backup',
+          url: 'https://arctic.local/scratchpad#Existing%20Pre-Update%20Note'
+        })
+      );
+    });
+
+    it('reconcileScratchpadStorageAndBookmark backs up storage on update and restores from bookmark on reinstall', async () => {
+      // 1. Pre-existing note in storage gets backed up to bookmark
+      await chrome.storage.local.set({
+        [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
+          text: 'Service Worker Reconciled Note',
+          updatedAt: 9000
+        }
+      });
+
+      const backedUp = await reconcileScratchpadStorageAndBookmark();
+      expect(backedUp).toBe('Service Worker Reconciled Note');
+
+      // 2. Simulate extension reinstall: wipe both local and sync storage while keeping bookmarks tree
+      mockChrome.__setLocalStorage({});
+      mockChrome.__setSyncStorage({});
+
+      const restored = await reconcileScratchpadStorageAndBookmark();
+      expect(restored).toBe('Service Worker Reconciled Note');
+
+      const localAfter = await chrome.storage.local.get(SCRATCHPAD_LOCAL_DRAFT_KEY);
+      expect((localAfter[SCRATCHPAD_LOCAL_DRAFT_KEY] as { text: string }).text).toBe(
+        'Service Worker Reconciled Note'
+      );
     });
 
     it('copies scratchpad text to clipboard', async () => {

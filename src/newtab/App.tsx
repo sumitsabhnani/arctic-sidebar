@@ -21,7 +21,7 @@ import {
   Check
 } from 'lucide-react';
 import type { ColorThemeId, ThemeMode, SpaceItem, TabBinding, SiteSearchEngine } from '../types';
-import { getFaviconUrl, getDomainFromUrl, normalizeUrl } from '../sidepanel/utils/url';
+import { getFaviconUrl, getDomainFromUrl, normalizeUrl, isScratchpadUrl } from '../sidepanel/utils/url';
 import {
   COLOR_THEMES,
   isValidColorTheme,
@@ -167,6 +167,9 @@ export async function getArcticBookmarks(): Promise<ArcticBookmarkItem[]> {
       isQuickAccess: boolean
     ) => {
       if (node.url) {
+        if (isScratchpadUrl(node.url) || node.title === 'Scratchpad Backup') {
+          return;
+        }
         results.push({
           id: node.id,
           title: node.title || node.url,
@@ -1100,7 +1103,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       ]);
 
       for (const bm of generalNodes) {
-        if (bm.url) {
+        if (bm.url && !isScratchpadUrl(bm.url) && bm.title !== 'Scratchpad Backup') {
           const norm = normalizeUrl(bm.url).toLowerCase();
           if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
             seenUrls.add(bm.url.toLowerCase());

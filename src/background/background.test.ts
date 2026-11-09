@@ -3,10 +3,13 @@ import type { TabReminder } from '../types';
 import { REMINDERS_STORAGE_KEY } from '../sidepanel/utils/reminderStorage';
 import {
   handleAlarmTrigger,
+  handleInstalled,
   handleNotificationOpenTab,
   handleNotificationDismiss,
+  handleStartup,
   reconcileReminders
 } from './index';
+import { mockChrome } from '../test/setup';
 
 describe('Background service worker reminder lifecycle', () => {
   beforeEach(async () => {
@@ -211,5 +214,50 @@ describe('Background service worker reminder lifecycle', () => {
       'reminder:rem_future',
       expect.objectContaining({ when: futureReminder.triggerAt })
     );
+  });
+
+  it('reconciles scratchpad backup bookmark into storage on install and startup', async () => {
+    const preservedNote = 'Scratchpad preserved across extension reinstall';
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: 'bm-scratch',
+                    title: 'Scratchpad Backup',
+                    url: `https://arctic.local/scratchpad#${encodeURIComponent(preservedNote)}`
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setSyncStorage({});
+
+    await handleInstalled();
+
+    expect(
+      (mockChrome.__getLocalStorage().scratchpad_local_draft as { text?: string })?.text
+    ).toBe(preservedNote);
+    expect(mockChrome.__getSyncStorage().scratchpad_chunk_0).toBe(preservedNote);
+
+    // Clear local storage and verify handleStartup also reconciles
+    mockChrome.__setLocalStorage({});
+    await handleStartup();
+    expect(
+      (mockChrome.__getLocalStorage().scratchpad_local_draft as { text?: string })?.text
+    ).toBe(preservedNote);
   });
 });
