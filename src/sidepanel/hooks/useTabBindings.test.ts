@@ -134,6 +134,48 @@ describe('useTabBindings hook', () => {
     expect(result.current.bindingsByBookmarkId['bm-linear'].isNavigatedAway).toBe(false);
   });
 
+  it('reloads bound tab via chrome.tabs.reload on handleFaviconDoubleClick and resets URL if navigated away', async () => {
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const mockBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-reload',
+      title: 'GitHub',
+      url: 'https://github.com'
+    };
+
+    await act(async () => {
+      await result.current.handleRowClick(mockBookmark);
+    });
+
+    const boundTabId = result.current.bindingsByBookmarkId['bm-reload'].tabId;
+    mockChrome.tabs.reload.mockClear();
+
+    // 1. Double-click when on original URL reloads tab via chrome.tabs.reload
+    await act(async () => {
+      await result.current.handleFaviconDoubleClick(mockBookmark);
+    });
+
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(boundTabId);
+    expect(result.current.tabsByTabId[boundTabId]?.status).toBe('loading');
+
+    // 2. Double-click when navigated away resets URL back to original bookmark URL
+    await act(async () => {
+      await mockChrome.tabs.update(boundTabId, { url: 'https://github.com/Explore' });
+    });
+    expect(result.current.bindingsByBookmarkId['bm-reload'].isNavigatedAway).toBe(true);
+
+    await act(async () => {
+      await result.current.handleFaviconDoubleClick(mockBookmark);
+    });
+
+    const tabAfterDoubleClick = await mockChrome.tabs.get(boundTabId);
+    expect(tabAfterDoubleClick.url).toBe('https://github.com');
+    expect(result.current.bindingsByBookmarkId['bm-reload'].isNavigatedAway).toBe(false);
+  });
+
   it('cleans up tab binding when tab is closed via handleCloseTab or onRemoved listener', async () => {
     const { result } = renderHook(() => useTabBindings());
     await act(async () => {

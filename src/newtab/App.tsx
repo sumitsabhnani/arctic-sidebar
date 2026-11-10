@@ -339,6 +339,19 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   const currentTabRef = useRef<chrome.tabs.Tab | null>(null);
   const currentWindowIdRef = useRef<number | null>(null);
   const navTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSuggestionContextRef = useRef<{ query: string; engineId: string | null }>({
+    query: '',
+    engineId: null
+  });
+
+  useEffect(() => {
+    if (selectedIndex < 0 || !listRef.current) return;
+    const items = listRef.current.querySelectorAll('[role="button"]');
+    const activeEl = items[selectedIndex] as HTMLElement | undefined;
+    if (activeEl && typeof activeEl.scrollIntoView === 'function') {
+      activeEl.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedIndex]);
 
   const loadArcticBookmarks = useCallback(() => {
     if (!arcticBookmarksPromiseRef.current) {
@@ -650,13 +663,13 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           showToast('Theme set to System (auto light/dark)');
         }
       },
-      // 3. Color Palettes (all themes including Aqua & multi-tone palettes)
+      // 3. Color Themes (all themes including Aqua & multi-tone palettes)
       ...COLOR_THEMES.map((t) => ({
         id: `cmd-palette-${t.id}`,
         type: 'command' as const,
-        title: `Palette: ${t.name}`,
-        description: `${t.tag} — ${t.description}`,
-        commandCategory: 'Palette',
+        title: `Theme: ${t.name}`,
+        description: `${t.tag} — ${t.description}${colorTheme === t.id ? ' (Active)' : ''}`,
+        commandCategory: 'Theme',
         icon: <Palette className="w-4 h-4" style={{ color: t.accentColor }} />,
         action: async () => {
           setColorTheme(t.id);
@@ -843,12 +856,17 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     }
 
     return cmds;
-  }, [theme, spaces, showToast]);
+  }, [theme, colorTheme, spaces, showToast]);
 
   // Load suggestions from commands, history, bookmarks, and search
   useEffect(() => {
     let isCancelled = false;
     const trimmed = activeQuery.trim();
+    const currentEngineId = activeSiteEngine?.id ?? null;
+    const didQueryContextChange =
+      trimmed !== lastSuggestionContextRef.current.query ||
+      currentEngineId !== lastSuggestionContextRef.current.engineId;
+    lastSuggestionContextRef.current = { query: trimmed, engineId: currentEngineId };
 
     // SITE SEARCH MODE (activated via Tab on a matched site engine)
     if (activeSiteEngine) {
@@ -971,23 +989,43 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       };
     }
 
-    // EXPLICIT COMMAND MODE (starts with '>')
-    if (trimmed.startsWith('>')) {
+    // EXPLICIT COMMAND MODE (starts with '>' or 'Theme:' / 'Palette:')
+    const rawCommandFilter = trimmed.startsWith('>') ? trimmed.slice(1).trim() : trimmed;
+    const isThemePrefixQuery = /^(theme|palette):/i.test(rawCommandFilter);
+
+    if (trimmed.startsWith('>') || isThemePrefixQuery) {
       lastGoogleSuggestionsRef.current = [];
       const allCmds = getActionCommands();
-      const filterTerm = trimmed.slice(1).trim().toLowerCase();
+      const filterTerm = rawCommandFilter.toLowerCase();
 
-      const matchedCmds = filterTerm
-        ? allCmds.filter(
-            (c) =>
-              c.title.toLowerCase().includes(filterTerm) ||
-              c.description?.toLowerCase().includes(filterTerm) ||
-              c.commandCategory?.toLowerCase().includes(filterTerm)
-          )
-        : allCmds;
+      let matchedCmds: SuggestionItem[];
+      if (isThemePrefixQuery) {
+        const themeSubQuery = filterTerm.replace(/^(theme|palette):\s*/i, '').trim();
+        matchedCmds = allCmds.filter(
+          (c) =>
+            c.commandCategory === 'Theme' &&
+            (!themeSubQuery ||
+              c.title.toLowerCase().includes(themeSubQuery) ||
+              c.description?.toLowerCase().includes(themeSubQuery))
+        );
+      } else {
+        matchedCmds = filterTerm
+          ? allCmds.filter(
+              (c) =>
+                c.title.toLowerCase().includes(filterTerm) ||
+                c.description?.toLowerCase().includes(filterTerm) ||
+                c.commandCategory?.toLowerCase().includes(filterTerm) ||
+                ('palette'.includes(filterTerm) && c.commandCategory === 'Theme')
+            )
+          : allCmds;
+      }
 
       setSuggestions(matchedCmds);
-      setSelectedIndex(matchedCmds.length > 0 ? 0 : -1);
+      setSelectedIndex((prev) => {
+        if (matchedCmds.length === 0) return -1;
+        if (didQueryContextChange) return 0;
+        return prev >= 0 && prev < matchedCmds.length ? prev : 0;
+      });
       return;
     }
 
@@ -1188,7 +1226,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
             ? [...results, ...lastGoogleSuggestionsRef.current]
             : [...results]
         );
-        setSelectedIndex(0);
+        setSelectedIndex((prev) => {
+          if (results.length === 0) return -1;
+          if (didQueryContextChange) return 0;
+          return prev >= 0 && prev < results.length ? prev : 0;
+        });
       }
 
       // 6. Live Google Suggestions when keyword is not found in bookmarks, history, or direct URL
@@ -1661,7 +1703,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         handleSelect(suggestions[selectedIndex]);
       } else if (activeSiteEngine) {
         openBookmarkOrUrl(buildSiteSearchUrl(activeSiteEngine, query));
-      } else if (query.trim() && !query.trim().startsWith('>')) {
+      } else if (
+        query.trim() &&
+        !query.trim().startsWith('>') &&
+        !/^(theme|palette):/i.test(query.trim())
+      ) {
         if (isLikelyUrl(query.trim())) {
           openBookmarkOrUrl(formatNavigationUrl(query));
         } else {
@@ -1876,9 +1922,14 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 </div>
               )}
 
-              {activeQuery.trim().startsWith('>') && (
+              {(activeQuery.trim().startsWith('>') ||
+                /^(theme|palette):/i.test(activeQuery.trim())) && (
                 <div className="px-3 py-1.5 text-[11px] font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider flex items-center justify-between">
-                  <span>Action Commands</span>
+                  <span>
+                    {/^(theme|palette):/i.test(activeQuery.trim().replace(/^>\s*/, ''))
+                      ? 'Themes & Appearance'
+                      : 'Action Commands'}
+                  </span>
                   <span className="text-[10px] text-zinc-400 font-normal">
                     {suggestions.length} available
                   </span>

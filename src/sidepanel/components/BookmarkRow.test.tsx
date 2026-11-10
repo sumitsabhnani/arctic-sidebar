@@ -142,4 +142,18 @@ describe('BookmarkRow component', () => {
     const spinSvg = container.querySelector('svg.lucide-rotate-cw.animate-spin');
     expect(spinSvg).toBeInTheDocument();
   });
+
+  it('calls onFaviconDoubleClick when double-clicking the favicon or row icon area', () => {
+    const onFaviconDoubleClick = vi.fn();
+    render(
+      <BookmarkRow
+        {...defaultProps}
+        onFaviconDoubleClick={onFaviconDoubleClick}
+      />
+    );
+
+    const faviconBtn = screen.getByTitle(/Double-click to reload/i);
+    fireEvent.doubleClick(faviconBtn);
+    expect(onFaviconDoubleClick).toHaveBeenCalledWith(mockBookmark, expect.any(Object));
+  });
 });

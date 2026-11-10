@@ -78,7 +78,7 @@ describe('newtab url detection and formatting', () => {
 
       expect(screen.getByText('Action Commands')).toBeInTheDocument();
       expect(screen.getByText(/Switch to (Light|Dark) Mode/i)).toBeInTheDocument();
-      expect(screen.getByText(/Palette: Glacier Blue/i)).toBeInTheDocument();
+      expect(screen.getByText(/Theme: Glacier Blue/i)).toBeInTheDocument();
       expect(screen.getByText(/Sleep Inactive Background Tabs/i)).toBeInTheDocument();
     });
 
@@ -91,7 +91,7 @@ describe('newtab url detection and formatting', () => {
       });
 
       expect(screen.getByText('Sleep Inactive Background Tabs')).toBeInTheDocument();
-      expect(screen.queryByText(/Palette: Glacier Blue/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Theme: Glacier Blue/i)).not.toBeInTheDocument();
     });
 
     it('executes a command on click and displays feedback toast', async () => {
@@ -188,8 +188,8 @@ describe('newtab url detection and formatting', () => {
         fireEvent.change(input, { target: { value: '> aqua' } });
       });
 
-      const crystalAquaCmd = screen.getByText('Palette: Crystal Aqua');
-      const aquaLagoonCmd = screen.getByText('Palette: Aqua Lagoon');
+      const crystalAquaCmd = screen.getByText('Theme: Crystal Aqua');
+      const aquaLagoonCmd = screen.getByText('Theme: Aqua Lagoon');
       expect(crystalAquaCmd).toBeInTheDocument();
       expect(aquaLagoonCmd).toBeInTheDocument();
 
@@ -201,6 +201,39 @@ describe('newtab url detection and formatting', () => {
       expect(local.colorTheme).toBe('aqua-lagoon');
       expect(document.documentElement.getAttribute('data-color-theme')).toBe('aqua-lagoon');
       expect(screen.getByText('Color palette set to Aqua Lagoon')).toBeInTheDocument();
+    });
+
+    it('lists and filters all themes directly when typing "Theme:" in the command bar', async () => {
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      // Typing "Theme:" without leading ">" shows all 12 theme commands
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'Theme:' } });
+      });
+
+      expect(screen.getByText('Themes & Appearance')).toBeInTheDocument();
+      expect(screen.getByText('12 available')).toBeInTheDocument();
+      expect(screen.getByText('Theme: Pure Monochrome')).toBeInTheDocument();
+      expect(screen.getByText('Theme: Glacier Blue')).toBeInTheDocument();
+      expect(screen.getByText('Theme: Arctic Aurora')).toBeInTheDocument();
+
+      // Filtering with "Theme: amethyst" narrows down to Midnight Amethyst
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'Theme: amethyst' } });
+      });
+
+      const midnightAmethystCmd = screen.getByText('Theme: Midnight Amethyst');
+      expect(midnightAmethystCmd).toBeInTheDocument();
+      expect(screen.queryByText('Theme: Glacier Blue')).not.toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(midnightAmethystCmd);
+      });
+
+      const local = await chrome.storage.local.get(['colorTheme']);
+      expect(local.colorTheme).toBe('midnight-amethyst');
+      expect(document.documentElement.getAttribute('data-color-theme')).toBe('midnight-amethyst');
     });
   });
 

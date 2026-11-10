@@ -974,6 +974,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
    */
   const reloadTab = useCallback(async (tabId: number, bypassCache: boolean = false) => {
     try {
+      setWindowTabs((prev) =>
+        prev.map((t) => (t.id === tabId ? { ...t, status: 'loading' } : t))
+      );
       await chrome.tabs.reload(tabId, { bypassCache });
     } catch (err) {
       console.warn('[Arctic] Could not reload tab:', err);
@@ -1270,9 +1273,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       }
       if (!bookmark.url) return;
 
-      const existingBinding = bindingsByBookmarkId[bookmark.id];
+      const existingBinding =
+        bindingsByBookmarkIdRef.current[bookmark.id] || bindingsByBookmarkId[bookmark.id];
 
-      if (existingBinding) {
+      if (existingBinding && existingBinding.isNavigatedAway) {
         try {
           const tab = await chrome.tabs.get(existingBinding.tabId);
           if (tab) {
@@ -1290,6 +1294,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               isNavigatedAway: false
             };
             const nextBindings = {
+              ...bindingsByBookmarkIdRef.current,
               ...bindingsByBookmarkId,
               [bookmark.id]: updatedBinding
             };
@@ -1314,7 +1319,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const handleQuickAccessClick = useCallback(
     async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
       if (!bookmark.url) return;
-      const binding = bindingsByBookmarkId[bookmark.id];
+      const binding =
+        bindingsByBookmarkIdRef.current[bookmark.id] || bindingsByBookmarkId[bookmark.id];
 
       if (binding && binding.tabId === activeTabId && binding.isNavigatedAway) {
         await chrome.tabs.update(binding.tabId, { url: bookmark.url, active: true });
@@ -1324,6 +1330,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           isNavigatedAway: false
         };
         const nextBindings = {
+          ...bindingsByBookmarkIdRef.current,
           ...bindingsByBookmarkId,
           [bookmark.id]: updatedBinding
         };
@@ -1345,13 +1352,41 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       if (e) e.stopPropagation();
       if (!bookmark.url) return;
 
-      const existingBinding = bindingsByBookmarkId[bookmark.id];
+      const existingBinding =
+        bindingsByBookmarkIdRef.current[bookmark.id] || bindingsByBookmarkId[bookmark.id];
       if (existingBinding) {
         try {
           const tab = await chrome.tabs.get(existingBinding.tabId);
           if (tab) {
-            // Force navigate to original bookmark URL
-            await chrome.tabs.update(existingBinding.tabId, { url: bookmark.url, active: true });
+            const needsUrlReset =
+              existingBinding.isNavigatedAway ||
+              isUrlNavigatedAway(
+                tab.url || existingBinding.currentUrl || '',
+                bookmark.url
+              );
+
+            if (needsUrlReset) {
+              // Force navigate to original bookmark URL
+              await chrome.tabs.update(existingBinding.tabId, {
+                url: bookmark.url,
+                active: true
+              });
+            } else {
+              if (!tab.active) {
+                await chrome.tabs.update(existingBinding.tabId, { active: true });
+              }
+              await chrome.tabs.reload(existingBinding.tabId);
+            }
+            setWindowTabs((prev) =>
+              prev.map((t) =>
+                t.id === existingBinding.tabId ? { ...t, status: 'loading' } : t
+              )
+            );
+
+            if (tab.windowId) {
+              await chrome.windows.update(tab.windowId, { focused: true });
+            }
+
             const updatedBinding: TabBinding = {
               ...existingBinding,
               currentUrl: bookmark.url,
@@ -1359,12 +1394,12 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               isNavigatedAway: false
             };
             const nextBindings = {
+              ...bindingsByBookmarkIdRef.current,
               ...bindingsByBookmarkId,
               [bookmark.id]: updatedBinding
             };
             await persistSession(nextBindings, bookmarkIdByTabId);
             setActiveTabId(existingBinding.tabId);
-            await refreshWindowTabs();
             return;
           }
         } catch {
@@ -1374,7 +1409,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       await handleRowClick(bookmark);
     },
-    [bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession, refreshWindowTabs]
+    [bindingsByBookmarkId, bookmarkIdByTabId, handleRowClick, persistSession]
   );
 
   /**

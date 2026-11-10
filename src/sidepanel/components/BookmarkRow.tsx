@@ -512,6 +512,10 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         onSelectBookmark?.(bookmark, e);
         onRowClick(bookmark);
       }}
+      onDoubleClick={(e) => {
+        if ((e.target as HTMLElement).closest('button')) return;
+        onFaviconDoubleClick?.(bookmark, e);
+      }}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -567,43 +571,45 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           onMouseLeave={() => setIsHoveringFavicon(false)}
           className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center rounded transition-transform active:scale-90"
         >
-          {isBoundTabLoading ? (
-            <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text flex-shrink-0" />
-          ) : !faviconError && faviconSrc ? (
-            <img
-              src={faviconSrc}
-              alt=""
-              draggable={false}
-              onError={() => setFaviconError(true)}
-              className={`w-4 h-4 object-contain rounded-sm transition-opacity duration-150 ${
-                isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
-              } ${isDiscarded ? 'opacity-60 grayscale' : ''}`}
-            />
-          ) : (
-            <Globe
-              className={`w-3.5 h-3.5 text-zinc-400 transition-opacity duration-150 ${
-                isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
-              }`}
-            />
-          )}
+          <div className="relative w-4 h-4 flex items-center justify-center pointer-events-none">
+            {isBoundTabLoading ? (
+              <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text flex-shrink-0" />
+            ) : !faviconError && faviconSrc ? (
+              <img
+                src={faviconSrc}
+                alt=""
+                draggable={false}
+                onError={() => setFaviconError(true)}
+                className={`w-4 h-4 object-contain rounded-sm transition-opacity duration-150 ${
+                  isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
+                } ${isDiscarded ? 'opacity-60 grayscale' : ''}`}
+              />
+            ) : (
+              <Globe
+                className={`w-3.5 h-3.5 text-zinc-400 transition-opacity duration-150 ${
+                  isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
+                }`}
+              />
+            )}
 
-          {/* Sleep icon overlay on favicon if hibernated */}
-          {isDiscarded && !isBoundTabLoading && (
-            <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
-          )}
+            {/* Sleep icon overlay on favicon if hibernated */}
+            {isDiscarded && !isBoundTabLoading && (
+              <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
+            )}
 
-          {/* Reset Icon Overlay on Favicon Hover when Navigated Away */}
-          {isNavAway && !isBoundTabLoading && (
-            <div
-              className={`absolute inset-0 flex items-center justify-center rounded-sm transition-all duration-150 ${
-                isHoveringFavicon
-                  ? 'opacity-100 scale-105 bg-amber-400/20 text-amber-500 dark:text-amber-300'
-                  : 'opacity-0 scale-95 text-transparent'
-              }`}
-            >
-              <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
-            </div>
-          )}
+            {/* Reset Icon Overlay on Favicon Hover when Navigated Away */}
+            {isNavAway && !isBoundTabLoading && (
+              <div
+                className={`absolute inset-0 flex items-center justify-center rounded-sm transition-all duration-150 ${
+                  isHoveringFavicon
+                    ? 'opacity-100 scale-105 bg-amber-400/20 text-amber-500 dark:text-amber-300'
+                    : 'opacity-0 scale-95 text-transparent'
+                }`}
+              >
+                <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Title / Description (Double-click to rename) & Subdomain Subtitle */}

@@ -470,6 +470,10 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         onSelectTab?.(tab, e);
         if (tabId) onFocus(tabId);
       }}
+      onDoubleClick={(e) => {
+        if ((e.target as HTMLElement).closest('button')) return;
+        if (tabId) onReload(tabId);
+      }}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if ((e.key === 'Enter' || e.key === ' ') && tabId) {
@@ -509,27 +513,38 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     >
       {/* Left: Favicon & Title */}
       <div className="flex items-center min-w-0 flex-1 space-x-2 mr-2">
-        <div className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center">
-          {isLoading ? (
-            <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text" />
-          ) : !faviconError && faviconSrc ? (
-            <img
-              src={faviconSrc}
-              alt=""
-              draggable={false}
-              onError={() => setFaviconError(true)}
-              className={`w-4 h-4 object-contain rounded-sm transition-opacity ${
-                isDiscarded ? 'opacity-60 grayscale' : 'opacity-100'
-              }`}
-            />
-          ) : (
-            <Globe className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-600 dark:group-hover:text-zinc-400" />
-          )}
+        <div
+          role="button"
+          tabIndex={0}
+          title={`${titleText} (Double-click to reload)`}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            if (tabId) onReload(tabId);
+          }}
+          className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center rounded transition-transform active:scale-90"
+        >
+          <div className="relative w-4 h-4 flex items-center justify-center pointer-events-none">
+            {isLoading ? (
+              <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text" />
+            ) : !faviconError && faviconSrc ? (
+              <img
+                src={faviconSrc}
+                alt=""
+                draggable={false}
+                onError={() => setFaviconError(true)}
+                className={`w-4 h-4 object-contain rounded-sm transition-opacity ${
+                  isDiscarded ? 'opacity-60 grayscale' : 'opacity-100'
+                }`}
+              />
+            ) : (
+              <Globe className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 group-hover:text-zinc-600 dark:group-hover:text-zinc-400" />
+            )}
 
-          {/* Sleep icon overlay on favicon if hibernated */}
-          {isDiscarded && !isLoading && (
-            <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
-          )}
+            {/* Sleep icon overlay on favicon if hibernated */}
+            {isDiscarded && !isLoading && (
+              <Moon className="absolute -bottom-1 -right-1 w-2.5 h-2.5 text-indigo-400 fill-indigo-400/30" />
+            )}
+          </div>
         </div>
 
         {/* Title + Subdomain details */}
