@@ -91,26 +91,28 @@ describe('QuickAccessGrid component', () => {
     expect(defaultProps.onTileClick).toHaveBeenCalledWith(mockBookmarks[0]);
   });
 
-  it('renders reload icon on quick access tile on hover and triggers reload on click', () => {
+  it('does NOT render hover reload icon on quick access tiles, and reloads via double-click or context menu', () => {
     render(<QuickAccessGrid {...defaultProps} />);
 
-    const reloadButtons = screen.getAllByTitle('Reload tab');
-    expect(reloadButtons.length).toBe(2);
-    reloadButtons.forEach((btn) => {
-      expect(btn.className).toContain('hidden');
-      expect(btn.className).toContain('group-hover:flex');
-    });
+    // Hover reload icon badge is removed from quick access tiles
+    const reloadButtons = screen.queryAllByTitle('Reload tab');
+    expect(reloadButtons.length).toBe(0);
 
-    fireEvent.click(reloadButtons[0]);
+    // Double-clicking tile calls onTileDoubleClick
+    const tiles = screen.getAllByRole('button');
+    fireEvent.doubleClick(tiles[0]);
+    expect(defaultProps.onTileDoubleClick).toHaveBeenCalledWith(
+      mockBookmarks[0],
+      expect.any(Object)
+    );
+
+    // Context menu still includes Reload Tab
+    fireEvent.contextMenu(tiles[0]);
+    const menuItems = defaultProps.onOpenContextMenu.mock.calls[0][1];
+    const reloadItem = menuItems.find((item: { label: string }) => item.label === 'Reload Tab');
+    expect(reloadItem).toBeDefined();
+    reloadItem.action();
     expect(defaultProps.onReloadTab).toHaveBeenCalledWith(101);
-  });
-
-  it('does NOT render reload icon on quick access tile when tab is not open', () => {
-    // Only qa-1 is bound; qa-2 is not open
-    render(<QuickAccessGrid {...defaultProps} bindingsByBookmarkId={{ 'qa-1': mockBindings['qa-1'] }} />);
-
-    const reloadButtons = screen.getAllByTitle('Reload tab');
-    expect(reloadButtons.length).toBe(1);
   });
 
   it('includes Duplicate Tab option in context menu on right click', () => {

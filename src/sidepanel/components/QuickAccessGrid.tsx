@@ -427,36 +427,6 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         </span>
       )}
 
-      {/* Reload Tab Button on hover (only for open tabs) */}
-      {binding && typeof binding.tabId === 'number' && (
-        <span
-          role="button"
-          tabIndex={0}
-          title="Reload tab"
-          aria-label="Reload tab"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (onReloadTab) {
-              onReloadTab(binding.tabId);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.stopPropagation();
-              e.preventDefault();
-              if (onReloadTab) {
-                onReloadTab(binding.tabId);
-              }
-            }
-          }}
-          className={`absolute top-1 ${
-            isAudible || isMuted ? 'left-1' : 'right-1'
-          } z-10 w-4 h-4 rounded-full hidden group-hover:flex items-center justify-center bg-black/10 dark:bg-white/10 hover:bg-black/20 dark:hover:bg-white/20 text-zinc-600 dark:text-zinc-300 transition-all shadow-xs cursor-pointer`}
-        >
-          <RotateCw className="w-2.5 h-2.5 stroke-[2.2]" />
-        </span>
-      )}
-
       {/* Favicon or Reset Icon */}
       <div className="relative w-5 h-5 flex items-center justify-center pointer-events-none">
         {/* Reset Icon when Active and Navigated Away (on hover) */}

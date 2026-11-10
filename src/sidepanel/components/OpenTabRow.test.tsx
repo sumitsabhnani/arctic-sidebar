@@ -119,6 +119,16 @@ describe('OpenTabRow Component', () => {
     expect(onRenameTab).toHaveBeenCalledWith(42, 'React Repo');
   });
 
+  it('calls onReload when double-clicking the tab favicon', () => {
+    const props = createBaseProps();
+    render(<OpenTabRow {...props} />);
+
+    const faviconBtn = screen.getByTitle(/Double-click to reload/i);
+    fireEvent.doubleClick(faviconBtn);
+
+    expect(props.onReload).toHaveBeenCalledWith(42);
+  });
+
   it('opens single-tab and multi-selected context menus on right-click', () => {
     const onDiscardTab = vi.fn();
     const onCloseMultipleTabs = vi.fn();
