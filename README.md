@@ -137,6 +137,8 @@ npm run zip
 4. Select the `dist/` directory inside your cloned repository.
 5. Click the Chrome Side Panel icon in your toolbar and select **Arctic Sidebar**!
 
+> **Note on cross-device sync while developing:** `chrome.storage.sync` data is scoped to the extension ID. `manifest.json` includes the Chrome Web Store public `"key"`, so unpacked builds load with the same ID as the store install (`jopfeopcjimbpofmnchbohkelodgfocd`) and share scratchpad, spaces, and reminders with it. Because of this, an unpacked build and the store version cannot be installed side by side in the same Chrome profile. Chrome Sync must also have **Extensions** enabled.
+
 ---
 
 ## ☕ Support the Project

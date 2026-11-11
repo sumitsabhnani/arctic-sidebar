@@ -6,18 +6,51 @@ import {
   isScratchpadUrl
 } from '../utils/url';
 
-export const CHUNK_SIZE = 7000;
-export const MAX_CHUNKS = 4;
-export const MAX_CHARS = CHUNK_SIZE * MAX_CHUNKS; // 28,000 chars
+/** Maximum number of characters the scratchpad editor accepts. */
+export const MAX_CHARS = 28000;
+
+/**
+ * chrome.storage.sync enforces QUOTA_BYTES_PER_ITEM (8,192 bytes), measured as the UTF-8 size of
+ * the JSON-stringified value plus the key length. Chunks are therefore split by byte size rather
+ * than character count (multi-byte characters and JSON escapes would otherwise overflow the quota
+ * and make the whole write fail). The budget leaves headroom below the hard limit.
+ */
+export const SYNC_ITEM_QUOTA_BYTES = 8192;
+export const CHUNK_BYTE_BUDGET = 8000;
+
+/**
+ * Maximum number of sync chunks. Plain ASCII notes need at most 4 chunks for MAX_CHARS; heavily
+ * multi-byte notes may need more. Capped so the scratchpad leaves room in the shared 100 KB
+ * chrome.storage.sync quota for spaces and reminders.
+ */
+export const MAX_CHUNKS = 10;
+
+/**
+ * Delay between the last keystroke and the chrome.storage.sync write. chrome.storage.sync allows
+ * at most 120 writes per minute and 1,800 per hour (one write every 2s on average).
+ */
+export const SYNC_DEBOUNCE_MS = 2000;
+
+const RETRY_BASE_DELAY_MS = 5000;
+const RETRY_MAX_DELAY_MS = 5 * 60 * 1000;
 
 export const SCRATCHPAD_META_KEY = 'scratchpad_meta';
 export const SCRATCHPAD_LOCAL_DRAFT_KEY = 'scratchpad_local_draft';
 export const SCRATCHPAD_CHUNK_PREFIX = 'scratchpad_chunk_';
 export const SCRATCHPAD_BACKUP_TITLE = 'Scratchpad Backup';
 
+const ALL_CHUNK_KEYS = Array.from({ length: MAX_CHUNKS }, (_, i) => `${SCRATCHPAD_CHUNK_PREFIX}${i}`);
+const ALL_SYNC_KEYS = [SCRATCHPAD_META_KEY, ...ALL_CHUNK_KEYS];
+
 export interface ScratchpadMeta {
   updatedAt: number;
   chunkCount: number;
+  /**
+   * Fingerprint of the full note text (see hashText). Lets readers detect that chunks from another
+   * device have only partially arrived, and marks an empty note as an intentional clear.
+   * Absent in metas written by versions before 1.8.4.
+   */
+  hash?: string;
 }
 
 export interface ScratchpadLocalDraft {
@@ -25,22 +58,93 @@ export interface ScratchpadLocalDraft {
   updatedAt: number;
 }
 
-export type ScratchpadSyncStatus = 'Synced' | 'Saving...' | 'Offline - Saved locally';
+export type ScratchpadSyncStatus =
+  | 'Synced'
+  | 'Saving...'
+  | 'Offline - Saved locally'
+  | 'Retrying sync...'
+  | 'Too large to sync';
+
+export interface ScratchpadSyncSnapshot {
+  meta: ScratchpadMeta | null;
+  text: string;
+  /** False while the stored chunks don't match meta.hash yet (still arriving from another device). */
+  complete: boolean;
+}
+
+export const EMPTY_SYNC_SNAPSHOT: ScratchpadSyncSnapshot = { meta: null, text: '', complete: true };
+
+export class ScratchpadTooLargeError extends Error {
+  constructor(message = 'Scratchpad note exceeds chrome.storage.sync limits') {
+    super(message);
+    this.name = 'ScratchpadTooLargeError';
+  }
+}
 
 /**
- * Split plain text into up to 4 chunks of max 7,000 characters each.
+ * UTF-8 byte cost of the UTF-16 code unit(s) at `index` once JSON-stringified.
+ * Returns how many code units were consumed so surrogate pairs are never split.
+ */
+function jsonCharCost(text: string, index: number): { units: number; bytes: number } {
+  const code = text.charCodeAt(index);
+  if (code === 0x22 || code === 0x5c) return { units: 1, bytes: 2 }; // \" and \\
+  if (code < 0x20) {
+    // \b \t \n \f \r have short escapes, other control chars become \u00XX
+    const shortEscape = code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d;
+    return { units: 1, bytes: shortEscape ? 2 : 6 };
+  }
+  if (code < 0x80) return { units: 1, bytes: 1 };
+  if (code < 0x800) return { units: 1, bytes: 2 };
+  if (code >= 0xd800 && code <= 0xdbff) {
+    const next = text.charCodeAt(index + 1);
+    if (next >= 0xdc00 && next <= 0xdfff) return { units: 2, bytes: 4 };
+    return { units: 1, bytes: 6 }; // lone surrogate is escaped as \uXXXX
+  }
+  if (code >= 0xdc00 && code <= 0xdfff) return { units: 1, bytes: 6 };
+  return { units: 1, bytes: 3 };
+}
+
+/** UTF-8 byte size of JSON.stringify(text), as counted by chrome.storage.sync quotas. */
+export function jsonByteLength(text: string): number {
+  let bytes = 2; // surrounding quotes
+  for (let i = 0; i < text.length; ) {
+    const { units, bytes: cost } = jsonCharCost(text, i);
+    bytes += cost;
+    i += units;
+  }
+  return bytes;
+}
+
+/**
+ * Split plain text (capped at MAX_CHARS) into chunks that each fit within chrome.storage.sync's
+ * per-item quota. May return more than MAX_CHUNKS chunks for very large multi-byte notes; callers
+ * writing to sync must check for that.
  */
 export function splitIntoChunks(text: string): { chunks: string[]; chunkCount: number } {
   const bounded = text.slice(0, MAX_CHARS);
   if (!bounded) {
     return { chunks: [], chunkCount: 0 };
   }
+
+  // Budget for the JSON value bytes: total budget minus the longest key and the two quotes
+  const keyLength = `${SCRATCHPAD_CHUNK_PREFIX}${MAX_CHUNKS * 10}`.length;
+  const valueBudget = CHUNK_BYTE_BUDGET - keyLength - 2;
+
   const chunks: string[] = [];
-  const chunkCount = Math.ceil(bounded.length / CHUNK_SIZE);
-  for (let i = 0; i < chunkCount; i++) {
-    chunks.push(bounded.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
+  let start = 0;
+  let bytes = 0;
+  for (let i = 0; i < bounded.length; ) {
+    const { units, bytes: cost } = jsonCharCost(bounded, i);
+    if (bytes + cost > valueBudget && i > start) {
+      chunks.push(bounded.slice(start, i));
+      start = i;
+      bytes = 0;
+    }
+    bytes += cost;
+    i += units;
   }
-  return { chunks, chunkCount };
+  chunks.push(bounded.slice(start));
+  return { chunks, chunkCount: chunks.length };
 }
 
 /**
@@ -55,6 +159,140 @@ export function assembleChunks(items: Record<string, unknown>, chunkCount: numbe
     }
   }
   return assembled;
+}
+
+/**
+ * Fast non-cryptographic fingerprint (length + 32-bit FNV-1a) used to verify that all chunks of a
+ * revision have arrived.
+ */
+export function hashText(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${text.length.toString(36)}-${(hash >>> 0).toString(36)}`;
+}
+
+/**
+ * Read the scratchpad revision currently stored in chrome.storage.sync. Throws if storage is unavailable.
+ */
+export async function readSyncScratchpad(): Promise<ScratchpadSyncSnapshot> {
+  const data = await chrome.storage.sync.get(ALL_SYNC_KEYS);
+  const meta = data[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
+  if (!meta || typeof meta.updatedAt !== 'number') {
+    return { ...EMPTY_SYNC_SNAPSHOT };
+  }
+  const text = assembleChunks(data, Math.min(meta.chunkCount || 0, MAX_CHUNKS));
+  const complete = typeof meta.hash === 'string' ? hashText(text) === meta.hash : true;
+  return { meta, text, complete };
+}
+
+/**
+ * Write a scratchpad revision to chrome.storage.sync. New chunks and meta are written in a single
+ * set() call; stale chunks are removed only after the new revision is safely stored.
+ * Throws ScratchpadTooLargeError if the note cannot fit, or the chrome.storage error on failure.
+ */
+export async function writeSyncScratchpad(text: string, updatedAt: number): Promise<ScratchpadMeta> {
+  const { chunks, chunkCount } = splitIntoChunks(text);
+  if (chunkCount > MAX_CHUNKS) {
+    throw new ScratchpadTooLargeError();
+  }
+
+  const meta: ScratchpadMeta = { updatedAt, chunkCount, hash: hashText(chunks.join('')) };
+  const payload: Record<string, unknown> = { [SCRATCHPAD_META_KEY]: meta };
+  for (let i = 0; i < chunkCount; i++) {
+    payload[`${SCRATCHPAD_CHUNK_PREFIX}${i}`] = chunks[i];
+  }
+  await chrome.storage.sync.set(payload);
+
+  // Remove leftover chunks from a previously longer note (reads don't count toward write quotas)
+  try {
+    const staleKeys = ALL_CHUNK_KEYS.slice(chunkCount);
+    if (staleKeys.length > 0) {
+      const existing = await chrome.storage.sync.get(staleKeys);
+      const present = staleKeys.filter((k) => existing[k] !== undefined);
+      if (present.length > 0) {
+        await chrome.storage.sync.remove(present);
+      }
+    }
+  } catch {
+    // Harmless: readers only assemble meta.chunkCount chunks
+  }
+
+  return meta;
+}
+
+/**
+ * Classify a chrome.storage.sync write failure and choose a retry delay.
+ */
+export function classifySyncError(
+  err: unknown,
+  attempt: number
+): { tooLarge: boolean; retryDelayMs: number } {
+  const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof ScratchpadTooLargeError || /QUOTA_BYTES/.test(message)) {
+    return { tooLarge: true, retryDelayMs: 0 };
+  }
+  const backoff = Math.min(RETRY_BASE_DELAY_MS * 2 ** attempt, RETRY_MAX_DELAY_MS);
+  if (/MAX_WRITE_OPERATIONS_PER_HOUR/.test(message)) {
+    return { tooLarge: false, retryDelayMs: RETRY_MAX_DELAY_MS };
+  }
+  if (/MAX_WRITE_OPERATIONS_PER_MINUTE/.test(message)) {
+    return { tooLarge: false, retryDelayMs: Math.max(60 * 1000, backoff) };
+  }
+  return { tooLarge: false, retryDelayMs: backoff };
+}
+
+export type ScratchpadSource = 'sync' | 'local' | 'pending' | 'none';
+
+export interface ResolvedScratchpad {
+  text: string;
+  updatedAt: number;
+  /**
+   * sync: the stored sync revision wins. local: the local draft wins and should be pushed to sync.
+   * pending: sync chunks are still arriving; show the local draft and write nothing.
+   * none: no note anywhere in storage (fresh install); fall back to the bookmark backup.
+   */
+  source: ScratchpadSource;
+}
+
+/**
+ * Decide which copy of the note wins between the local draft and the sync revision
+ * (last-writer-wins on updatedAt).
+ */
+export function resolveScratchpad(
+  localDraft: ScratchpadLocalDraft | null,
+  snapshot: ScratchpadSyncSnapshot
+): ResolvedScratchpad {
+  const localTime = localDraft?.updatedAt || 0;
+  const localText = typeof localDraft?.text === 'string' ? localDraft.text : '';
+  const { meta, text: syncText, complete } = snapshot;
+
+  if (meta && !complete) {
+    return { text: localText, updatedAt: localTime, source: 'pending' };
+  }
+
+  if (meta) {
+    // Metas with a hash (v1.8.4+) are authoritative even when empty, so clearing the note on one
+    // device propagates instead of being resurrected by another device's older local draft.
+    const authoritative = typeof meta.hash === 'string' || syncText.length > 0;
+    if (authoritative && meta.updatedAt >= localTime) {
+      return { text: syncText, updatedAt: meta.updatedAt, source: 'sync' };
+    }
+  }
+
+  if (localText) {
+    // Ensure the pushed revision beats whatever (non-authoritative or older) revision is in sync
+    const updatedAt = meta ? Math.max(localTime, meta.updatedAt + 1) : localTime;
+    return { text: localText, updatedAt, source: 'local' };
+  }
+
+  if (meta && syncText) {
+    return { text: syncText, updatedAt: meta.updatedAt, source: 'sync' };
+  }
+
+  return { text: '', updatedAt: 0, source: 'none' };
 }
 
 function isScratchpadBackupNode(node: chrome.bookmarks.BookmarkTreeNode): boolean {
@@ -272,125 +510,104 @@ export async function restoreScratchpadFromBookmark(): Promise<string> {
   return '';
 }
 
+async function readLocalDraft(): Promise<ScratchpadLocalDraft | null> {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return null;
+  const localData = await chrome.storage.local.get(SCRATCHPAD_LOCAL_DRAFT_KEY);
+  const draft = localData[SCRATCHPAD_LOCAL_DRAFT_KEY] as ScratchpadLocalDraft | undefined;
+  return draft && typeof draft === 'object' ? draft : null;
+}
+
+async function writeLocalDraft(text: string, updatedAt: number): Promise<void> {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
+  await chrome.storage.local.set({
+    [SCRATCHPAD_LOCAL_DRAFT_KEY]: { text, updatedAt } as ScratchpadLocalDraft
+  });
+}
+
 /**
  * Background / startup reconciliation helper:
- * - If storage (local or sync) has scratchpad text, ensures both storage areas and the backup bookmark are synced.
- * - If storage is empty (e.g. fresh reinstall), restores from the backup bookmark into local and sync storage.
+ * - Resolves the local draft against the sync revision (last-writer-wins) and makes local storage,
+ *   sync storage and the backup bookmark agree on the winner.
+ * - If storage has no note at all (e.g. fresh reinstall), restores from the backup bookmark.
+ *   Restored text is stamped with updatedAt 0 so any real revision arriving later from
+ *   Chrome Sync always wins over the (possibly stale) bookmark copy.
  */
 export async function reconcileScratchpadStorageAndBookmark(): Promise<string> {
   let localDraft: ScratchpadLocalDraft | null = null;
-  let syncText = '';
-  let syncTime = 0;
-
   try {
-    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-      const localData = await chrome.storage.local.get(SCRATCHPAD_LOCAL_DRAFT_KEY);
-      if (localData[SCRATCHPAD_LOCAL_DRAFT_KEY]) {
-        localDraft = localData[SCRATCHPAD_LOCAL_DRAFT_KEY] as ScratchpadLocalDraft;
-      }
-    }
+    localDraft = await readLocalDraft();
   } catch {
     // ignore
   }
 
+  let snapshot: ScratchpadSyncSnapshot = EMPTY_SYNC_SNAPSHOT;
+  let syncReadable = false;
   try {
     if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-      const allChunkKeys = [
-        SCRATCHPAD_META_KEY,
-        `${SCRATCHPAD_CHUNK_PREFIX}0`,
-        `${SCRATCHPAD_CHUNK_PREFIX}1`,
-        `${SCRATCHPAD_CHUNK_PREFIX}2`,
-        `${SCRATCHPAD_CHUNK_PREFIX}3`
-      ];
-      const syncData = await chrome.storage.sync.get(allChunkKeys);
-      const meta = syncData[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
-      if (meta && typeof meta.updatedAt === 'number') {
-        syncTime = meta.updatedAt;
-        syncText = assembleChunks(syncData, meta.chunkCount || 0);
-      }
+      snapshot = await readSyncScratchpad();
+      syncReadable = true;
     }
   } catch {
     // ignore
   }
 
-  const localTime = localDraft?.updatedAt || 0;
-  const localText = typeof localDraft?.text === 'string' ? localDraft.text : '';
+  const resolved = resolveScratchpad(localDraft, snapshot);
 
-  const resolvedText =
-    syncTime >= localTime ? syncText || localText : localText || syncText;
-  const resolvedTime = Math.max(syncTime, localTime) || Date.now();
-
-  if (resolvedText) {
-    // Ensure local draft, sync chunks, and bookmark backup all have the existing note
-    try {
-      if (chrome.storage?.local && (!localDraft || localDraft.text !== resolvedText)) {
-        await chrome.storage.local.set({
-          [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-            text: resolvedText,
-            updatedAt: resolvedTime
-          } as ScratchpadLocalDraft
-        });
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      if (chrome.storage?.sync && syncText !== resolvedText) {
-        const { chunks, chunkCount } = splitIntoChunks(resolvedText);
-        const payload: Record<string, unknown> = {
-          [SCRATCHPAD_META_KEY]: { updatedAt: resolvedTime, chunkCount } as ScratchpadMeta
-        };
-        for (let i = 0; i < chunkCount; i++) {
-          payload[`${SCRATCHPAD_CHUNK_PREFIX}${i}`] = chunks[i];
+  switch (resolved.source) {
+    case 'sync': {
+      try {
+        if (!localDraft || localDraft.text !== resolved.text || localDraft.updatedAt !== resolved.updatedAt) {
+          await writeLocalDraft(resolved.text, resolved.updatedAt);
         }
-        await chrome.storage.sync.set(payload);
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
+      await mirrorScratchpadToBookmark(resolved.text);
+      return resolved.text;
     }
 
-    await mirrorScratchpadToBookmark(resolvedText);
-    return resolvedText;
-  }
-
-  // Storage has no text: check bookmark backup (reinstall scenario)
-  const restored = await restoreScratchpadFromBookmark();
-  if (restored) {
-    const now = Date.now();
-    try {
-      if (chrome.storage?.local) {
-        await chrome.storage.local.set({
-          [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-            text: restored,
-            updatedAt: now
-          } as ScratchpadLocalDraft
-        });
-      }
-    } catch {
-      // ignore
-    }
-
-    try {
-      if (chrome.storage?.sync) {
-        const { chunks, chunkCount } = splitIntoChunks(restored);
-        const payload: Record<string, unknown> = {
-          [SCRATCHPAD_META_KEY]: { updatedAt: now, chunkCount } as ScratchpadMeta
-        };
-        for (let i = 0; i < chunkCount; i++) {
-          payload[`${SCRATCHPAD_CHUNK_PREFIX}${i}`] = chunks[i];
+    case 'local': {
+      try {
+        if (localDraft?.updatedAt !== resolved.updatedAt) {
+          await writeLocalDraft(resolved.text, resolved.updatedAt);
         }
-        await chrome.storage.sync.set(payload);
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
+      if (syncReadable) {
+        try {
+          await writeSyncScratchpad(resolved.text, resolved.updatedAt);
+        } catch (err) {
+          console.warn('[Arctic Scratchpad] Failed to push local draft to storage.sync:', err);
+        }
+      }
+      await mirrorScratchpadToBookmark(resolved.text);
+      return resolved.text;
     }
 
-    await mirrorScratchpadToBookmark(restored);
-    return restored;
-  }
+    case 'pending':
+      // Another device's revision is still arriving; the sidepanel listener applies it once complete
+      return resolved.text;
 
-  return '';
+    case 'none':
+    default: {
+      const restored = await restoreScratchpadFromBookmark();
+      if (!restored) return '';
+      try {
+        await writeLocalDraft(restored, 0);
+      } catch {
+        // ignore
+      }
+      if (syncReadable) {
+        try {
+          await writeSyncScratchpad(restored, 0);
+        } catch {
+          // ignore
+        }
+      }
+      return restored;
+    }
+  }
 }
 
 export function useScratchpad() {
@@ -399,101 +616,104 @@ export function useScratchpad() {
   const [isOpen, setIsOpen] = useState<boolean>(false);
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryAttemptRef = useRef<number>(0);
+  /**
+   * Highest revision timestamp this view knows about (its own edits and applied remote revisions).
+   * New edits are stamped with max(Date.now(), lastSavedAt + 1), a Lamport-style clock, so an edit
+   * made after seeing another device's revision always wins even if that device's clock is ahead.
+   */
   const lastSavedAtRef = useRef<number>(0);
-  const lastChunkCountRef = useRef<number>(0);
   const currentTextRef = useRef<string>('');
+  const flushRef = useRef<((content: string, timestamp: number) => Promise<void>) | null>(null);
 
   currentTextRef.current = text;
 
-  /**
-   * Save text to chrome.storage.sync across chunks with local & bookmark backup
-   */
-  const flushToSync = useCallback(async (contentToSave: string, timestamp = Date.now()) => {
-    const { chunks, chunkCount } = splitIntoChunks(contentToSave);
-    const meta: ScratchpadMeta = {
-      updatedAt: timestamp,
-      chunkCount
-    };
+  const nextTimestamp = useCallback(() => Math.max(Date.now(), lastSavedAtRef.current + 1), []);
 
-    const payload: Record<string, unknown> = {
-      [SCRATCHPAD_META_KEY]: meta
-    };
-
-    // Populate chunks to set
-    for (let i = 0; i < chunkCount; i++) {
-      payload[`${SCRATCHPAD_CHUNK_PREFIX}${i}`] = chunks[i];
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
     }
-
-    // Determine unused chunk keys to remove only if chunk count decreased
-    const keysToRemove: string[] = [];
-    if (chunkCount < lastChunkCountRef.current) {
-      for (let i = chunkCount; i < MAX_CHUNKS; i++) {
-        keysToRemove.push(`${SCRATCHPAD_CHUNK_PREFIX}${i}`);
-      }
-    }
-
-    try {
-      if (chrome.storage && chrome.storage.sync) {
-        if (keysToRemove.length > 0) {
-          try {
-            await chrome.storage.sync.remove(keysToRemove);
-          } catch {
-            // ignore removal error if keys don't exist
-          }
-        }
-        await chrome.storage.sync.set(payload);
-        lastSavedAtRef.current = timestamp;
-        lastChunkCountRef.current = chunkCount;
-        setSyncStatus('Synced');
-      } else {
-        setSyncStatus('Offline - Saved locally');
-      }
-    } catch (err) {
-      console.warn('[Arctic Scratchpad] Failed to save to storage.sync, keeping local backup:', err);
-      setSyncStatus('Offline - Saved locally');
-    }
-
-    // Always mirror content into bookmark hash even if storage.sync failed or quota was exceeded
-    await mirrorScratchpadToBookmark(contentToSave);
   }, []);
+
+  /**
+   * Save text to chrome.storage.sync across chunks, then mirror it into the bookmark backup.
+   * Retries with backoff on transient failures (e.g. write-rate quotas).
+   */
+  const flushToSync = useCallback(
+    async (contentToSave: string, timestamp: number) => {
+      // Skip writes superseded by a newer local edit or an applied remote revision
+      if (timestamp < lastSavedAtRef.current) return;
+
+      if (typeof chrome === 'undefined' || !chrome.storage?.sync) {
+        setSyncStatus('Offline - Saved locally');
+        await mirrorScratchpadToBookmark(contentToSave);
+        return;
+      }
+
+      try {
+        await writeSyncScratchpad(contentToSave, timestamp);
+        retryAttemptRef.current = 0;
+        if (timestamp >= lastSavedAtRef.current) {
+          setSyncStatus('Synced');
+        }
+      } catch (err) {
+        console.warn('[Arctic Scratchpad] Failed to save to storage.sync, keeping local backup:', err);
+        const { tooLarge, retryDelayMs } = classifySyncError(err, retryAttemptRef.current);
+        if (tooLarge) {
+          setSyncStatus('Too large to sync');
+        } else {
+          setSyncStatus('Retrying sync...');
+          retryAttemptRef.current += 1;
+          clearRetryTimer();
+          retryTimerRef.current = setTimeout(() => {
+            retryTimerRef.current = null;
+            flushRef.current?.(contentToSave, timestamp);
+          }, retryDelayMs);
+        }
+      }
+
+      // Always mirror content into bookmark hash even if storage.sync failed or quota was exceeded
+      await mirrorScratchpadToBookmark(contentToSave);
+    },
+    [clearRetryTimer]
+  );
+
+  flushRef.current = flushToSync;
 
   /**
    * Handle user typing / text changes
    */
-  const setText = useCallback((newText: string) => {
-    const bounded = newText.slice(0, MAX_CHARS);
-    setTextState(bounded);
-    setSyncStatus('Saving...');
+  const setText = useCallback(
+    (newText: string) => {
+      const bounded = newText.slice(0, MAX_CHARS);
+      setTextState(bounded);
+      currentTextRef.current = bounded;
+      setSyncStatus('Saving...');
 
-    const timestamp = Date.now();
-    lastSavedAtRef.current = timestamp;
+      const timestamp = nextTimestamp();
+      lastSavedAtRef.current = timestamp;
+      clearRetryTimer();
 
-    // Fast local draft backup (never lost if sidepanel unloads mid-typing)
-    if (chrome.storage && chrome.storage.local) {
-      try {
-        chrome.storage.local.set({
-          [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-            text: bounded,
-            updatedAt: timestamp
-          } as ScratchpadLocalDraft
-        });
-      } catch (err) {
+      // Fast local draft backup (never lost if sidepanel unloads mid-typing)
+      writeLocalDraft(bounded, timestamp).catch((err) => {
         console.warn('[Arctic Scratchpad] Error saving local draft:', err);
+      });
+
+      // Debounce the sync write and bookmark mirror to stay within chrome.storage.sync write quotas
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
       }
-    }
 
-    // Immediately mirror to bookmark backup so closing sidepanel or reinstalling before 1000ms never loses notes
-    mirrorScratchpadToBookmark(bounded);
-
-    // Debounce sync write by 1000ms
-    if (debounceTimerRef.current) {
-      clearTimeout(debounceTimerRef.current);
-    }
-
-    debounceTimerRef.current = setTimeout(() => {
-      flushToSync(bounded, timestamp);
-    }, 1000);
-  }, [flushToSync]);
+      debounceTimerRef.current = setTimeout(() => {
+        debounceTimerRef.current = null;
+        flushToSync(bounded, timestamp);
+      }, SYNC_DEBOUNCE_MS);
+    },
+    [flushToSync, nextTimestamp, clearRetryTimer]
+  );
 
   /**
    * Clear scratchpad content completely
@@ -501,23 +721,19 @@ export function useScratchpad() {
   const clearScratchpad = useCallback(() => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
     }
+    clearRetryTimer();
     setTextState('');
+    currentTextRef.current = '';
     setSyncStatus('Saving...');
-    const timestamp = Date.now();
+    const timestamp = nextTimestamp();
     lastSavedAtRef.current = timestamp;
 
-    if (chrome.storage && chrome.storage.local) {
-      chrome.storage.local.set({
-        [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-          text: '',
-          updatedAt: timestamp
-        } as ScratchpadLocalDraft
-      });
-    }
+    writeLocalDraft('', timestamp).catch(() => {});
 
     flushToSync('', timestamp);
-  }, [flushToSync]);
+  }, [flushToSync, nextTimestamp, clearRetryTimer]);
 
   /**
    * Copy scratchpad content to system clipboard
@@ -543,41 +759,24 @@ export function useScratchpad() {
     let isMounted = true;
 
     async function loadInitial() {
-      let localDraft: ScratchpadLocalDraft | null = null;
-
       // 1. Load fast local draft first
+      let localDraft: ScratchpadLocalDraft | null = null;
       try {
-        if (chrome.storage && chrome.storage.local) {
-          const localData = await chrome.storage.local.get(SCRATCHPAD_LOCAL_DRAFT_KEY);
-          if (localData[SCRATCHPAD_LOCAL_DRAFT_KEY]) {
-            localDraft = localData[SCRATCHPAD_LOCAL_DRAFT_KEY] as ScratchpadLocalDraft;
-            if (isMounted && typeof localDraft.text === 'string') {
-              setTextState(localDraft.text);
-              lastSavedAtRef.current = localDraft.updatedAt || 0;
-            }
-          }
+        localDraft = await readLocalDraft();
+        if (localDraft && isMounted && typeof localDraft.text === 'string') {
+          setTextState(localDraft.text);
+          lastSavedAtRef.current = localDraft.updatedAt || 0;
         }
       } catch (err) {
         console.warn('[Arctic Scratchpad] Error reading initial local draft:', err);
       }
+      const baselineTimestamp = lastSavedAtRef.current;
 
       // 2. Fetch sync storage chunks
-      let meta: ScratchpadMeta | undefined;
-      let syncAssembled = '';
+      let snapshot: ScratchpadSyncSnapshot = EMPTY_SYNC_SNAPSHOT;
       try {
-        if (chrome.storage && chrome.storage.sync) {
-          const allChunkKeys = [
-            SCRATCHPAD_META_KEY,
-            `${SCRATCHPAD_CHUNK_PREFIX}0`,
-            `${SCRATCHPAD_CHUNK_PREFIX}1`,
-            `${SCRATCHPAD_CHUNK_PREFIX}2`,
-            `${SCRATCHPAD_CHUNK_PREFIX}3`
-          ];
-          const syncData = await chrome.storage.sync.get(allChunkKeys);
-          meta = syncData[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
-          if (meta && typeof meta.updatedAt === 'number') {
-            syncAssembled = assembleChunks(syncData, meta.chunkCount || 0);
-          }
+        if (chrome.storage?.sync) {
+          snapshot = await readSyncScratchpad();
         }
       } catch (err) {
         console.warn('[Arctic Scratchpad] Error loading from storage.sync:', err);
@@ -586,49 +785,51 @@ export function useScratchpad() {
         }
       }
 
-      const syncTime = meta && typeof meta.updatedAt === 'number' ? meta.updatedAt : 0;
-      const localTime = localDraft?.updatedAt || 0;
-      const localText = typeof localDraft?.text === 'string' ? localDraft.text : '';
+      // The user started typing (or a remote revision was applied) while loading: keep that state
+      if (!isMounted || lastSavedAtRef.current !== baselineTimestamp) return;
 
-      if (meta && typeof meta.updatedAt === 'number' && syncTime >= localTime && syncAssembled) {
-        if (isMounted) {
-          setTextState(syncAssembled);
-          lastSavedAtRef.current = syncTime;
-          lastChunkCountRef.current = meta.chunkCount || 0;
+      const resolved = resolveScratchpad(localDraft, snapshot);
+
+      switch (resolved.source) {
+        case 'sync': {
+          setTextState(resolved.text);
+          lastSavedAtRef.current = resolved.updatedAt;
           setSyncStatus('Synced');
-          if (chrome.storage && chrome.storage.local) {
-            chrome.storage.local.set({
-              [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-                text: syncAssembled,
-                updatedAt: syncTime
-              } as ScratchpadLocalDraft
-            });
+          if (!localDraft || localDraft.text !== resolved.text || localDraft.updatedAt !== resolved.updatedAt) {
+            writeLocalDraft(resolved.text, resolved.updatedAt).catch(() => {});
           }
+          // Ensure existing synced notes are mirrored into the backup bookmark for reinstall retention
+          await mirrorScratchpadToBookmark(resolved.text);
+          break;
         }
-        // Ensure existing synced notes are mirrored into the backup bookmark for reinstall retention
-        await mirrorScratchpadToBookmark(syncAssembled);
-      } else if (localText) {
-        // Local draft is newer than sync (or sync has no text yet): flush local draft to sync & bookmark
-        if (isMounted) {
-          await flushToSync(localText, localDraft?.updatedAt || Date.now());
-        }
-      } else {
-        // 3. Fallback: Both local and sync storage have no text (reinstall scenario) - restore from bookmark hash if present
-        const restored = await restoreScratchpadFromBookmark();
-        if (restored && isMounted) {
-          const now = Date.now();
-          setTextState(restored);
-          lastSavedAtRef.current = now;
-          setSyncStatus('Synced');
-          if (chrome.storage && chrome.storage.local) {
-            chrome.storage.local.set({
-              [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-                text: restored,
-                updatedAt: now
-              } as ScratchpadLocalDraft
-            });
+
+        case 'local': {
+          // Local draft is newer than sync (or sync has no note yet): push it to sync & bookmark
+          lastSavedAtRef.current = resolved.updatedAt;
+          if (localDraft?.updatedAt !== resolved.updatedAt) {
+            writeLocalDraft(resolved.text, resolved.updatedAt).catch(() => {});
           }
-          await flushToSync(restored, now);
+          await flushToSync(resolved.text, resolved.updatedAt);
+          break;
+        }
+
+        case 'pending':
+          // Chunks from another device are still arriving; the storage listener applies them once complete
+          break;
+
+        case 'none':
+        default: {
+          // 3. Nothing in local or sync storage (reinstall scenario): restore from bookmark hash if present.
+          // Stamped with updatedAt 0 so a real revision arriving later from Chrome Sync always wins.
+          const restored = await restoreScratchpadFromBookmark();
+          if (restored && isMounted && lastSavedAtRef.current === baselineTimestamp) {
+            setTextState(restored);
+            lastSavedAtRef.current = 0;
+            setSyncStatus('Synced');
+            writeLocalDraft(restored, 0).catch(() => {});
+            await flushToSync(restored, 0);
+          }
+          break;
         }
       }
     }
@@ -637,12 +838,17 @@ export function useScratchpad() {
 
     return () => {
       isMounted = false;
+      const hadPendingWrite = Boolean(debounceTimerRef.current || retryTimerRef.current);
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      clearRetryTimer();
+      if (hadPendingWrite) {
         flushToSync(currentTextRef.current, lastSavedAtRef.current);
       }
     };
-  }, [flushToSync]);
+  }, [flushToSync, clearRetryTimer]);
 
   /**
    * Real-time cross-device sync: Listen for changes from chrome.storage.sync
@@ -662,40 +868,33 @@ export function useScratchpad() {
       if (!hasMetaChange && !hasChunkChange) return;
 
       try {
-        let meta = changes[SCRATCHPAD_META_KEY]?.newValue as ScratchpadMeta | undefined;
-        if (!meta) {
-          const syncMeta = await chrome.storage.sync.get(SCRATCHPAD_META_KEY);
-          meta = syncMeta[SCRATCHPAD_META_KEY] as ScratchpadMeta | undefined;
+        // Always read the full revision: meta and chunks may arrive in separate change events
+        const snapshot = await readSyncScratchpad();
+        const { meta } = snapshot;
+
+        // Wait until every chunk of this revision has arrived (verified against meta.hash)
+        if (!meta || !snapshot.complete) return;
+
+        // Ignore our own writes and revisions older than what this view already has
+        if (meta.updatedAt <= lastSavedAtRef.current) return;
+
+        // A newer revision from another device supersedes any pending local write
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+          debounceTimerRef.current = null;
+        }
+        if (retryTimerRef.current) {
+          clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
         }
 
-        // If new sync timestamp is newer than our local state, update
-        if (meta && typeof meta.updatedAt === 'number' && meta.updatedAt > lastSavedAtRef.current) {
-          const allChunkKeys = [
-            SCRATCHPAD_META_KEY,
-            `${SCRATCHPAD_CHUNK_PREFIX}0`,
-            `${SCRATCHPAD_CHUNK_PREFIX}1`,
-            `${SCRATCHPAD_CHUNK_PREFIX}2`,
-            `${SCRATCHPAD_CHUNK_PREFIX}3`
-          ];
-          const syncData = await chrome.storage.sync.get(allChunkKeys);
-          const assembled = assembleChunks(syncData, meta.chunkCount || 0);
+        setTextState(snapshot.text);
+        currentTextRef.current = snapshot.text;
+        lastSavedAtRef.current = meta.updatedAt;
+        setSyncStatus('Synced');
 
-          setTextState(assembled);
-          lastSavedAtRef.current = meta.updatedAt;
-          lastChunkCountRef.current = meta.chunkCount || 0;
-          setSyncStatus('Synced');
-
-          if (chrome.storage && chrome.storage.local) {
-            chrome.storage.local.set({
-              [SCRATCHPAD_LOCAL_DRAFT_KEY]: {
-                text: assembled,
-                updatedAt: meta.updatedAt
-              } as ScratchpadLocalDraft
-            });
-          }
-
-          await mirrorScratchpadToBookmark(assembled);
-        }
+        // The originating device mirrors the bookmark backup; only the local draft is updated here
+        writeLocalDraft(snapshot.text, meta.updatedAt).catch(() => {});
       } catch (err) {
         console.warn('[Arctic Scratchpad] Error handling cross-device sync change:', err);
       }

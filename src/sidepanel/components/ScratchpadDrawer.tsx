@@ -83,7 +83,11 @@ export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
               title={
                 syncStatus === 'Saving...'
                   ? 'Saving changes...'
-                  : 'Saved to local device storage'
+                  : syncStatus === 'Retrying sync...'
+                    ? 'Chrome Sync rejected the last save (likely a write-rate limit). Saved on this device; retrying automatically.'
+                    : syncStatus === 'Too large to sync'
+                      ? 'This note exceeds Chrome Sync storage limits. It is saved on this device and in the bookmark backup.'
+                      : 'Saved to local device storage'
               }
             >
               {syncStatus === 'Saving...' ? (
