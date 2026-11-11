@@ -1,5 +1,16 @@
 if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.getCurrent) {
   chrome.tabs.getCurrent((currentTab) => {
+    if (currentTab && currentTab.active === false) {
+      if (typeof currentTab.id === 'number') {
+        chrome.tabs.remove(currentTab.id, () => {
+          void chrome.runtime.lastError;
+        });
+      } else {
+        window.close();
+      }
+      return;
+    }
+
     chrome.tabs.create(
       {
         url: chrome.runtime.getURL('command.html'),
@@ -8,7 +19,9 @@ if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.getCurrent) {
       },
       () => {
         if (currentTab && typeof currentTab.id === 'number') {
-          chrome.tabs.remove(currentTab.id);
+          chrome.tabs.remove(currentTab.id, () => {
+            void chrome.runtime.lastError;
+          });
         } else {
           window.close();
         }

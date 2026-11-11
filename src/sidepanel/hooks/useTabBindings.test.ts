@@ -705,4 +705,49 @@ describe('useTabBindings hook', () => {
     expect(result.current.bookmarkIdByTabId[401]).toBeUndefined();
     expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([401]);
   });
+
+  it('closes opened empty Arctic Command tabs when focus switches to another tab or Cmd+T is pressed repeatedly', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 501,
+        windowId: 10,
+        url: 'https://news.ycombinator.com',
+        title: 'Hacker News',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 502,
+        windowId: 10,
+        url: 'chrome-extension://mock-extension-id/command.html',
+        title: 'Arctic Command',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Pressing Cmd+T opens another empty Arctic Command tab (id: 503) and focuses it
+    await act(async () => {
+      await mockChrome.tabs.create({
+        url: 'chrome-extension://mock-extension-id/command.html',
+        active: true,
+        windowId: 10
+      });
+    });
+
+    // Previous empty Arctic Command tab (502) should be closed automatically, leaving 501 and 503
+    expect(mockChrome.__getTabs().map((t) => t.id)).toEqual([501, 503]);
+
+    // Now switch focus to the existing Hacker News tab (501)
+    await act(async () => {
+      await result.current.focusTab(501);
+    });
+
+    // The unfocused empty Arctic Command tab (503) is also closed automatically
+    expect(mockChrome.__getTabs().map((t) => t.id)).toEqual([501]);
+    expect(result.current.activeTabId).toBe(501);
+  });
 });

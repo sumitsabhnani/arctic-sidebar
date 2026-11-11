@@ -7,6 +7,7 @@ import {
   REMINDERS_STORAGE_KEY
 } from '../sidepanel/utils/reminderStorage';
 import { reconcileScratchpadStorageAndBookmark } from '../sidepanel/hooks/useScratchpad';
+import { closeInactiveArcticCommandTabs } from '../sidepanel/hooks/useTabBindings';
 
 // Configure side panel behavior on installation & startup
 export async function handleInstalled(): Promise<void> {
@@ -93,6 +94,42 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     await saveSessionState(session);
   }
 });
+
+/**
+ * Handle tab activation: close any unfocused empty Arctic Command / New Tab pages in the window
+ */
+export async function handleTabActivated(
+  activeInfo: chrome.tabs.TabActiveInfo
+): Promise<void> {
+  const session = await getSessionState();
+  await closeInactiveArcticCommandTabs(
+    activeInfo.windowId,
+    activeInfo.tabId,
+    session.bookmarkIdByTabId
+  );
+}
+
+if (chrome.tabs && chrome.tabs.onActivated) {
+  chrome.tabs.onActivated.addListener(handleTabActivated);
+}
+
+/**
+ * Handle active tab creation: close any previously open empty Arctic Command / New Tab pages
+ */
+export async function handleTabCreated(tab: chrome.tabs.Tab): Promise<void> {
+  if (tab.active && typeof tab.id === 'number' && typeof tab.windowId === 'number') {
+    const session = await getSessionState();
+    await closeInactiveArcticCommandTabs(
+      tab.windowId,
+      tab.id,
+      session.bookmarkIdByTabId
+    );
+  }
+}
+
+if (chrome.tabs && chrome.tabs.onCreated) {
+  chrome.tabs.onCreated.addListener(handleTabCreated);
+}
 
 /**
  * Handle tab replacement (e.g. Chrome prerendering swap)
