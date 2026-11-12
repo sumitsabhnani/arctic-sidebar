@@ -91,6 +91,9 @@ export function createMockChrome() {
   const bookmarkChangedListeners = new Set<(id: string, changeInfo: { title: string; url?: string }) => void>();
   const bookmarkMovedListeners = new Set<(id: string, moveInfo: { parentId: string; index: number; oldParentId: string; oldIndex: number }) => void>();
   const runtimeMessageListeners = new Set<(message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => void>();
+  const runtimeConnectListeners = new Set<(port: chrome.runtime.Port) => void>();
+  let hostPermissionsGranted = false;
+  let registeredScripts: chrome.scripting.RegisteredContentScript[] = [];
 
   function findNode(nodes: MockBookmarkNode[], id: string): MockBookmarkNode | null {
     for (const n of nodes) {
@@ -127,12 +130,77 @@ export function createMockChrome() {
       getURL: vi.fn((path: string) => `chrome-extension://mock-extension-id/${path}`),
       onInstalled: { addListener: vi.fn() },
       onStartup: { addListener: vi.fn() },
-      sendMessage: vi.fn((message: unknown) => {
+      sendMessage: vi.fn((message: unknown, cb?: (response?: unknown) => void) => {
+        let responded = false;
+        const sendResponse = (resp?: unknown) => {
+          if (!responded) {
+            responded = true;
+            if (typeof cb === 'function') cb(resp);
+          }
+        };
+        const activeTab = tabsState.find((t) => t.active) || tabsState[0];
+        const sender = { tab: activeTab } as chrome.runtime.MessageSender;
+        let handledAsync = false;
         for (const listener of runtimeMessageListeners) {
-          listener(message, {} as chrome.runtime.MessageSender, () => {});
+          const ret = listener(message, sender, sendResponse) as unknown;
+          if (ret === true) handledAsync = true;
+        }
+        if (!handledAsync && !responded && typeof cb === 'function') {
+          cb(undefined);
         }
         return Promise.resolve();
       }),
+      connect: vi.fn((connectInfo?: { name?: string }) => {
+        const portMsgListeners = new Set<(msg: unknown) => void>();
+        const portDisconnectListeners = new Set<() => void>();
+        const remoteMsgListeners = new Set<(msg: unknown) => void>();
+        const remoteDisconnectListeners = new Set<() => void>();
+
+        const clientPort = {
+          name: connectInfo?.name || '',
+          postMessage: vi.fn((msg: unknown) => {
+            for (const fn of remoteMsgListeners) fn(msg);
+          }),
+          disconnect: vi.fn(() => {
+            for (const fn of remoteDisconnectListeners) fn();
+          }),
+          onMessage: {
+            addListener: vi.fn((fn) => portMsgListeners.add(fn)),
+            removeListener: vi.fn((fn) => portMsgListeners.delete(fn))
+          },
+          onDisconnect: {
+            addListener: vi.fn((fn) => portDisconnectListeners.add(fn)),
+            removeListener: vi.fn((fn) => portDisconnectListeners.delete(fn))
+          }
+        } as unknown as chrome.runtime.Port;
+
+        const serverPort = {
+          name: connectInfo?.name || '',
+          postMessage: vi.fn((msg: unknown) => {
+            for (const fn of portMsgListeners) fn(msg);
+          }),
+          disconnect: vi.fn(() => {
+            for (const fn of portDisconnectListeners) fn();
+          }),
+          onMessage: {
+            addListener: vi.fn((fn) => remoteMsgListeners.add(fn)),
+            removeListener: vi.fn((fn) => remoteMsgListeners.delete(fn))
+          },
+          onDisconnect: {
+            addListener: vi.fn((fn) => remoteDisconnectListeners.add(fn)),
+            removeListener: vi.fn((fn) => remoteDisconnectListeners.delete(fn))
+          }
+        } as unknown as chrome.runtime.Port;
+
+        for (const listener of runtimeConnectListeners) {
+          listener(serverPort);
+        }
+        return clientPort;
+      }),
+      onConnect: {
+        addListener: vi.fn((fn) => runtimeConnectListeners.add(fn)),
+        removeListener: vi.fn((fn) => runtimeConnectListeners.delete(fn))
+      },
       onMessage: {
         addListener: vi.fn((fn) => runtimeMessageListeners.add(fn)),
         removeListener: vi.fn((fn) => runtimeMessageListeners.delete(fn))
@@ -498,6 +566,7 @@ export function createMockChrome() {
         return undefined;
       }),
       getCurrent: vi.fn(async () => cloneTree(tabsState[0])),
+      sendMessage: vi.fn(async (_tabId: number, _message: unknown) => Promise.resolve()),
       goBack: vi.fn(async (_tabId?: number) => Promise.resolve()),
       onActivated: {
         addListener: vi.fn((fn) => tabActivatedListeners.add(fn)),
@@ -569,6 +638,10 @@ export function createMockChrome() {
       onFocusChanged: {
         addListener: vi.fn((fn) => windowFocusListeners.add(fn)),
         removeListener: vi.fn((fn) => windowFocusListeners.delete(fn))
+      },
+      onRemoved: {
+        addListener: vi.fn(),
+        removeListener: vi.fn()
       }
     },
     history: {
@@ -674,8 +747,44 @@ export function createMockChrome() {
         if (cb) cb();
       })
     },
+    permissions: {
+      contains: vi.fn(async () => hostPermissionsGranted),
+      request: vi.fn(async () => {
+        hostPermissionsGranted = true;
+        return true;
+      }),
+      remove: vi.fn(async () => {
+        hostPermissionsGranted = false;
+        return true;
+      })
+    },
+    scripting: {
+      getRegisteredContentScripts: vi.fn(async (filter?: { ids?: string[] }) => {
+        if (filter?.ids) {
+          return registeredScripts.filter((s) => filter.ids!.includes(s.id));
+        }
+        return [...registeredScripts];
+      }),
+      registerContentScripts: vi.fn(async (scripts: chrome.scripting.RegisteredContentScript[]) => {
+        for (const s of scripts) {
+          registeredScripts = registeredScripts.filter((existing) => existing.id !== s.id);
+          registeredScripts.push(s);
+        }
+      }),
+      unregisterContentScripts: vi.fn(async (filter?: { ids?: string[] }) => {
+        if (filter?.ids) {
+          registeredScripts = registeredScripts.filter((s) => !filter.ids!.includes(s.id));
+        } else {
+          registeredScripts = [];
+        }
+      }),
+      executeScript: vi.fn(async () => [])
+    },
 
     // Test helpers to inspect or reset internal states
+    __setHostPermissionsGranted: (granted: boolean) => {
+      hostPermissionsGranted = granted;
+    },
     __setLocalStorage: (state: Record<string, unknown>) => {
       localStorageState = { ...state };
     },
@@ -755,6 +864,9 @@ export function createMockChrome() {
       bookmarkChangedListeners.clear();
       bookmarkMovedListeners.clear();
       runtimeMessageListeners.clear();
+      runtimeConnectListeners.clear();
+      hostPermissionsGranted = false;
+      registeredScripts = [];
       alarmListeners.clear();
       notifClickedListeners.clear();
       notifButtonClickedListeners.clear();
@@ -764,6 +876,16 @@ export function createMockChrome() {
       badgeText = '';
       badgeColor = '';
       mock.search.query.mockClear();
+      mock.sidePanel.open.mockClear();
+      mock.runtime.sendMessage.mockClear();
+      mock.tabs.sendMessage.mockClear();
+      mock.permissions.contains.mockClear();
+      mock.permissions.request.mockClear();
+      mock.permissions.remove.mockClear();
+      mock.scripting.getRegisteredContentScripts.mockClear();
+      mock.scripting.registerContentScripts.mockClear();
+      mock.scripting.unregisterContentScripts.mockClear();
+      mock.scripting.executeScript.mockClear();
     },
     __triggerAlarm: async (name: string) => {
       const alarm: chrome.alarms.Alarm = alarmsMap.get(name) || { name, scheduledTime: Date.now() };

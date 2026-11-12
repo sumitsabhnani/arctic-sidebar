@@ -13,11 +13,13 @@ import { ReminderPopover } from './components/ReminderPopover';
 import { useScratchpad } from './hooks/useScratchpad';
 import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
-import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
+import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode, EdgeTriggerMode } from '../types';
 import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
 import { isScratchpadUrl } from './utils/url';
 import { upsertPersistedBindings } from './utils/reconcileBindings';
-import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft } from 'lucide-react';
+import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose } from 'lucide-react';
+
+const EDGE_TRIGGER_ORIGINS = ['http://*/*', 'https://*/*'];
 
 export const App: React.FC = () => {
   const {
@@ -130,6 +132,13 @@ export const App: React.FC = () => {
   const [tabsDensity, setTabsDensity] = useState<'relaxed' | 'compact'>('compact');
   const [showMemorySaverBar, setShowMemorySaverBar] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [edgeTriggerEnabled, setEdgeTriggerEnabled] = useState<boolean>(false);
+  const [edgeTriggerMode, setEdgeTriggerMode] = useState<EdgeTriggerMode>('push');
+  const [hasEdgeHostPermission, setHasEdgeHostPermission] = useState<boolean>(false);
+  const [sidebarDockSide, setSidebarDockSide] = useState<'left' | 'right'>('left');
+  const [showEdgeTriggerPrompt, setShowEdgeTriggerPrompt] = useState<boolean>(false);
+  const sidePanelWindowIdRef = React.useRef<number | null>(null);
+  const isClosingPanelRef = React.useRef<boolean>(false);
 
   // Section Collapsed States
   const [collapsedSections, setCollapsedSections] = useState<{
@@ -152,6 +161,9 @@ export const App: React.FC = () => {
         'tabsDensity',
         'densityMode',
         'showMemorySaverBar',
+        'edgeTriggerEnabled',
+        'edgeTriggerMode',
+        'sidebarDockSide',
         'openArcticSettings'
       ],
       (res) => {
@@ -171,6 +183,15 @@ export const App: React.FC = () => {
         }
         if (typeof res.showMemorySaverBar === 'boolean') {
           setShowMemorySaverBar(res.showMemorySaverBar);
+        }
+        if (typeof res.edgeTriggerEnabled === 'boolean') {
+          setEdgeTriggerEnabled(res.edgeTriggerEnabled);
+        }
+        if (res.edgeTriggerMode === 'push' || res.edgeTriggerMode === 'hover') {
+          setEdgeTriggerMode(res.edgeTriggerMode);
+        }
+        if (res.sidebarDockSide === 'left' || res.sidebarDockSide === 'right') {
+          setSidebarDockSide(res.sidebarDockSide);
         }
         if (res.collapsedSections) {
           setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
@@ -205,6 +226,22 @@ export const App: React.FC = () => {
         }
         if (changes.showMemorySaverBar && typeof changes.showMemorySaverBar.newValue === 'boolean') {
           setShowMemorySaverBar(changes.showMemorySaverBar.newValue);
+        }
+        if (changes.edgeTriggerEnabled && typeof changes.edgeTriggerEnabled.newValue === 'boolean') {
+          setEdgeTriggerEnabled(changes.edgeTriggerEnabled.newValue);
+        }
+        if (
+          changes.edgeTriggerMode &&
+          (changes.edgeTriggerMode.newValue === 'push' ||
+            changes.edgeTriggerMode.newValue === 'hover')
+        ) {
+          setEdgeTriggerMode(changes.edgeTriggerMode.newValue);
+        }
+        if (
+          changes.sidebarDockSide &&
+          (changes.sidebarDockSide.newValue === 'left' || changes.sidebarDockSide.newValue === 'right')
+        ) {
+          setSidebarDockSide(changes.sidebarDockSide.newValue);
         }
         if (changes.collapsedSections && changes.collapsedSections.newValue) {
           setCollapsedSections(
@@ -320,6 +357,209 @@ export const App: React.FC = () => {
   const handleToggleMemorySaverBar = useCallback((show: boolean) => {
     setShowMemorySaverBar(show);
     chrome.storage.local.set({ showMemorySaverBar: show } as LocalSettings);
+  }, []);
+
+  // Track Side Panel open/close lifecycle via runtime port & check optional host permissions
+  useEffect(() => {
+    let unmounted = false;
+    let port: chrome.runtime.Port | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    if (chrome?.permissions?.contains) {
+      Promise.resolve(chrome.permissions.contains({ origins: EDGE_TRIGGER_ORIGINS }))
+        .then((granted) => {
+          if (!unmounted) {
+            setHasEdgeHostPermission(Boolean(granted));
+          }
+        })
+        .catch(() => {});
+    }
+
+    const sp = chrome?.sidePanel as typeof chrome.sidePanel & {
+      getLayout?: () => Promise<{ side?: 'left' | 'right' }>;
+    };
+    if (sp && typeof sp.getLayout === 'function') {
+      sp.getLayout()
+        .then((layout) => {
+          if (!unmounted && (layout?.side === 'left' || layout?.side === 'right')) {
+            setSidebarDockSide(layout.side);
+            chrome.storage.local.set({ sidebarDockSide: layout.side } as LocalSettings);
+          }
+        })
+        .catch(() => {});
+    }
+
+    const connectPort = (winId: number) => {
+      if (unmounted || !chrome?.runtime?.connect) return;
+      try {
+        port = chrome.runtime.connect({ name: 'arctic-sidepanel' });
+        port.postMessage({ type: 'SIDEPANEL_INIT', windowId: winId });
+        port.onDisconnect.addListener(() => {
+          void chrome.runtime?.lastError;
+          port = null;
+          if (!unmounted && !isClosingPanelRef.current) {
+            reconnectTimer = setTimeout(() => connectPort(winId), 250);
+          }
+        });
+      } catch {
+        // ignore if connect unavailable in test environment
+      }
+    };
+
+    if (chrome?.windows?.getCurrent) {
+      chrome.windows.getCurrent((win) => {
+        if (unmounted || !win || typeof win.id !== 'number') return;
+        sidePanelWindowIdRef.current = win.id;
+        connectPort(win.id);
+      });
+    }
+
+    const handlePageHide = () => {
+      const winId = sidePanelWindowIdRef.current;
+      if (typeof winId === 'number') {
+        try {
+          chrome.runtime?.sendMessage?.({ type: 'SIDEPANEL_WILL_CLOSE', windowId: winId });
+        } catch {
+          // ignore
+        }
+      }
+    };
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      unmounted = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      window.removeEventListener('pagehide', handlePageHide);
+      try {
+        port?.disconnect();
+      } catch {
+        // ignore
+      }
+    };
+  }, []);
+
+  const prepareAndCloseSidePanel = useCallback(async (injectIntoOpenTabs: boolean) => {
+    isClosingPanelRef.current = true;
+    let winId = sidePanelWindowIdRef.current;
+    if (typeof winId !== 'number' && chrome?.windows?.getCurrent) {
+      try {
+        const win = await chrome.windows.getCurrent();
+        if (typeof win?.id === 'number') {
+          winId = win.id;
+          sidePanelWindowIdRef.current = win.id;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (injectIntoOpenTabs) {
+      try {
+        await chrome.runtime?.sendMessage?.({
+          type: 'PREPARE_HIDE_SIDEBAR',
+          windowId: typeof winId === 'number' ? winId : undefined,
+          injectIntoOpenTabs: true
+        });
+      } catch {
+        // ignore
+      }
+    } else if (typeof winId === 'number') {
+      try {
+        await chrome.runtime?.sendMessage?.({
+          type: 'SIDEPANEL_WILL_CLOSE',
+          windowId: winId
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    if (typeof window !== 'undefined' && typeof window.close === 'function') {
+      window.close();
+    }
+  }, []);
+
+  const handleHideSidebarClick = useCallback(() => {
+    if (edgeTriggerEnabled && hasEdgeHostPermission) {
+      void prepareAndCloseSidePanel(true);
+      return;
+    }
+    setShowEdgeTriggerPrompt(true);
+  }, [edgeTriggerEnabled, hasEdgeHostPermission, prepareAndCloseSidePanel]);
+
+  const handleEnableEdgeTriggerAndHide = useCallback(() => {
+    const finalizeEnableAndHide = async () => {
+      setHasEdgeHostPermission(true);
+      setEdgeTriggerEnabled(true);
+      setShowEdgeTriggerPrompt(false);
+      await chrome.storage.local.set({ edgeTriggerEnabled: true } as LocalSettings);
+      await prepareAndCloseSidePanel(true);
+    };
+
+    // CRITICAL: Call chrome.permissions.request synchronously in the click handler
+    // to preserve Chrome's transient user gesture requirement.
+    if (!hasEdgeHostPermission && chrome?.permissions?.request) {
+      Promise.resolve(chrome.permissions.request({ origins: EDGE_TRIGGER_ORIGINS }))
+        .then((granted) => {
+          if (granted) {
+            void finalizeEnableAndHide();
+          }
+        })
+        .catch(() => {});
+      return;
+    }
+
+    void finalizeEnableAndHide();
+  }, [hasEdgeHostPermission, prepareAndCloseSidePanel]);
+
+  const handleHideWithoutEdgeTrigger = useCallback(() => {
+    setShowEdgeTriggerPrompt(false);
+    void prepareAndCloseSidePanel(false);
+  }, [prepareAndCloseSidePanel]);
+
+  const handleToggleEdgeTrigger = useCallback(
+    (enabled: boolean) => {
+      if (!enabled) {
+        setEdgeTriggerEnabled(false);
+        chrome.storage.local.set({ edgeTriggerEnabled: false } as LocalSettings);
+        try {
+          chrome.runtime?.sendMessage?.({ type: 'SYNC_EDGE_TRIGGER', injectIntoOpenTabs: false });
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      const activate = () => {
+        setHasEdgeHostPermission(true);
+        setEdgeTriggerEnabled(true);
+        chrome.storage.local.set({ edgeTriggerEnabled: true } as LocalSettings);
+        try {
+          chrome.runtime?.sendMessage?.({ type: 'SYNC_EDGE_TRIGGER', injectIntoOpenTabs: true });
+        } catch {
+          // ignore
+        }
+      };
+
+      if (!hasEdgeHostPermission && chrome?.permissions?.request) {
+        Promise.resolve(chrome.permissions.request({ origins: EDGE_TRIGGER_ORIGINS }))
+          .then((granted) => {
+            if (granted) {
+              activate();
+            }
+          })
+          .catch(() => {});
+        return;
+      }
+
+      activate();
+    },
+    [hasEdgeHostPermission]
+  );
+
+  const handleChangeEdgeTriggerMode = useCallback((nextMode: EdgeTriggerMode) => {
+    setEdgeTriggerMode(nextMode);
+    chrome.storage.local.set({ edgeTriggerMode: nextMode } as LocalSettings);
   }, []);
 
   // First-run Left-Side Tip State
@@ -1195,7 +1435,7 @@ export const App: React.FC = () => {
     <div
       style={{ background: 'var(--theme-bg-gradient)' }}
       onPointerDown={(e) => {
-        if (showLeftSideTip && chrome?.windows?.getCurrent) {
+        if (chrome?.windows?.getCurrent && (e.screenX !== 0 || e.clientX !== 0)) {
           chrome.windows.getCurrent((win) => {
             if (
               win &&
@@ -1204,7 +1444,15 @@ export const App: React.FC = () => {
               win.width > 0
             ) {
               const panelScreenLeft = e.screenX - e.clientX;
-              if (panelScreenLeft - win.left < win.width / 2) {
+              const detectedSide: 'left' | 'right' =
+                panelScreenLeft - win.left < win.width / 2 ? 'left' : 'right';
+              setSidebarDockSide((prev) => {
+                if (prev !== detectedSide) {
+                  chrome.storage.local.set({ sidebarDockSide: detectedSide } as LocalSettings);
+                }
+                return detectedSide;
+              });
+              if (showLeftSideTip && detectedSide === 'left') {
                 dismissLeftSideTip();
               }
             }
@@ -1220,6 +1468,8 @@ export const App: React.FC = () => {
         onReloadActiveTab={reloadActiveTab}
         onNavigateActiveTab={navigateActiveTab}
         onGoBackActiveTab={goBackActiveTab}
+        onHideSidebar={handleHideSidebarClick}
+        sidebarDockSide={sidebarDockSide}
       />
 
       {/* First-Run Left-Side Positioning Tip Banner */}
@@ -1729,6 +1979,8 @@ export const App: React.FC = () => {
         quickAccessDensity={quickAccessDensity}
         tabsDensity={tabsDensity}
         showMemorySaverBar={showMemorySaverBar}
+        edgeTriggerEnabled={edgeTriggerEnabled && hasEdgeHostPermission}
+        edgeTriggerMode={edgeTriggerMode}
         allFolders={allFolders}
         activeFolderIds={activeFolderIds}
         autoArchiveInterval={autoArchiveInterval}
@@ -1738,12 +1990,79 @@ export const App: React.FC = () => {
         onToggleQuickAccessDensity={handleToggleQuickAccessDensity}
         onToggleTabsDensity={handleToggleTabsDensity}
         onToggleMemorySaverBar={handleToggleMemorySaverBar}
+        onToggleEdgeTrigger={handleToggleEdgeTrigger}
+        onChangeEdgeTriggerMode={handleChangeEdgeTriggerMode}
         onSelectQuickAccessFolder={setQuickAccessFolderId}
         onSelectWorkspaceFolder={setWorkspaceFolderId}
         onResetFolders={resetToDefaultFolders}
         onSetAutoArchiveInterval={setAutoArchiveInterval}
         onDiscardAllBackgroundTabs={discardAllBackgroundTabs}
       />
+
+      {/* First-Time Edge Trigger Opt-In Confirmation Modal */}
+      {showEdgeTriggerPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div
+            style={{
+              backgroundColor: 'var(--theme-header-bg)',
+              borderColor: 'var(--theme-border-subtle)'
+            }}
+            className="w-full max-w-xs rounded-2xl border shadow-2xl p-4 flex flex-col space-y-3 text-zinc-800 dark:text-zinc-200 text-xs animate-in zoom-in-95 duration-150"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-lg bg-cyan-500/10 dark:bg-cyan-500/15 text-cyan-600 dark:text-cyan-400">
+                  <PanelLeftClose className="w-4 h-4" />
+                </div>
+                <span className="font-bold text-sm text-zinc-900 dark:text-white">
+                  Hide to Screen Edge?
+                </span>
+              </div>
+              <button
+                type="button"
+                aria-label="Cancel"
+                onClick={() => setShowEdgeTriggerPrompt(false)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <p className="text-[11.5px] text-zinc-600 dark:text-zinc-400 leading-relaxed">
+              Arctic can show a slim vertical stripe with your <strong>Quick Access &amp; Space tabs</strong> on the screen edge <strong>only while hidden</strong> so you can switch tabs, browse folders, or reopen your sidebar in one click.
+            </p>
+
+            {activeTabUrl &&
+              ((!/^https?:\/\//i.test(activeTabUrl) &&
+                !activeTabUrl.startsWith('chrome://newtab') &&
+                !activeTabUrl.includes('/command.html') &&
+                !activeTabUrl.includes('/newtab.html')) ||
+                activeTabUrl.startsWith('https://chromewebstore.google.com') ||
+                activeTabUrl.startsWith('https://chrome.google.com/webstore')) && (
+                <p className="text-[10.5px] px-2.5 py-1.5 rounded-lg bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-500/20 leading-snug">
+                  Note: Chrome blocks overlays on internal <code>chrome://</code> pages. The handle will appear on any regular webpage or New Tab.
+                </p>
+              )}
+
+            <div className="flex flex-col space-y-1.5 pt-1">
+              <button
+                type="button"
+                onClick={handleEnableEdgeTriggerAndHide}
+                className="w-full py-2 px-3 rounded-xl font-semibold text-xs text-white theme-accent-bg hover:opacity-95 active:scale-[0.98] transition-all shadow-sm"
+              >
+                Enable Edge Trigger &amp; Hide
+              </button>
+              <button
+                type="button"
+                onClick={handleHideWithoutEdgeTrigger}
+                className="w-full py-1.5 px-3 rounded-xl font-medium text-[11.5px] text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+              >
+                Just Close Sidebar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Active Reminder Popover */}
       {activeReminderTarget && (

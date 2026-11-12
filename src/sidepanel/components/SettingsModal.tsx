@@ -15,9 +15,10 @@ import {
   Activity,
   Loader2,
   PanelLeft,
+  PanelLeftClose,
   ExternalLink
 } from 'lucide-react';
-import type { BookmarkFolderOption, ColorThemeId, ThemeMode } from '../../types';
+import type { BookmarkFolderOption, ColorThemeId, EdgeTriggerMode, ThemeMode } from '../../types';
 import { COLOR_THEMES } from '../utils/theme';
 
 interface SettingsModalProps {
@@ -29,6 +30,8 @@ interface SettingsModalProps {
   tabsDensity?: 'relaxed' | 'compact';
   densityMode?: 'relaxed' | 'compact';
   showMemorySaverBar: boolean;
+  edgeTriggerEnabled?: boolean;
+  edgeTriggerMode?: EdgeTriggerMode;
   allFolders: BookmarkFolderOption[];
   activeFolderIds: {
     quickAccessId: string | null;
@@ -42,6 +45,8 @@ interface SettingsModalProps {
   onToggleQuickAccessDensity?: (mode: 'relaxed' | 'compact') => void;
   onToggleTabsDensity?: (mode: 'relaxed' | 'compact') => void;
   onToggleMemorySaverBar: (show: boolean) => void;
+  onToggleEdgeTrigger?: (enabled: boolean) => void;
+  onChangeEdgeTriggerMode?: (mode: EdgeTriggerMode) => void;
   onSelectQuickAccessFolder: (id: string) => void;
   onSelectWorkspaceFolder: (id: string) => void;
   onResetFolders: () => void;
@@ -57,6 +62,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   quickAccessDensity = 'relaxed',
   tabsDensity = 'compact',
   showMemorySaverBar,
+  edgeTriggerEnabled = false,
+  edgeTriggerMode = 'push',
   allFolders,
   activeFolderIds,
   autoArchiveInterval,
@@ -66,6 +73,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onToggleQuickAccessDensity,
   onToggleTabsDensity,
   onToggleMemorySaverBar,
+  onToggleEdgeTrigger,
+  onChangeEdgeTriggerMode,
   onSelectQuickAccessFolder,
   onSelectWorkspaceFolder,
   onResetFolders,
@@ -329,6 +338,78 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               In Settings &rarr; Appearance &rarr; Side panel &rarr; choose &quot;Show on left&quot;.
             </p>
           </div>
+
+          {/* Edge Trigger When Hidden Toggle */}
+          {onToggleEdgeTrigger && (
+            <div className="flex flex-col space-y-2 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col pr-2">
+                  <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
+                    <PanelLeftClose className="w-3.5 h-3.5 theme-accent-text" />
+                    Edge Trigger When Hidden
+                  </span>
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                    Show a slim vertical Quick Access &amp; Space tabs stripe on the screen edge when the sidebar is hidden.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label="Edge Trigger When Hidden"
+                  aria-checked={edgeTriggerEnabled}
+                  onClick={() => onToggleEdgeTrigger(!edgeTriggerEnabled)}
+                  className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    edgeTriggerEnabled ? 'theme-accent-bg' : 'bg-zinc-300 dark:bg-zinc-700'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                      edgeTriggerEnabled ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {edgeTriggerEnabled && onChangeEdgeTriggerMode && (
+                <div className="flex flex-col space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-medium text-zinc-700 dark:text-zinc-300">
+                      Edge Stripe Behavior
+                    </span>
+                    <div className="flex items-center space-x-1 bg-black/5 dark:bg-white/5 p-0.5 rounded-lg border border-black/5 dark:border-white/5">
+                      <button
+                        type="button"
+                        onClick={() => onChangeEdgeTriggerMode('push')}
+                        className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
+                          edgeTriggerMode === 'push'
+                            ? 'theme-active-card text-zinc-900 dark:text-white shadow-sm'
+                            : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400'
+                        }`}
+                      >
+                        Push Page (No overlap)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onChangeEdgeTriggerMode('hover')}
+                        className={`px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
+                          edgeTriggerMode === 'hover'
+                            ? 'theme-active-card text-zinc-900 dark:text-white shadow-sm'
+                            : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400'
+                        }`}
+                      >
+                        Auto-Hide on Hover
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[10.5px] text-zinc-400 dark:text-zinc-500 leading-normal">
+                    {edgeTriggerMode === 'push'
+                      ? 'Shifts webpage content inward by 36px while hidden so nothing on the page is covered.'
+                      : 'Keeps webpages at full width and slides the stripe out when your mouse touches the screen edge.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Memory Saver Feed Bar Toggle */}
           <div className="flex items-center justify-between pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
