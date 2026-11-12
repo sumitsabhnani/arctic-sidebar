@@ -10,6 +10,8 @@ import {
   encodeNoteHash,
   decodeNoteHash,
   extractNoteContentFromUrl,
+  getEffectiveTabUrl,
+  doesTabUrlMatchBookmark,
   ARCTIC_SCRATCHPAD_PREFIX,
   ARCTIC_GLOBAL_SCRATCHPAD_URL
 } from './url';
@@ -172,6 +174,127 @@ describe('url utilities', () => {
       expect(isGoogleDocUrl('https://google.com')).toBe(false);
       expect(isGoogleDocUrl('')).toBe(false);
       expect(isGoogleDocUrl(undefined)).toBe(false);
+    });
+  });
+
+  describe('getEffectiveTabUrl', () => {
+    it('falls back to pendingUrl when a sleeping/restoring tab has empty or about:blank url', () => {
+      expect(
+        getEffectiveTabUrl({
+          url: '',
+          pendingUrl: 'https://linear.app/team/inbox'
+        })
+      ).toBe('https://linear.app/team/inbox');
+
+      expect(
+        getEffectiveTabUrl({
+          url: 'about:blank',
+          pendingUrl: 'https://mail.google.com/mail/u/0/#inbox'
+        })
+      ).toBe('https://mail.google.com/mail/u/0/#inbox');
+    });
+
+    it('unwraps third-party tab-suspender extension URLs to the underlying target URL', () => {
+      const suspendedUrl =
+        'chrome-extension://klbibkeccnjlkjkiokjodocebajanakg/suspended.html#ttl=GitHub&uri=https%3A%2F%2Fgithub.com%2F notifications';
+      expect(getEffectiveTabUrl({ url: suspendedUrl.replace(' ', '') })).toBe(
+        'https://github.com/notifications'
+      );
+    });
+  });
+
+  describe('doesTabUrlMatchBookmark', () => {
+    it('matches canonical web-app redirects (Gmail, Calendar, Drive, Google Docs ?tab=t.0, Discord, Notion)', () => {
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://mail.google.com/mail/u/0/#inbox',
+          'https://gmail.com'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://calendar.google.com/calendar/u/0/r/week',
+          'https://calendar.google.com'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://drive.google.com/drive/u/0/my-drive',
+          'https://drive.google.com'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?tab=t.0#heading=h.123',
+          'https://docs.google.com/document/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit?usp=sharing'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://discord.com/channels/@me',
+          'https://discord.com/app'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://www.notion.so/myworkspace/Roadmap-Spec-0123456789abcdef0123456789abcdef?pvs=4',
+          'https://www.notion.so/0123456789abcdef0123456789abcdef'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://keep.google.com/u/0/',
+          'https://keep.google.com'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://outlook.live.com/mail/0/inbox',
+          'https://outlook.live.com/mail'
+        )
+      ).toBe(true);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://docs.google.com/u/0/spreadsheets/d/sheetId123/edit?pli=1',
+          'https://docs.google.com/spreadsheets/d/sheetId123'
+        )
+      ).toBe(true);
+    });
+
+    it('keeps secondary Google accounts (/u/1) distinct from primary (/u/0)', () => {
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://mail.google.com/mail/u/1/#inbox',
+          'https://gmail.com'
+        )
+      ).toBe(false);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://docs.google.com/u/1/document/d/docId123/edit',
+          'https://docs.google.com/document/d/docId123/edit'
+        )
+      ).toBe(false);
+    });
+
+    it('does NOT falsely match distinct content or search pages on the same domain', () => {
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://www.youtube.com/results?search_query=music',
+          'https://www.youtube.com'
+        )
+      ).toBe(false);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://www.google.com/search?q=vitest',
+          'https://www.google.com'
+        )
+      ).toBe(false);
+      expect(
+        doesTabUrlMatchBookmark(
+          'https://github.com/facebook/react',
+          'https://github.com'
+        )
+      ).toBe(false);
     });
   });
 });

@@ -21,7 +21,20 @@ import {
   Check
 } from 'lucide-react';
 import type { ColorThemeId, ThemeMode, SpaceItem, TabBinding, SiteSearchEngine } from '../types';
-import { getFaviconUrl, getDomainFromUrl, normalizeUrl, isScratchpadUrl } from '../sidepanel/utils/url';
+import {
+  doesTabUrlMatchBookmark,
+  getDomainFromUrl,
+  getEffectiveTabUrl,
+  getFaviconUrl,
+  isScratchpadUrl,
+  isUrlNavigatedAway,
+  normalizeUrl
+} from '../sidepanel/utils/url';
+import {
+  findMatchingUnboundTabForBookmark,
+  getPersistedBindings,
+  upsertPersistedBindings
+} from '../sidepanel/utils/reconcileBindings';
 import {
   COLOR_THEMES,
   isValidColorTheme,
@@ -759,8 +772,9 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           const seen = new Set<string>();
           const duplicateIds: number[] = [];
           for (const t of tabs) {
-            if (t.url && !t.pinned && typeof t.id === 'number') {
-              const cleanUrl = t.url.replace(/#.*$/, '').replace(/\/$/, '');
+            const effUrl = getEffectiveTabUrl(t);
+            if (effUrl && !t.pinned && typeof t.id === 'number') {
+              const cleanUrl = effUrl.replace(/#.*$/, '').replace(/\/$/, '');
               if (seen.has(cleanUrl)) {
                 duplicateIds.push(t.id);
               } else {
@@ -1315,23 +1329,21 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         const bookmarkId = bookmarkInfo?.id;
         const isArctic = Boolean(bookmarkInfo?.isArctic);
 
-        // 1. Read existing tab session bindings if Arctic bookmark
+        // 1. Read existing tab session bindings
         let bindings: Record<string, TabBinding> = {};
         let byTab: Record<number, string> = {};
-        if (isArctic && bookmarkId) {
-          try {
-            if (chrome?.storage?.session?.get) {
-              const session = await chrome.storage.session.get([
-                'bindingsByBookmarkId',
-                'bookmarkIdByTabId'
-              ]);
-              bindings =
-                (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
-              byTab = (session.bookmarkIdByTabId as Record<number, string>) || {};
-            }
-          } catch {
-            // ignore
+        try {
+          if (chrome?.storage?.session?.get) {
+            const session = await chrome.storage.session.get([
+              'bindingsByBookmarkId',
+              'bookmarkIdByTabId'
+            ]);
+            bindings =
+              (session.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+            byTab = (session.bookmarkIdByTabId as Record<number, string>) || {};
           }
+        } catch {
+          // ignore
         }
 
         // 2. Identify the current tab running Arctic Command
@@ -1396,32 +1408,63 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
               return;
             }
           } catch {
-            // Tab was closed, fall through to re-bind
+            // Tab was closed; prune dead binding before falling through to re-bind
+            delete byTab[boundTabId];
+            delete bindings[bookmarkId];
           }
         }
 
-        // 4. Case B: An existing tab in current window already matches target URL
+        // 4. Case B: An existing (or sleeping/redirected) tab already matches target URL
         if (chrome?.tabs?.query) {
           try {
-            const currentTabs = await chrome.tabs.query({ currentWindow: true });
-            const otherMatch = currentTabs.find(
-              (t) =>
-                typeof t.id === 'number' &&
-                t.id !== currentTab?.id &&
-                t.url &&
-                normalizeUrl(t.url) === targetNormalized
-            );
+            let otherMatch: chrome.tabs.Tab | undefined;
+
+            if (isArctic && bookmarkId) {
+              const [allTabs, persistedBindings] = await Promise.all([
+                chrome.tabs.query({}),
+                getPersistedBindings()
+              ]);
+              const prefWinId = currentTab?.windowId;
+              const orderedTabs =
+                typeof prefWinId === 'number'
+                  ? [
+                      ...allTabs.filter((t) => t.windowId === prefWinId),
+                      ...allTabs.filter((t) => t.windowId !== prefWinId)
+                    ]
+                  : allTabs;
+
+              otherMatch = findMatchingUnboundTabForBookmark({
+                bookmark: { id: bookmarkId, url: targetUrl },
+                tabs: orderedTabs,
+                boundTabIds: byTab,
+                persistedBindings,
+                excludeTabId: currentTab?.id
+              });
+            } else {
+              const currentTabs = await chrome.tabs.query({ currentWindow: true });
+              otherMatch = currentTabs.find((t) => {
+                if (typeof t.id !== 'number' || t.id === currentTab?.id) return false;
+                const effUrl = getEffectiveTabUrl(t);
+                if (!effUrl) return false;
+                return (
+                  normalizeUrl(effUrl) === targetNormalized ||
+                  doesTabUrlMatchBookmark(effUrl, targetUrl)
+                );
+              });
+            }
+
             if (otherMatch && typeof otherMatch.id === 'number') {
               const matchedTabId = otherMatch.id;
               if (isArctic && bookmarkId && chrome?.storage?.session?.set) {
+                const matchUrl = getEffectiveTabUrl(otherMatch) || targetUrl;
                 const newBinding: TabBinding = {
                   bookmarkId,
                   tabId: matchedTabId,
                   windowId: otherMatch.windowId,
                   originalUrl: targetUrl,
-                  currentUrl: otherMatch.url || targetUrl,
+                  currentUrl: matchUrl,
                   currentTitle: otherMatch.title || bookmarkInfo?.title || '',
-                  isNavigatedAway: false
+                  isNavigatedAway: isUrlNavigatedAway(matchUrl, targetUrl)
                 };
                 const nextBindings = { ...bindings, [bookmarkId]: newBinding };
                 const nextByTab = { ...byTab, [matchedTabId]: bookmarkId };
@@ -1429,6 +1472,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                   bindingsByBookmarkId: nextBindings,
                   bookmarkIdByTabId: nextByTab
                 });
+                await upsertPersistedBindings({ [bookmarkId]: newBinding });
                 if (bookmarkInfo?.spaceId) {
                   await chrome?.storage?.local?.set({
                     activeSpaceId: bookmarkInfo.spaceId
@@ -1436,6 +1480,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 }
               }
               await chrome.tabs.update(matchedTabId, { active: true });
+              if (otherMatch.windowId) {
+                try {
+                  await chrome.windows.update(otherMatch.windowId, { focused: true });
+                } catch {}
+              }
               try {
                 chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
               } catch {}
@@ -1468,6 +1517,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
             bindingsByBookmarkId: nextBindings,
             bookmarkIdByTabId: nextByTab
           });
+          await upsertPersistedBindings({ [bookmarkId]: newBinding });
           if (bookmarkInfo?.spaceId) {
             await chrome?.storage?.local?.set({
               activeSpaceId: bookmarkInfo.spaceId

@@ -1,4 +1,17 @@
-import { normalizeUrl } from '../sidepanel/utils/url';
+import {
+  doesTabUrlMatchBookmark,
+  getEffectiveTabUrl,
+  isUrlNavigatedAway,
+  normalizeUrl
+} from '../sidepanel/utils/url';
+import {
+  fetchAllArcticBookmarkNodes,
+  getPersistedBindings,
+  isArcticCommandTab,
+  reconcileTabsAndBookmarksState,
+  removePersistedBindings,
+  upsertPersistedBindings
+} from '../sidepanel/utils/reconcileBindings';
 import type { SessionState, TabBinding, TabReminder } from '../types';
 import {
   getStoredReminders,
@@ -8,6 +21,17 @@ import {
 } from '../sidepanel/utils/reminderStorage';
 import { reconcileScratchpadStorageAndBookmark } from '../sidepanel/hooks/useScratchpad';
 import { closeInactiveArcticCommandTabs } from '../sidepanel/hooks/useTabBindings';
+
+let sessionLock: Promise<void> = Promise.resolve();
+
+function withSessionLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = sessionLock.then(fn, fn);
+  sessionLock = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
 
 // Configure side panel behavior on installation & startup
 export async function handleInstalled(): Promise<void> {
@@ -29,6 +53,9 @@ export async function handleInstalled(): Promise<void> {
   // Reconcile scratchpad backup bookmark & storage on install / update
   await reconcileScratchpadStorageAndBookmark();
 
+  // Reconcile open/sleeping browser tabs with bookmarks across all Spaces
+  await reconcileTabBindingsInBackground();
+
   // Reconcile and schedule alarms on installation
   await reconcileReminders();
 }
@@ -38,8 +65,22 @@ export async function handleStartup(): Promise<void> {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
   }
 
+  // Ensure storage.session is accessible to extension contexts
+  if (chrome.storage.session && 'setAccessLevel' in chrome.storage.session) {
+    try {
+      await chrome.storage.session.setAccessLevel({
+        accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS'
+      });
+    } catch {
+      // ignore
+    }
+  }
+
   // Reconcile scratchpad backup bookmark & storage on startup
   await reconcileScratchpadStorageAndBookmark();
+
+  // Reconcile open/sleeping browser tabs with bookmarks across all Spaces
+  await reconcileTabBindingsInBackground();
 
   // Reconcile and schedule alarms on startup
   await reconcileReminders();
@@ -82,18 +123,88 @@ async function saveSessionState(state: SessionState): Promise<void> {
 }
 
 /**
- * Handle tab removal: unbind closed tab from bookmark
+ * Reconciles open/sleeping tabs against bookmarks across all Spaces in background
+ * (runs on browser startup, extension install/reload, and sleeping/session-restored tab arrival).
  */
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const session = await getSessionState();
-  const bookmarkId = session.bookmarkIdByTabId[tabId];
+export async function reconcileTabBindingsInBackground(): Promise<void> {
+  if (!chrome.tabs?.query || !chrome.storage?.session) return;
 
-  if (bookmarkId) {
-    delete session.bookmarkIdByTabId[tabId];
-    delete session.bindingsByBookmarkId[bookmarkId];
-    await saveSessionState(session);
-  }
-});
+  await withSessionLock(async () => {
+    try {
+      const [bookmarkNodes, allOpenTabs, session, persistedBindings] = await Promise.all([
+        fetchAllArcticBookmarkNodes(),
+        chrome.tabs.query({}),
+        getSessionState(),
+        getPersistedBindings()
+      ]);
+
+      let preferredWindowId: number | null = null;
+      if (chrome.windows?.getCurrent) {
+        try {
+          const win = await chrome.windows.getCurrent();
+          if (typeof win?.id === 'number') {
+            preferredWindowId = win.id;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const result = reconcileTabsAndBookmarksState({
+        bookmarkNodes,
+        allOpenTabs,
+        preferredWindowId,
+        currentBindings: session.bindingsByBookmarkId,
+        currentByTab: session.bookmarkIdByTabId,
+        persistedBindings
+      });
+
+      if (result.changed) {
+        await saveSessionState({
+          bindingsByBookmarkId: result.bindingsByBookmarkId,
+          bookmarkIdByTabId: result.bookmarkIdByTabId
+        });
+        await upsertPersistedBindings(result.bindingsByBookmarkId);
+      }
+    } catch (err) {
+      console.warn('[Arctic Background] Error reconciling tab bindings:', err);
+    }
+  });
+}
+
+let backgroundReconcileQueued = false;
+function scheduleBackgroundReconcile(): void {
+  if (backgroundReconcileQueued) return;
+  backgroundReconcileQueued = true;
+  Promise.resolve().then(() => {
+    backgroundReconcileQueued = false;
+    void reconcileTabBindingsInBackground();
+  });
+}
+
+/**
+ * Handle tab removal: unbind closed tab from bookmark (preserving persistedBindings on browser/window close)
+ */
+export async function handleTabRemoved(
+  tabId: number,
+  removeInfo?: chrome.tabs.TabRemoveInfo
+): Promise<void> {
+  await withSessionLock(async () => {
+    const session = await getSessionState();
+    const bookmarkId = session.bookmarkIdByTabId[tabId];
+
+    if (bookmarkId) {
+      delete session.bookmarkIdByTabId[tabId];
+      delete session.bindingsByBookmarkId[bookmarkId];
+      await saveSessionState(session);
+      if (!removeInfo?.isWindowClosing) {
+        await removePersistedBindings([bookmarkId]);
+      }
+    }
+  });
+}
+
+chrome.tabs.onRemoved.addListener(handleTabRemoved);
 
 /**
  * Handle tab activation: close any unfocused empty Arctic Command / New Tab pages in the window
@@ -115,6 +226,7 @@ if (chrome.tabs && chrome.tabs.onActivated) {
 
 /**
  * Handle active tab creation: close any previously open empty Arctic Command / New Tab pages
+ * and reconcile session-restored sleeping tabs if created after startup.
  */
 export async function handleTabCreated(tab: chrome.tabs.Tab): Promise<void> {
   if (tab.active && typeof tab.id === 'number' && typeof tab.windowId === 'number') {
@@ -125,6 +237,16 @@ export async function handleTabCreated(tab: chrome.tabs.Tab): Promise<void> {
       session.bookmarkIdByTabId
     );
   }
+
+  if (
+    typeof tab.id === 'number' &&
+    Boolean(tab.discarded) &&
+    tab.openerTabId === undefined &&
+    !isArcticCommandTab(tab) &&
+    Boolean(getEffectiveTabUrl(tab))
+  ) {
+    scheduleBackgroundReconcile();
+  }
 }
 
 if (chrome.tabs && chrome.tabs.onCreated) {
@@ -132,57 +254,119 @@ if (chrome.tabs && chrome.tabs.onCreated) {
 }
 
 /**
- * Handle tab replacement (e.g. Chrome prerendering swap)
+ * Handle tab replacement (e.g. Chrome sleeping/discarded tab wake or prerendering swap)
  */
-chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
-  const session = await getSessionState();
-  const bookmarkId = session.bookmarkIdByTabId[removedTabId];
+export async function handleTabReplaced(
+  addedTabId: number,
+  removedTabId: number
+): Promise<void> {
+  if (addedTabId === removedTabId) return;
 
-  if (bookmarkId) {
-    const existingBinding = session.bindingsByBookmarkId[bookmarkId];
-    if (existingBinding) {
-      existingBinding.tabId = addedTabId;
+  await withSessionLock(async () => {
+    const session = await getSessionState();
+    const bookmarkId = session.bookmarkIdByTabId[removedTabId];
+
+    if (bookmarkId) {
+      const existingBinding = session.bindingsByBookmarkId[bookmarkId];
+      if (existingBinding) {
+        existingBinding.tabId = addedTabId;
+      }
+      delete session.bookmarkIdByTabId[removedTabId];
+      session.bookmarkIdByTabId[addedTabId] = bookmarkId;
+      await saveSessionState(session);
     }
-    delete session.bookmarkIdByTabId[removedTabId];
-    session.bookmarkIdByTabId[addedTabId] = bookmarkId;
-    await saveSessionState(session);
-  }
-});
+
+    if (chrome.storage?.local?.get && chrome.storage?.local?.set) {
+      try {
+        const local = await chrome.storage.local.get(['tabSpaceByTabId', 'tabOpenedAt']);
+        const updates: Record<string, unknown> = {};
+
+        const tabSpaces = local.tabSpaceByTabId as Record<number, string> | undefined;
+        if (tabSpaces && tabSpaces[removedTabId]) {
+          const nextSpaces = { ...tabSpaces, [addedTabId]: tabSpaces[removedTabId] };
+          delete nextSpaces[removedTabId];
+          updates.tabSpaceByTabId = nextSpaces;
+        }
+
+        const tabOpenedAt = local.tabOpenedAt as Record<number, number> | undefined;
+        if (tabOpenedAt && tabOpenedAt[removedTabId]) {
+          const nextTimestamps = { ...tabOpenedAt, [addedTabId]: tabOpenedAt[removedTabId] };
+          delete nextTimestamps[removedTabId];
+          updates.tabOpenedAt = nextTimestamps;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await chrome.storage.local.set(updates);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  });
+}
+
+chrome.tabs.onReplaced.addListener(handleTabReplaced);
 
 /**
  * Handle tab navigation & status update
  */
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (!changeInfo.url && changeInfo.status !== 'complete' && !changeInfo.title) {
+export async function handleTabUpdated(
+  tabId: number,
+  changeInfo: chrome.tabs.TabChangeInfo,
+  tab: chrome.tabs.Tab
+): Promise<void> {
+  if (
+    !changeInfo.url &&
+    changeInfo.status !== 'complete' &&
+    !changeInfo.title &&
+    !tab.pendingUrl
+  ) {
     return;
   }
 
-  const session = await getSessionState();
-  const bookmarkId = session.bookmarkIdByTabId[tabId];
+  await withSessionLock(async () => {
+    const session = await getSessionState();
+    const bookmarkId = session.bookmarkIdByTabId[tabId];
 
-  if (!bookmarkId) return;
+    if (!bookmarkId) {
+      if (
+        Boolean(tab.discarded) &&
+        tab.openerTabId === undefined &&
+        !isArcticCommandTab(tab) &&
+        Boolean(changeInfo.url || getEffectiveTabUrl(tab))
+      ) {
+        scheduleBackgroundReconcile();
+      }
+      return;
+    }
 
-  const binding = session.bindingsByBookmarkId[bookmarkId];
-  if (!binding) return;
+    const binding = session.bindingsByBookmarkId[bookmarkId];
+    if (!binding) return;
 
-  let hasChanged = false;
+    let hasChanged = false;
+    const effectiveUrl = changeInfo.url || getEffectiveTabUrl(tab);
 
-  if (tab.url && tab.url !== binding.currentUrl) {
-    binding.currentUrl = tab.url;
-    binding.isNavigatedAway = normalizeUrl(tab.url) !== normalizeUrl(binding.originalUrl);
-    hasChanged = true;
-  }
+    if (effectiveUrl && effectiveUrl !== binding.currentUrl) {
+      binding.currentUrl = effectiveUrl;
+      binding.isNavigatedAway = isUrlNavigatedAway(effectiveUrl, binding.originalUrl);
+      hasChanged = true;
+    }
 
-  if (tab.title && tab.title !== binding.currentTitle) {
-    binding.currentTitle = tab.title;
-    hasChanged = true;
-  }
+    const nextTitle = changeInfo.title || tab.title;
+    if (nextTitle && nextTitle !== binding.currentTitle) {
+      binding.currentTitle = nextTitle;
+      hasChanged = true;
+    }
 
-  if (hasChanged) {
-    session.bindingsByBookmarkId[bookmarkId] = binding;
-    await saveSessionState(session);
-  }
-});
+    if (hasChanged) {
+      session.bindingsByBookmarkId[bookmarkId] = binding;
+      await saveSessionState(session);
+      await upsertPersistedBindings({ [bookmarkId]: binding });
+    }
+  });
+}
+
+chrome.tabs.onUpdated.addListener(handleTabUpdated);
 
 /* -------------------------------------------------------------
    TAB REMINDERS SERVICE WORKER LIFECYCLE (chrome.alarms)
@@ -292,7 +476,12 @@ export async function handleNotificationOpenTab(reminderId: string): Promise<voi
         if (typeof reminder.tabId === 'number' && t.id === reminder.tabId) {
           return true;
         }
-        if (t.url && normalizeUrl(t.url) === targetNormalized) {
+        const effectiveUrl = getEffectiveTabUrl(t);
+        if (
+          effectiveUrl &&
+          (normalizeUrl(effectiveUrl) === targetNormalized ||
+            doesTabUrlMatchBookmark(effectiveUrl, reminder.url))
+        ) {
           return true;
         }
         return false;
@@ -300,7 +489,11 @@ export async function handleNotificationOpenTab(reminderId: string): Promise<voi
 
       if (matchingTab && typeof matchingTab.id === 'number') {
         if (typeof matchingTab.windowId === 'number') {
-          await chrome.windows.update(matchingTab.windowId, { focused: true });
+          try {
+            await chrome.windows.update(matchingTab.windowId, { focused: true });
+          } catch {
+            // ignore
+          }
         }
         await chrome.tabs.update(matchingTab.id, { active: true });
       } else {

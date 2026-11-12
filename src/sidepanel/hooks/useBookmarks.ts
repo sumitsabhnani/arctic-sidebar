@@ -6,6 +6,7 @@ import {
   type SpaceItem
 } from '../../types';
 import { isScratchpadUrl } from '../utils/url';
+import { removePersistedBindings } from '../utils/reconcileBindings';
 
 function inferSpaceIcon(name: string): string {
   const lower = name.trim().toLowerCase();
@@ -30,6 +31,7 @@ function inferSpaceIcon(name: string): string {
 export function useBookmarks() {
   const [quickAccessNode, setQuickAccessNode] = useState<chrome.bookmarks.BookmarkTreeNode | null>(null);
   const [workspaceNode, setWorkspaceNode] = useState<chrome.bookmarks.BookmarkTreeNode | null>(null);
+  const [allSpaceBookmarkNodes, setAllSpaceBookmarkNodes] = useState<chrome.bookmarks.BookmarkTreeNode[]>([]);
   const [allFolders, setAllFolders] = useState<BookmarkFolderOption[]>([]);
   const [collapsedFolderIds, setCollapsedFolderIds] = useState<Record<string, boolean>>({});
   const [spaces, setSpaces] = useState<SpaceItem[]>([
@@ -760,33 +762,88 @@ export function useBookmarks() {
       });
 
       // Load Quick Access sub-tree (reuse already fetched node when matching default)
+      let resolvedQaNode: chrome.bookmarks.BookmarkTreeNode | null = null;
       if (activeQaId === defaultIds.quickAccessId && defaultIds.quickAccessSubtree) {
-        setQuickAccessNode(defaultIds.quickAccessSubtree);
+        resolvedQaNode = defaultIds.quickAccessSubtree;
       } else {
         try {
           const [qa] = await chrome.bookmarks.getSubTree(activeQaId);
-          setQuickAccessNode(qa);
+          resolvedQaNode = qa;
         } catch (err) {
           console.warn('[Arctic] Quick Access folder not found, falling back to default:', err);
-          setQuickAccessNode(defaultIds.quickAccessSubtree);
+          resolvedQaNode = defaultIds.quickAccessSubtree;
           if (activeSpace.id === 'home') {
             await chrome.storage.local.remove('quickAccessFolderId');
           }
         }
       }
+      setQuickAccessNode(resolvedQaNode);
 
       // Load active Space / Home sub-tree (reuse already fetched node when matching default)
+      let resolvedWsNode: chrome.bookmarks.BookmarkTreeNode | null = null;
       if (workspaceId === defaultIds.workspaceId && defaultIds.homeSubtree) {
-        setWorkspaceNode(defaultIds.homeSubtree);
+        resolvedWsNode = defaultIds.homeSubtree;
       } else {
         try {
           const [ws] = await chrome.bookmarks.getSubTree(workspaceId);
-          setWorkspaceNode(ws);
+          resolvedWsNode = ws;
         } catch (err) {
           console.warn('[Arctic] Space folder not found, falling back to default Home:', err);
-          setWorkspaceNode(defaultIds.homeSubtree);
+          resolvedWsNode = defaultIds.homeSubtree;
         }
       }
+      setWorkspaceNode(resolvedWsNode);
+
+      // Assemble bookmark subtrees across ALL Spaces (active space first, then all other spaces)
+      const combinedSpaceNodes: chrome.bookmarks.BookmarkTreeNode[] = [];
+      const seenNodeIds = new Set<string>();
+      const pushSpaceNode = (n?: chrome.bookmarks.BookmarkTreeNode | null) => {
+        if (n && !seenNodeIds.has(n.id)) {
+          seenNodeIds.add(n.id);
+          combinedSpaceNodes.push(n);
+        }
+      };
+
+      pushSpaceNode(resolvedQaNode);
+      pushSpaceNode(resolvedWsNode);
+
+      for (const sp of currentSpaces) {
+        const rootSpaceNode = sp.folderId
+          ? children.find((c) => c.id === sp.folderId)
+          : undefined;
+        const nestedQaNode =
+          sp.quickAccessFolderId && rootSpaceNode?.children
+            ? rootSpaceNode.children.find((c) => c.id === sp.quickAccessFolderId)
+            : undefined;
+
+        if (sp.quickAccessFolderId && !seenNodeIds.has(sp.quickAccessFolderId)) {
+          if (nestedQaNode) {
+            pushSpaceNode(nestedQaNode);
+          } else {
+            try {
+              const [qaSub] = await chrome.bookmarks.getSubTree(sp.quickAccessFolderId);
+              pushSpaceNode(qaSub);
+            } catch {
+              // ignore missing folder
+            }
+          }
+        }
+
+        if (sp.folderId && !seenNodeIds.has(sp.folderId)) {
+          if (rootSpaceNode) {
+            pushSpaceNode(rootSpaceNode);
+          } else {
+            try {
+              const [spSub] = await chrome.bookmarks.getSubTree(sp.folderId);
+              pushSpaceNode(spSub);
+            } catch {
+              // ignore missing folder
+            }
+          }
+        }
+      }
+
+      setAllSpaceBookmarkNodes(combinedSpaceNodes);
 
       // Unblock UI immediately before loading full bookmark folder dropdown options in background
       setLoading(false);
@@ -1162,6 +1219,27 @@ export function useBookmarks() {
 
       setWorkspaceNode((prev) => pruneNode(prev));
       setQuickAccessNode((prev) => pruneNode(prev));
+      setAllSpaceBookmarkNodes((prev) =>
+        prev.map((node) => pruneNode(node)!).filter(Boolean)
+      );
+
+      // Remove any persisted bindings for deleted bookmark(s)
+      try {
+        const [sub] = await chrome.bookmarks.getSubTree(id);
+        if (sub) {
+          const removedIds: string[] = [];
+          const walkIds = (n: chrome.bookmarks.BookmarkTreeNode) => {
+            if (n.url) removedIds.push(n.id);
+            if (n.children) n.children.forEach(walkIds);
+          };
+          walkIds(sub);
+          if (removedIds.length > 0) {
+            await removePersistedBindings(removedIds);
+          }
+        }
+      } catch {
+        await removePersistedBindings([id]);
+      }
 
       try {
         await chrome.bookmarks.removeTree(id);
@@ -1296,6 +1374,7 @@ export function useBookmarks() {
   return {
     quickAccessNode,
     workspaceNode,
+    allSpaceBookmarkNodes,
     allFolders,
     collapsedFolderIds,
     toggleFolderCollapse,

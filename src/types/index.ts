@@ -8,6 +8,15 @@ export interface TabBinding {
   isNavigatedAway: boolean; // true when normalizeUrl(currentUrl) !== normalizeUrl(originalUrl)
 }
 
+export interface PersistedTabBinding {
+  bookmarkId: string;
+  originalUrl: string;
+  currentUrl: string;
+  currentTitle: string;
+  isNavigatedAway: boolean;
+  updatedAt: number;
+}
+
 export interface SessionState {
   bindingsByBookmarkId: Record<string, TabBinding>;
   bookmarkIdByTabId: Record<number, string>;
@@ -53,6 +62,7 @@ export interface LocalSettings {
   collapsedFolderIds?: Record<string, boolean>; // Stored in chrome.storage.local for permanence
   autoArchiveInterval?: 'never' | '12h' | '24h' | '7d';
   tabOpenedAt?: Record<number, number>;
+  persistedBindingsByBookmarkId?: Record<string, PersistedTabBinding>;
   theme?: ThemeMode;
   colorTheme?: ColorThemeId;
   quickAccessDensity?: 'relaxed' | 'compact';

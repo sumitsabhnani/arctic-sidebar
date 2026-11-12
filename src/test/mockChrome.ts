@@ -83,6 +83,7 @@ export function createMockChrome() {
   const tabCreatedListeners = new Set<(tab: chrome.tabs.Tab) => void>();
   const tabRemovedListeners = new Set<(tabId: number, removeInfo: chrome.tabs.TabRemoveInfo) => void>();
   const tabUpdatedListeners = new Set<(tabId: number, changeInfo: chrome.tabs.TabChangeInfo, tab: chrome.tabs.Tab) => void>();
+  const tabReplacedListeners = new Set<(addedTabId: number, removedTabId: number) => void>();
   const tabMovedListeners = new Set<() => void>();
   const windowFocusListeners = new Set<(winId: number) => void>();
   const bookmarkCreatedListeners = new Set<(id: string, bookmark: chrome.bookmarks.BookmarkTreeNode) => void>();
@@ -520,7 +521,10 @@ export function createMockChrome() {
       },
       onAttached: { addListener: vi.fn(), removeListener: vi.fn() },
       onDetached: { addListener: vi.fn(), removeListener: vi.fn() },
-      onReplaced: { addListener: vi.fn(), removeListener: vi.fn() }
+      onReplaced: {
+        addListener: vi.fn((fn) => tabReplacedListeners.add(fn)),
+        removeListener: vi.fn((fn) => tabReplacedListeners.delete(fn))
+      }
     },
     windows: {
       WINDOW_ID_NONE: -1,
@@ -743,6 +747,7 @@ export function createMockChrome() {
       tabCreatedListeners.clear();
       tabRemovedListeners.clear();
       tabUpdatedListeners.clear();
+      tabReplacedListeners.clear();
       tabMovedListeners.clear();
       windowFocusListeners.clear();
       bookmarkCreatedListeners.clear();
@@ -774,6 +779,45 @@ export function createMockChrome() {
     __triggerNotifButtonClick: async (notificationId: string, buttonIndex: number) => {
       for (const listener of notifButtonClickedListeners) {
         await listener(notificationId, buttonIndex);
+      }
+    },
+    __triggerTabReplaced: async (addedTabId: number, removedTabId: number) => {
+      const idx = tabsState.findIndex((t) => t.id === removedTabId);
+      if (idx !== -1) {
+        tabsState[idx] = { ...tabsState[idx], id: addedTabId };
+      }
+      for (const listener of tabReplacedListeners) {
+        await listener(addedTabId, removedTabId);
+      }
+    },
+    __triggerTabUpdated: async (
+      tabId: number,
+      changeInfo: chrome.tabs.TabChangeInfo,
+      tabOverrides?: Partial<chrome.tabs.Tab>
+    ) => {
+      const idx = tabsState.findIndex((t) => t.id === tabId);
+      if (idx !== -1) {
+        tabsState[idx] = {
+          ...tabsState[idx],
+          ...(changeInfo.url !== undefined ? { url: changeInfo.url } : {}),
+          ...(changeInfo.title !== undefined ? { title: changeInfo.title } : {}),
+          ...(changeInfo.status !== undefined ? { status: changeInfo.status } : {}),
+          ...(changeInfo.discarded !== undefined ? { discarded: changeInfo.discarded } : {}),
+          ...tabOverrides
+        };
+        for (const listener of tabUpdatedListeners) {
+          await listener(tabId, changeInfo, cloneTree(tabsState[idx]));
+        }
+      }
+    },
+    __triggerTabRemoved: async (tabId: number, isWindowClosing: boolean = false) => {
+      const idx = tabsState.findIndex((t) => t.id === tabId);
+      const removed = idx !== -1 ? tabsState.splice(idx, 1)[0] : undefined;
+      for (const listener of tabRemovedListeners) {
+        await listener(tabId, {
+          windowId: removed?.windowId || windowsState[0]?.id || 10,
+          isWindowClosing
+        });
       }
     },
     __getBadgeColor: () => badgeColor,
