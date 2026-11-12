@@ -277,4 +277,185 @@ describe('Sidepanel App Integration', () => {
     expect(await screen.findByText('Example Bookmark')).toBeInTheDocument();
     expect(screen.queryByText('Scratchpad Backup')).not.toBeInTheDocument();
   });
+
+  it("reconciles sleeping and open tabs across ALL Spaces on startup so non-active Space bookmark tabs do not leak into Home Today's Tabs", async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: '111', title: 'Gmail', url: 'https://gmail.com' }]
+                      }
+                    ]
+                  },
+                  {
+                    id: '20',
+                    title: 'Work',
+                    children: [
+                      {
+                        id: '21',
+                        title: 'Quick Access',
+                        children: [{ id: '211', title: 'Linear Board', url: 'https://linear.app' }]
+                      },
+                      {
+                        id: '22',
+                        title: 'Datadog Dashboard',
+                        url: 'https://app.datadoghq.com/dashboard/123'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    // Simulate browser restart / reinstall: session storage is wiped, Home is active,
+    // and tabs for both Home (redirected Gmail) and Work (sleeping Linear + Datadog) are open
+    mockChrome.__setSessionStorage({});
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        url: 'https://mail.google.com/mail/u/0/#inbox',
+        title: 'Inbox - Gmail',
+        active: true,
+        discarded: false
+      } as chrome.tabs.Tab,
+      {
+        id: 2,
+        windowId: 10,
+        url: 'https://linear.app',
+        title: 'Linear Workspace',
+        active: false,
+        discarded: true
+      } as chrome.tabs.Tab,
+      {
+        id: 3,
+        windowId: 10,
+        url: '',
+        pendingUrl: 'https://app.datadoghq.com/dashboard/123',
+        title: 'Datadog Dashboard',
+        active: false,
+        discarded: true
+      } as chrome.tabs.Tab
+    ]);
+
+    render(<App />);
+
+    expect(await screen.findByText('Gmail')).toBeInTheDocument();
+
+    // Wait for startup reconciliation across all spaces to complete
+    await screen.findByText('No unpinned tabs open.');
+
+    // Neither Linear Workspace nor Datadog Dashboard leaked into Home's Today's Tabs
+    expect(screen.queryByText('Linear Workspace')).not.toBeInTheDocument();
+    expect(screen.queryByText('Datadog Dashboard')).not.toBeInTheDocument();
+
+    const session = mockChrome.__getSessionStorage();
+    expect((session.bookmarkIdByTabId as Record<number, string>)[1]).toBe('111');
+    expect((session.bookmarkIdByTabId as Record<number, string>)[2]).toBe('211');
+    expect((session.bookmarkIdByTabId as Record<number, string>)[3]).toBe('22');
+  });
+
+  it('persists new tab bindings into persistedBindingsByBookmarkId when pinning current tab or creating a Google Doc', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: '11', title: 'Quick Access', children: [] },
+                      { id: '13', title: 'Docs Folder', children: [] }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setSessionStorage({});
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        url: 'https://developer.mozilla.org/en-US/docs/Web',
+        title: 'MDN Web Docs',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    const { fireEvent } = await import('@testing-library/react');
+    render(<App />);
+
+    const folderRow = await screen.findByText('Docs Folder');
+
+    // 1. Right-click "Docs Folder" -> click "Pin Current Tab Here"
+    await act(async () => {
+      fireEvent.contextMenu(folderRow);
+    });
+    const pinHereItem = await screen.findByText('Pin Current Tab Here');
+    await act(async () => {
+      fireEvent.click(pinHereItem);
+    });
+
+    let persisted = (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId ||
+      {}) as Record<string, { currentUrl: string; originalUrl: string }>;
+    expect(
+      Object.values(persisted).some(
+        (b) => b.currentUrl === 'https://developer.mozilla.org/en-US/docs/Web'
+      )
+    ).toBe(true);
+
+    // 2. Right-click "Docs Folder" -> click "New Document" -> click "Google Doc"
+    await act(async () => {
+      fireEvent.contextMenu(folderRow);
+    });
+    const newDocTrigger = await screen.findByText('New Document');
+    await act(async () => {
+      fireEvent.click(newDocTrigger);
+    });
+    const gdocOption = await screen.findByText('Google Doc');
+    await act(async () => {
+      fireEvent.click(gdocOption);
+    });
+
+    persisted = (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId ||
+      {}) as Record<string, { currentUrl: string; originalUrl: string }>;
+    expect(Object.values(persisted).some((b) => b.originalUrl === 'https://docs.new')).toBe(true);
+  });
 });

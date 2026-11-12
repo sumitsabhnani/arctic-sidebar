@@ -16,12 +16,14 @@ import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode } from '../types';
 import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
 import { isScratchpadUrl } from './utils/url';
+import { upsertPersistedBindings } from './utils/reconcileBindings';
 import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft } from 'lucide-react';
 
 export const App: React.FC = () => {
   const {
     quickAccessNode,
     workspaceNode,
+    allSpaceBookmarkNodes,
     allFolders,
     collapsedFolderIds,
     toggleFolderCollapse,
@@ -494,15 +496,17 @@ export const App: React.FC = () => {
     );
   }, [workspaceNode?.children, activeFolderIds.quickAccessId]);
 
-  // Auto-reconcile open tabs with bookmarks on startup/reload
+  // Auto-reconcile open tabs with bookmarks across ALL Spaces on startup/reload
   useEffect(() => {
-    if (quickAccessNode || workspaceNode) {
+    if (allSpaceBookmarkNodes.length > 0) {
+      reconcileTabsWithBookmarks(allSpaceBookmarkNodes);
+    } else if (quickAccessNode || workspaceNode) {
       const allNodes: chrome.bookmarks.BookmarkTreeNode[] = [];
       if (quickAccessNode) allNodes.push(quickAccessNode);
       if (workspaceNode) allNodes.push(workspaceNode);
       reconcileTabsWithBookmarks(allNodes);
     }
-  }, [quickAccessNode, workspaceNode, reconcileTabsWithBookmarks]);
+  }, [allSpaceBookmarkNodes, quickAccessNode, workspaceNode, reconcileTabsWithBookmarks]);
 
   const visibleUnpinnedTabs = useMemo(() => {
     return unpinnedTabs
@@ -723,6 +727,7 @@ export const App: React.FC = () => {
               bindingsByBookmarkId: { ...bindingsByBookmarkId, [newBookmark.id]: newBinding },
               bookmarkIdByTabId: { ...bookmarkIdByTabId, [currentTab.id]: newBookmark.id }
             });
+            await upsertPersistedBindings({ [newBookmark.id]: newBinding });
           }
         }
       } catch (err) {
@@ -784,6 +789,7 @@ export const App: React.FC = () => {
             bindingsByBookmarkId: { ...bindingsByBookmarkId, [newBookmark.id]: newBinding },
             bookmarkIdByTabId: { ...bookmarkIdByTabId, [newTab.id]: newBookmark.id }
           });
+          await upsertPersistedBindings({ [newBookmark.id]: newBinding });
         }
       } catch (err) {
         console.warn('[Arctic] Could not create document bookmark:', err);

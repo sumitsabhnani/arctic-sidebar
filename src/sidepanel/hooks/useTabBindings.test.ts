@@ -750,4 +750,581 @@ describe('useTabBindings hook', () => {
     expect(mockChrome.__getTabs().map((t) => t.id)).toEqual([501]);
     expect(result.current.activeTabId).toBe(501);
   });
+
+  it('reconciles sleeping tabs with pendingUrl and session-restored tabs whose URL arrives asynchronously via onUpdated', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 601,
+        windowId: 10,
+        url: '',
+        pendingUrl: 'https://linear.app/team/inbox',
+        title: 'Linear Inbox',
+        discarded: true,
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 602,
+        windowId: 10,
+        url: '',
+        pendingUrl: '',
+        title: '',
+        discarded: true,
+        status: 'loading',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 603,
+        windowId: 10,
+        url: 'https://news.ycombinator.com',
+        title: 'Hacker News',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({});
+
+    const bookmarkTree: chrome.bookmarks.BookmarkTreeNode[] = [
+      {
+        id: 'folder-work',
+        title: 'Work',
+        children: [
+          {
+            id: 'bm-linear',
+            title: 'Linear',
+            url: 'https://linear.app/team/inbox'
+          },
+          {
+            id: 'bm-figma',
+            title: 'Figma Design',
+            url: 'https://figma.com/file/abc'
+          }
+        ]
+      }
+    ];
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks(bookmarkTree);
+    });
+
+    // Sleeping tab 601 (with pendingUrl) is bound immediately
+    expect(result.current.bookmarkIdByTabId[601]).toBe('bm-linear');
+    expect(result.current.bindingsByBookmarkId['bm-linear']?.tabId).toBe(601);
+
+    // Tab 602 did not have its URL yet; now simulate Chrome populating its URL during session restore
+    await act(async () => {
+      await mockChrome.__triggerTabUpdated(602, {
+        url: 'https://www.figma.com/file/abc',
+        title: 'Figma Design',
+        status: 'complete'
+      });
+      await Promise.resolve();
+    });
+
+    // Tab 602 is automatically reconciled to bm-figma and removed from Today's Tabs
+    expect(result.current.bookmarkIdByTabId[602]).toBe('bm-figma');
+    expect(result.current.bindingsByBookmarkId['bm-figma']?.tabId).toBe(602);
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([603]);
+  });
+
+  it('persists navigated-away bindings across browser restarts (isWindowClosing: true) and cleans them up on normal tab close', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 701,
+        windowId: 10,
+        url: 'https://github.com',
+        title: 'GitHub',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({});
+
+    const bookmarkTree: chrome.bookmarks.BookmarkTreeNode[] = [
+      {
+        id: 'folder-home',
+        title: 'Home',
+        children: [
+          {
+            id: 'bm-gh',
+            title: 'GitHub',
+            url: 'https://github.com'
+          }
+        ]
+      }
+    ];
+
+    const firstMount = renderHook(() => useTabBindings());
+    await act(async () => {
+      await firstMount.result.current.reconcileTabsWithBookmarks(bookmarkTree);
+    });
+    expect(firstMount.result.current.bookmarkIdByTabId[701]).toBe('bm-gh');
+
+    // Navigate the bound GitHub tab deep into a pull request page
+    await act(async () => {
+      await mockChrome.__triggerTabUpdated(701, {
+        url: 'https://github.com/facebook/react/pull/9999',
+        title: 'PR #9999',
+        status: 'complete'
+      });
+    });
+    expect(firstMount.result.current.bindingsByBookmarkId['bm-gh']?.isNavigatedAway).toBe(true);
+
+    // Simulate browser quit: Chrome fires onRemoved with isWindowClosing: true and wipes session storage
+    await act(async () => {
+      await mockChrome.__triggerTabRemoved(701, true);
+    });
+    firstMount.unmount();
+
+    // Verify persistedBindingsByBookmarkId survived window closing!
+    expect(
+      (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<string, any>)?.[
+        'bm-gh'
+      ]?.currentUrl
+    ).toBe('https://github.com/facebook/react/pull/9999');
+
+    // Simulate browser restart: session storage is empty, and restored tab gets a brand-new tabId (850) in sleeping state
+    mockChrome.__setSessionStorage({});
+    mockChrome.__setTabs([
+      {
+        id: 850,
+        windowId: 10,
+        url: 'https://github.com/facebook/react/pull/9999',
+        title: 'PR #9999',
+        discarded: true,
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+
+    const afterRestart = renderHook(() => useTabBindings());
+    await act(async () => {
+      await afterRestart.result.current.reconcileTabsWithBookmarks(bookmarkTree);
+    });
+
+    // Sleeping navigated-away tab 850 is re-linked to bm-gh instead of falling into Today's Tabs!
+    expect(afterRestart.result.current.bookmarkIdByTabId[850]).toBe('bm-gh');
+    expect(afterRestart.result.current.bindingsByBookmarkId['bm-gh']?.isNavigatedAway).toBe(true);
+    expect(afterRestart.result.current.unpinnedTabs).toHaveLength(0);
+
+    // Now close tab 850 normally (isWindowClosing: false) -> persisted binding should be removed
+    await act(async () => {
+      await mockChrome.__triggerTabRemoved(850, false);
+    });
+    expect(
+      (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<string, any>)?.[
+        'bm-gh'
+      ]
+    ).toBeUndefined();
+  });
+
+  it('wakes and binds canonical-redirected sleeping tabs (e.g. Gmail, Google Docs ?tab=t.0) without opening duplicate tabs', async () => {
+    mockChrome.__setSessionStorage({});
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setTabs([
+      {
+        id: 901,
+        windowId: 10,
+        url: 'https://mail.google.com/mail/u/0/#inbox',
+        title: 'Inbox - Gmail',
+        discarded: true,
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 902,
+        windowId: 10,
+        url: 'https://docs.google.com/document/d/1DocAbcXYZ/edit?tab=t.0',
+        title: 'Project Spec - Google Docs',
+        discarded: true,
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+
+    const gmailBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-gmail',
+      title: 'Gmail',
+      url: 'https://gmail.com'
+    };
+    const docBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-doc',
+      title: 'Project Spec',
+      url: 'https://docs.google.com/document/d/1DocAbcXYZ/edit?usp=sharing'
+    };
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    mockChrome.tabs.create.mockClear();
+
+    // Even BEFORE reconcileTabsWithBookmarks runs, clicking the Gmail bookmark wakes sleeping tab 901 instead of creating a duplicate!
+    await act(async () => {
+      await result.current.handleRowClick(gmailBookmark);
+    });
+
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(result.current.bookmarkIdByTabId[901]).toBe('bm-gmail');
+    expect(result.current.activeTabId).toBe(901);
+
+    // Running reconcileTabsWithBookmarks also links the redirected sleeping Google Doc tab 902
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks([
+        { id: 'folder-qa', title: 'Quick Access', children: [gmailBookmark, docBookmark] }
+      ]);
+    });
+
+    expect(result.current.bookmarkIdByTabId[902]).toBe('bm-doc');
+    expect(result.current.unpinnedTabs).toHaveLength(0);
+  });
+
+  it('migrates bookmark bindings and tab space assignments when Chrome replaces a sleeping/discarded tab ID via onReplaced', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 950,
+        windowId: 10,
+        url: 'https://notion.so/workspace',
+        title: 'Notion',
+        discarded: true,
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-notion': {
+          bookmarkId: 'bm-notion',
+          tabId: 950,
+          windowId: 10,
+          originalUrl: 'https://notion.so/workspace',
+          currentUrl: 'https://notion.so/workspace',
+          currentTitle: 'Notion',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 950: 'bm-notion' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.bookmarkIdByTabId[950]).toBe('bm-notion');
+
+    // Simulate Chrome replacing discarded tab 950 with tab 951 on wake
+    await act(async () => {
+      await mockChrome.__triggerTabReplaced(951, 950);
+    });
+
+    expect(result.current.bookmarkIdByTabId[950]).toBeUndefined();
+    expect(result.current.bookmarkIdByTabId[951]).toBe('bm-notion');
+    expect(result.current.bindingsByBookmarkId['bm-notion']?.tabId).toBe(951);
+    expect(result.current.unpinnedTabs).toHaveLength(0);
+  });
+
+  it('gates auto-archive tab closing until after bookmark reconciliation runs so sleeping pinned tabs are never closed prematurely', async () => {
+    const twoDaysAgo = Date.now() - 48 * 60 * 60 * 1000;
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        url: 'https://active.com',
+        title: 'Active Tab',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 2,
+        windowId: 10,
+        url: 'https://linear.app',
+        title: 'Sleeping Pinned Linear',
+        discarded: true,
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 3,
+        windowId: 10,
+        url: 'https://old-temp.com',
+        title: 'Old Unpinned Tab',
+        discarded: true,
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({});
+    mockChrome.__setLocalStorage({
+      autoArchiveInterval: '12h',
+      tabOpenedAt: {
+        1: twoDaysAgo,
+        2: twoDaysAgo,
+        3: twoDaysAgo
+      }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Before reconcileTabsWithBookmarks runs, NEITHER tab 2 nor tab 3 was closed prematurely!
+    expect(mockChrome.__getTabs().map((t) => t.id)).toEqual([1, 2, 3]);
+
+    // Now reconcile bookmarks (binding tab 2 to bm-linear) and re-run session/archive check
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks([
+        {
+          id: 'folder-work',
+          title: 'Work',
+          children: [{ id: 'bm-linear', title: 'Linear', url: 'https://linear.app' }]
+        }
+      ]);
+      await result.current.refreshBindings();
+    });
+
+    // Bound sleeping tab 2 is preserved, while expired unpinned tab 3 is archived!
+    expect(mockChrome.__getTabs().map((t) => t.id)).toEqual([1, 2]);
+    expect(result.current.bookmarkIdByTabId[2]).toBe('bm-linear');
+  });
+
+  it('migrates bookmark bindings when chrome.tabs.discard returns a new tab ID in discardTab and discardAllBackgroundTabs', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        url: 'https://active.com',
+        title: 'Active',
+        active: true,
+        discarded: false
+      } as chrome.tabs.Tab,
+      {
+        id: 10,
+        windowId: 10,
+        url: 'https://github.com',
+        title: 'GitHub',
+        active: false,
+        discarded: false
+      } as chrome.tabs.Tab,
+      {
+        id: 20,
+        windowId: 10,
+        url: 'https://figma.com',
+        title: 'Figma',
+        active: false,
+        discarded: false
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-gh': {
+          bookmarkId: 'bm-gh',
+          tabId: 10,
+          windowId: 10,
+          originalUrl: 'https://github.com',
+          currentUrl: 'https://github.com',
+          currentTitle: 'GitHub',
+          isNavigatedAway: false
+        },
+        'bm-figma': {
+          bookmarkId: 'bm-figma',
+          tabId: 20,
+          windowId: 10,
+          originalUrl: 'https://figma.com',
+          currentUrl: 'https://figma.com',
+          currentTitle: 'Figma',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 10: 'bm-gh', 20: 'bm-figma' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Mock chrome.tabs.discard to swap tab IDs (10 -> 110, 20 -> 120) as older/certain Chromium builds do
+    mockChrome.tabs.discard
+      .mockImplementationOnce(async () => {
+        const tabs = mockChrome.__getTabs();
+        const t = tabs.find((x) => x.id === 10)!;
+        t.id = 110;
+        t.discarded = true;
+        return { ...t };
+      })
+      .mockImplementationOnce(async () => {
+        const tabs = mockChrome.__getTabs();
+        const t = tabs.find((x) => x.id === 20)!;
+        t.id = 120;
+        t.discarded = true;
+        return { ...t };
+      });
+
+    await act(async () => {
+      await result.current.discardTab(10);
+    });
+    expect(result.current.bookmarkIdByTabId[110]).toBe('bm-gh');
+    expect(result.current.bindingsByBookmarkId['bm-gh']?.tabId).toBe(110);
+
+    await act(async () => {
+      await result.current.discardAllBackgroundTabs();
+    });
+    expect(result.current.bookmarkIdByTabId[120]).toBe('bm-figma');
+    expect(result.current.bindingsByBookmarkId['bm-figma']?.tabId).toBe(120);
+  });
+
+  it('does not open duplicate tabs when chrome.windows.update rejects during handleRowClick, handleFaviconClick, or handleFaviconDoubleClick', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 42,
+        windowId: 10,
+        url: 'https://github.com/pulls',
+        title: 'Pull Requests',
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-gh': {
+          bookmarkId: 'bm-gh',
+          tabId: 42,
+          windowId: 10,
+          originalUrl: 'https://github.com',
+          currentUrl: 'https://github.com/pulls',
+          currentTitle: 'Pull Requests',
+          isNavigatedAway: true
+        }
+      },
+      bookmarkIdByTabId: { 42: 'bm-gh' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    mockChrome.windows.update.mockRejectedValue(new Error('Window focus temporarily unavailable'));
+    mockChrome.tabs.create.mockClear();
+
+    const ghBm: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-gh',
+      title: 'GitHub',
+      url: 'https://github.com'
+    };
+
+    await act(async () => {
+      await result.current.handleRowClick(ghBm);
+      await result.current.handleFaviconClick(ghBm);
+      await result.current.handleFaviconDoubleClick(ghBm);
+    });
+
+    // Must NEVER fall through to creating a duplicate tab when windows.update throws!
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+
+    // Reset mock implementation for subsequent tests
+    mockChrome.windows.update.mockResolvedValue(undefined);
+  });
+
+  it('cleans up persistedBindingsByBookmarkId on handleCloseTab, unpinBookmarkTab, and closeAllWindowTabs', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 11,
+        windowId: 10,
+        url: 'https://a.com/sub',
+        title: 'A',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 12,
+        windowId: 10,
+        url: 'https://b.com/sub',
+        title: 'B',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 13,
+        windowId: 10,
+        url: 'https://c.com/sub',
+        title: 'C',
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+
+    const initialBindings = {
+      'bm-a': {
+        bookmarkId: 'bm-a',
+        tabId: 11,
+        windowId: 10,
+        originalUrl: 'https://a.com',
+        currentUrl: 'https://a.com/sub',
+        currentTitle: 'A',
+        isNavigatedAway: true
+      },
+      'bm-b': {
+        bookmarkId: 'bm-b',
+        tabId: 12,
+        windowId: 10,
+        originalUrl: 'https://b.com',
+        currentUrl: 'https://b.com/sub',
+        currentTitle: 'B',
+        isNavigatedAway: true
+      },
+      'bm-c': {
+        bookmarkId: 'bm-c',
+        tabId: 13,
+        windowId: 10,
+        originalUrl: 'https://c.com',
+        currentUrl: 'https://c.com/sub',
+        currentTitle: 'C',
+        isNavigatedAway: true
+      }
+    };
+
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: initialBindings,
+      bookmarkIdByTabId: { 11: 'bm-a', 12: 'bm-b', 13: 'bm-c' }
+    });
+    mockChrome.__setLocalStorage({
+      persistedBindingsByBookmarkId: {
+        'bm-a': { ...initialBindings['bm-a'], updatedAt: 1 },
+        'bm-b': { ...initialBindings['bm-b'], updatedAt: 1 },
+        'bm-c': { ...initialBindings['bm-c'], updatedAt: 1 }
+      }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // 1. handleCloseTab removes bm-a from persistedBindingsByBookmarkId
+    await act(async () => {
+      await result.current.handleCloseTab(11);
+    });
+    expect(
+      (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<string, any>)?.[
+        'bm-a'
+      ]
+    ).toBeUndefined();
+    expect(
+      (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<string, any>)?.[
+        'bm-b'
+      ]
+    ).toBeDefined();
+
+    // 2. unpinBookmarkTab removes bm-b from persistedBindingsByBookmarkId
+    await act(async () => {
+      await result.current.unpinBookmarkTab({ id: 'bm-b', title: 'B', url: 'https://b.com' });
+    });
+    expect(
+      (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<string, any>)?.[
+        'bm-b'
+      ]
+    ).toBeUndefined();
+    expect(
+      (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<string, any>)?.[
+        'bm-c'
+      ]
+    ).toBeDefined();
+
+    // 3. closeAllWindowTabs clears all remaining persistedBindingsByBookmarkId
+    await act(async () => {
+      await result.current.closeAllWindowTabs();
+    });
+    expect(mockChrome.__getLocalStorage().persistedBindingsByBookmarkId).toBeUndefined();
+  });
 });

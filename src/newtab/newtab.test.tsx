@@ -976,4 +976,290 @@ describe('newtab url detection and formatting', () => {
       expect(screen.queryByText('Scratchpad Backup')).not.toBeInTheDocument();
     });
   });
+
+  describe('Sleeping tabs, canonical redirects, and duplicate prevention in Command Bar', () => {
+    it('wakes and binds an unbound sleeping canonical-redirected tab (pendingUrl) and persists binding to local storage', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: '12',
+                      title: 'Home',
+                      children: [
+                        { id: 'bm-gmail', title: 'Gmail Inbox', url: 'https://gmail.com' }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      // Tab 1 is the active Arctic Command launcher; Tab 2 is a sleeping Gmail tab with pendingUrl
+      mockChrome.__setTabs([
+        {
+          id: 1,
+          windowId: 10,
+          url: 'chrome-extension://mock-extension-id/command.html',
+          title: 'Arctic Command',
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 2,
+          windowId: 10,
+          url: '',
+          pendingUrl: 'https://mail.google.com/mail/u/0/#inbox',
+          title: 'Inbox - Gmail',
+          discarded: true,
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+      mockChrome.__setSessionStorage({});
+      mockChrome.__setLocalStorage({});
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'Gmail Inbox' } });
+      });
+
+      const bmItem = await screen.findByText('Gmail Inbox');
+      await act(async () => {
+        fireEvent.click(bmItem);
+      });
+
+      // Sleeping tab 2 was woken/focused and bound to bm-gmail; launcher tab 1 was closed
+      expect(chrome.tabs.update).toHaveBeenCalledWith(2, { active: true });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(1);
+
+      const session = mockChrome.__getSessionStorage();
+      expect((session.bookmarkIdByTabId as Record<number, string>)[2]).toBe('bm-gmail');
+      expect(
+        (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<string, any>)?.[
+          'bm-gmail'
+        ]?.currentUrl
+      ).toBe('https://mail.google.com/mail/u/0/#inbox');
+    });
+
+    it('does not steal a tab already bound to a different Arctic bookmark when opening a second bookmark with the same URL', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: '12',
+                      title: 'Home',
+                      children: [
+                        { id: 'bm-gh-1', title: 'GitHub Primary', url: 'https://github.com' },
+                        { id: 'bm-gh-2', title: 'GitHub Secondary', url: 'https://github.com' }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      // Tab 1 is Command Bar launcher; Tab 2 is ALREADY bound to bm-gh-1
+      mockChrome.__setTabs([
+        {
+          id: 1,
+          windowId: 10,
+          url: 'chrome-extension://mock-extension-id/command.html',
+          title: 'Arctic Command',
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 2,
+          windowId: 10,
+          url: 'https://github.com',
+          title: 'GitHub',
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+      mockChrome.__setSessionStorage({
+        bindingsByBookmarkId: {
+          'bm-gh-1': {
+            bookmarkId: 'bm-gh-1',
+            tabId: 2,
+            windowId: 10,
+            originalUrl: 'https://github.com',
+            currentUrl: 'https://github.com',
+            currentTitle: 'GitHub',
+            isNavigatedAway: false
+          }
+        },
+        bookmarkIdByTabId: { 2: 'bm-gh-1' }
+      });
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'GitHub Secondary' } });
+      });
+
+      const secondItem = await screen.findByText('GitHub Secondary');
+      await act(async () => {
+        fireEvent.click(secondItem);
+      });
+
+      // Must NOT steal tab 2 from bm-gh-1; instead opens in current launcher tab 1 and binds tab 1 -> bm-gh-2
+      const session = mockChrome.__getSessionStorage();
+      expect((session.bookmarkIdByTabId as Record<number, string>)[2]).toBe('bm-gh-1');
+      expect((session.bookmarkIdByTabId as Record<number, string>)[1]).toBe('bm-gh-2');
+      expect(chrome.tabs.update).toHaveBeenCalledWith(1, {
+        url: 'https://github.com',
+        active: true
+      });
+    });
+
+    it('prunes stale dead binding in Case A and re-binds an existing matching tab cleanly', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: '12',
+                      title: 'Home',
+                      children: [
+                        { id: 'bm-linear', title: 'Linear App', url: 'https://linear.app' }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      // Session claims bm-linear is bound to dead tab 999, while tab 3 is an unbound Linear tab
+      mockChrome.__setTabs([
+        {
+          id: 1,
+          windowId: 10,
+          url: 'chrome-extension://mock-extension-id/command.html',
+          title: 'Arctic Command',
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 3,
+          windowId: 10,
+          url: 'https://linear.app',
+          title: 'Linear',
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+      mockChrome.__setSessionStorage({
+        bindingsByBookmarkId: {
+          'bm-linear': {
+            bookmarkId: 'bm-linear',
+            tabId: 999,
+            windowId: 10,
+            originalUrl: 'https://linear.app',
+            currentUrl: 'https://linear.app',
+            currentTitle: 'Linear',
+            isNavigatedAway: false
+          }
+        },
+        bookmarkIdByTabId: { 999: 'bm-linear' }
+      });
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'Linear App' } });
+      });
+
+      const linearItem = await screen.findByText('Linear App');
+      await act(async () => {
+        fireEvent.click(linearItem);
+      });
+
+      const session = mockChrome.__getSessionStorage();
+      // Dead tab 999 entry was pruned, and live tab 3 is now bound to bm-linear
+      expect((session.bookmarkIdByTabId as Record<number, string>)[999]).toBeUndefined();
+      expect((session.bookmarkIdByTabId as Record<number, string>)[3]).toBe('bm-linear');
+      expect(chrome.tabs.update).toHaveBeenCalledWith(3, { active: true });
+    });
+
+    it('Close Duplicate Tabs command detects and closes sleeping duplicate tabs using pendingUrl', async () => {
+      mockChrome.__setTabs([
+        {
+          id: 1,
+          windowId: 10,
+          url: 'chrome-extension://mock-extension-id/command.html',
+          title: 'Arctic Command',
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 2,
+          windowId: 10,
+          url: 'https://docs.example.com/guide/',
+          title: 'Guide',
+          active: false
+        } as chrome.tabs.Tab,
+        {
+          id: 3,
+          windowId: 10,
+          url: '',
+          pendingUrl: 'https://docs.example.com/guide#intro',
+          title: 'Guide (Sleeping)',
+          discarded: true,
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i);
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: '> close duplicate' } });
+      });
+
+      const cmdItem = await screen.findByText('Close Duplicate Tabs');
+      await act(async () => {
+        fireEvent.click(cmdItem);
+      });
+
+      // Sleeping duplicate tab 3 was detected via pendingUrl and removed
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(3);
+      expect(await screen.findByText('Closed 1 duplicate tab')).toBeInTheDocument();
+    });
+  });
 });

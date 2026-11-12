@@ -720,4 +720,186 @@ describe('useBookmarks hook', () => {
 
     expect(chrome.bookmarks.getTree).not.toHaveBeenCalled();
   });
+
+  it('exposes allSpaceBookmarkNodes ordered with the active Space first and reorders on selectSpace', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: 'bm-home-qa', title: 'Gmail', url: 'https://gmail.com' }]
+                      },
+                      { id: 'bm-home', title: 'Home Doc', url: 'https://docs.google.com' }
+                    ]
+                  },
+                  {
+                    id: '20',
+                    title: 'Work',
+                    children: [
+                      {
+                        id: '21',
+                        title: 'Quick Access',
+                        children: [{ id: 'bm-work-qa', title: 'Linear', url: 'https://linear.app' }]
+                      },
+                      { id: 'bm-work', title: 'Datadog', url: 'https://datadoghq.com' }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setSyncStorage({});
+
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Initially Home ('11', '12') is first, followed by Work ('21', '20')
+    expect(result.current.allSpaceBookmarkNodes.map((n) => n.id)).toEqual(['11', '12', '21', '20']);
+
+    const workSpace = result.current.spaces.find((s) => s.name === 'Work')!;
+    expect(workSpace).toBeDefined();
+
+    // Switch active space to Work
+    await act(async () => {
+      await result.current.selectSpace(workSpace.id);
+    });
+
+    // Now Work ('21', '20') is prioritized ahead of Home ('11', '12')
+    expect(result.current.allSpaceBookmarkNodes.map((n) => n.id)).toEqual(['21', '20', '11', '12']);
+  });
+
+  it('removeBookmarkOrFolder cleans up persistedBindingsByBookmarkId for both single bookmarks and nested folders', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: '11', title: 'Quick Access', children: [] },
+                      { id: 'bm-single', title: 'Single Link', url: 'https://single.com' },
+                      { id: 'bm-keep', title: 'Keep Link', url: 'https://keep.com' },
+                      {
+                        id: 'folder-nested',
+                        title: 'Nested Folder',
+                        children: [
+                          { id: 'bm-child-1', title: 'Child 1', url: 'https://child1.com' },
+                          {
+                            id: 'subfolder',
+                            title: 'Subfolder',
+                            children: [
+                              { id: 'bm-child-2', title: 'Child 2', url: 'https://child2.com' }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    mockChrome.__setLocalStorage({
+      persistedBindingsByBookmarkId: {
+        'bm-single': {
+          bookmarkId: 'bm-single',
+          originalUrl: 'https://single.com',
+          currentUrl: 'https://single.com/page',
+          currentTitle: 'Single',
+          isNavigatedAway: true,
+          updatedAt: 1
+        },
+        'bm-child-1': {
+          bookmarkId: 'bm-child-1',
+          originalUrl: 'https://child1.com',
+          currentUrl: 'https://child1.com/a',
+          currentTitle: 'Child 1',
+          isNavigatedAway: true,
+          updatedAt: 1
+        },
+        'bm-child-2': {
+          bookmarkId: 'bm-child-2',
+          originalUrl: 'https://child2.com',
+          currentUrl: 'https://child2.com/b',
+          currentTitle: 'Child 2',
+          isNavigatedAway: true,
+          updatedAt: 1
+        },
+        'bm-keep': {
+          bookmarkId: 'bm-keep',
+          originalUrl: 'https://keep.com',
+          currentUrl: 'https://keep.com/x',
+          currentTitle: 'Keep',
+          isNavigatedAway: true,
+          updatedAt: 1
+        }
+      }
+    });
+
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Remove single bookmark
+    await act(async () => {
+      await result.current.removeBookmarkOrFolder('bm-single');
+    });
+
+    let persisted = mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<
+      string,
+      unknown
+    >;
+    expect(persisted['bm-single']).toBeUndefined();
+    expect(persisted['bm-child-1']).toBeDefined();
+    expect(persisted['bm-keep']).toBeDefined();
+
+    // Remove nested folder -> cleans up all nested descendant bookmark persisted bindings
+    await act(async () => {
+      await result.current.removeBookmarkOrFolder('folder-nested');
+    });
+
+    persisted = mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<
+      string,
+      unknown
+    >;
+    expect(persisted['bm-child-1']).toBeUndefined();
+    expect(persisted['bm-child-2']).toBeUndefined();
+    expect(persisted['bm-keep']).toBeDefined();
+  });
 });
