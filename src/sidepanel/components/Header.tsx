@@ -8,7 +8,9 @@ import {
   Globe,
   Sparkles,
   ArrowLeft,
-  Check
+  Check,
+  PanelLeftClose,
+  PanelRightClose
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -17,6 +19,8 @@ interface HeaderProps {
   onReloadActiveTab: (bypassCache?: boolean) => void;
   onNavigateActiveTab?: (input: string) => void;
   onGoBackActiveTab?: () => void;
+  onHideSidebar?: () => void;
+  sidebarDockSide?: 'left' | 'right';
 }
 
 function formatDisplayUrl(rawUrl?: string): { display: string; isSecure: boolean; isInternal: boolean } {
@@ -54,7 +58,9 @@ export const Header: React.FC<HeaderProps> = ({
   isActiveTabLoading = false,
   onReloadActiveTab,
   onNavigateActiveTab,
-  onGoBackActiveTab
+  onGoBackActiveTab,
+  onHideSidebar,
+  sidebarDockSide = 'left'
 }) => {
   const [isCopied, setIsCopied] = useState(false);
 
@@ -191,10 +197,10 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       )}
 
-      {/* Top Address / URL Bar with Back, Copy Link & Reload */}
-      <div className="px-2.5 py-2">
+      {/* Top Address / URL Bar with Back, Copy Link, Reload & Hide Sidebar */}
+      <div className="px-2.5 py-2 flex items-center gap-1.5">
         <div
-          className={`flex items-center h-8 px-2.5 rounded-xl border transition-all duration-150 ${
+          className={`flex-1 min-w-0 flex items-center h-8 px-2.5 rounded-xl border transition-all duration-150 ${
             isEditingUrl
               ? 'bg-white dark:bg-zinc-900 border-[var(--theme-accent)] shadow-sm'
               : 'bg-black/[0.04] dark:bg-white/[0.05] hover:bg-black/[0.06] dark:hover:bg-white/[0.08] border-black/[0.06] dark:border-white/[0.07]'
@@ -372,6 +378,24 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Hide Sidebar (Edge Trigger) Button */}
+        {onHideSidebar && (
+          <button
+            type="button"
+            data-tooltip="Hide sidebar"
+            data-tooltip-pos="bottom-right"
+            aria-label="Hide sidebar"
+            onClick={onHideSidebar}
+            className="flex-shrink-0 h-8 w-8 flex items-center justify-center rounded-xl border bg-black/[0.04] dark:bg-white/[0.05] hover:bg-black/[0.08] dark:hover:bg-white/[0.1] border-black/[0.06] dark:border-white/[0.07] text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white active:scale-95 transition-all duration-150"
+          >
+            {sidebarDockSide === 'right' ? (
+              <PanelRightClose className="w-3.5 h-3.5" />
+            ) : (
+              <PanelLeftClose className="w-3.5 h-3.5" />
+            )}
+          </button>
+        )}
       </div>
     </div>
   );

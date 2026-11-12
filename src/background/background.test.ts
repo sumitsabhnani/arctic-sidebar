@@ -12,7 +12,13 @@ import {
   handleTabRemoved,
   handleTabReplaced,
   handleTabUpdated,
-  reconcileReminders
+  reconcileReminders,
+  handleRuntimeMessage,
+  handleSidePanelPortConnect,
+  syncEdgeTriggerContentScript,
+  getEdgeRailDataForWindow,
+  EDGE_TRIGGER_SCRIPT_ID,
+  EDGE_TRIGGER_ORIGINS
 } from './index';
 import { mockChrome } from '../test/setup';
 
@@ -639,5 +645,595 @@ describe('Background service worker reminder lifecycle', () => {
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.tabs.update).toHaveBeenCalledWith(61, { active: true });
+  });
+
+  describe('Edge Trigger & Side Panel Visibility Lifecycle', () => {
+    it('OPEN_SIDE_PANEL_FROM_EDGE calls chrome.sidePanel.open synchronously before any microtask gap', async () => {
+      let calledSynchronously = false;
+      mockChrome.sidePanel.open.mockImplementationOnce(() => {
+        calledSynchronously = true;
+        return Promise.resolve();
+      });
+
+      const sendResponse = vi.fn();
+      const ret = handleRuntimeMessage(
+        { type: 'OPEN_SIDE_PANEL_FROM_EDGE' },
+        { tab: { id: 5, windowId: 42 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        sendResponse
+      );
+
+      // Must be true BEFORE any await so Chrome preserves transient user gesture
+      expect(calledSynchronously).toBe(true);
+      expect(ret).toBe(true);
+      expect(mockChrome.sidePanel.open).toHaveBeenCalledWith({ windowId: 42 });
+
+      await new Promise((r) => setTimeout(r, 10));
+      expect(sendResponse).toHaveBeenCalledWith({ ok: true });
+    });
+
+    it('tracks sidePanel open and close per window via runtime port and SIDEPANEL_WILL_CLOSE', async () => {
+      mockChrome.runtime.onConnect.addListener(handleSidePanelPortConnect);
+      const port = chrome.runtime.connect({ name: 'arctic-sidepanel' });
+      port.postMessage({ type: 'SIDEPANEL_INIT', windowId: 77 });
+
+      await new Promise((r) => setTimeout(r, 15));
+      expect(mockChrome.__getSessionStorage().openSidePanelWindowIds).toEqual([77]);
+
+      // Disconnecting port removes window 77 from openSidePanelWindowIds
+      port.disconnect();
+      await new Promise((r) => setTimeout(r, 15));
+      expect(mockChrome.__getSessionStorage().openSidePanelWindowIds).toEqual([]);
+    });
+
+    it('registers dynamic content script and injects only into non-discarded open tabs when enabled with permission', async () => {
+      mockChrome.__setLocalStorage({ edgeTriggerEnabled: true });
+      mockChrome.__setHostPermissionsGranted(true);
+      mockChrome.__setTabs([
+        { id: 101, windowId: 10, url: 'https://github.com', discarded: false, active: true } as chrome.tabs.Tab,
+        { id: 102, windowId: 10, url: 'https://news.ycombinator.com', discarded: true, active: false } as chrome.tabs.Tab
+      ]);
+
+      const active = await syncEdgeTriggerContentScript(true);
+      expect(active).toBe(true);
+      expect(chrome.scripting.registerContentScripts).toHaveBeenCalledWith([
+        expect.objectContaining({
+          id: EDGE_TRIGGER_SCRIPT_ID,
+          matches: EDGE_TRIGGER_ORIGINS,
+          js: ['edgeTrigger.js']
+        })
+      ]);
+      // Injected into active tab 101, NOT sleeping tab 102
+      expect(chrome.scripting.executeScript).toHaveBeenCalledTimes(1);
+      expect(chrome.scripting.executeScript).toHaveBeenCalledWith({
+        target: { tabId: 101 },
+        files: ['edgeTrigger.js']
+      });
+
+      // Disabling unregisters and notifies open tabs to unmount
+      mockChrome.__setLocalStorage({ edgeTriggerEnabled: false });
+      const afterDisable = await syncEdgeTriggerContentScript(false);
+      expect(afterDisable).toBe(false);
+      expect(chrome.scripting.unregisterContentScripts).toHaveBeenCalledWith({
+        ids: [EDGE_TRIGGER_SCRIPT_ID]
+      });
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(101, {
+        type: 'ARCTIC_REMOVE_EDGE_TRIGGER'
+      });
+    });
+
+    it('GET_EDGE_TRIGGER_STATE returns tab windowId, openWindowIds, mode, and enabled status', async () => {
+      mockChrome.__setLocalStorage({ edgeTriggerEnabled: true, sidebarDockSide: 'right' });
+      mockChrome.__setSessionStorage({ openSidePanelWindowIds: [99] });
+      mockChrome.__setHostPermissionsGranted(true);
+
+      const sendResponse = vi.fn();
+      handleRuntimeMessage(
+        { type: 'GET_EDGE_TRIGGER_STATE' },
+        { tab: { id: 7, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        sendResponse
+      );
+
+      await new Promise((r) => setTimeout(r, 20));
+      expect(sendResponse).toHaveBeenCalledWith({
+        windowId: 10,
+        openWindowIds: [99],
+        edgeTriggerEnabled: true,
+        side: 'right',
+        mode: 'push',
+        justCollapsed: false,
+        quickAccessItems: expect.any(Array),
+        spaceItems: expect.any(Array),
+        spaceName: expect.any(String)
+      });
+
+      // Also returns mode: 'hover' when edgeTriggerMode is 'hover'
+      mockChrome.__setLocalStorage({
+        edgeTriggerEnabled: true,
+        sidebarDockSide: 'left',
+        edgeTriggerMode: 'hover'
+      });
+      const sendHoverResponse = vi.fn();
+      handleRuntimeMessage(
+        { type: 'GET_EDGE_TRIGGER_STATE' },
+        { tab: { id: 7, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        sendHoverResponse
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      expect(sendHoverResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          side: 'left',
+          mode: 'hover'
+        })
+      );
+    });
+
+    it('PREPARE_HIDE_SIDEBAR atomically closes window state, injects into open web tabs, and broadcasts ARCTIC_SIDEPANEL_VISIBILITY with quickAccessItems and spaceItems to active tab', async () => {
+      mockChrome.__setLocalStorage({ edgeTriggerEnabled: true, sidebarDockSide: 'left' });
+      mockChrome.__setSessionStorage({ openSidePanelWindowIds: [10] });
+      mockChrome.__setHostPermissionsGranted(true);
+      mockChrome.__setTabs([
+        {
+          id: 201,
+          windowId: 10,
+          url: 'https://example.com',
+          discarded: false,
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 202,
+          windowId: 10,
+          url: 'chrome://extensions',
+          discarded: false,
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+
+      const sendResponse = vi.fn();
+      handleRuntimeMessage(
+        { type: 'PREPARE_HIDE_SIDEBAR', windowId: 10, injectIntoOpenTabs: true },
+        {} as chrome.runtime.MessageSender,
+        sendResponse
+      );
+
+      await new Promise((r) => setTimeout(r, 25));
+
+      expect(sendResponse).toHaveBeenCalledWith({ ok: true, active: true });
+      expect(mockChrome.__getSessionStorage().openSidePanelWindowIds).toEqual([]);
+      // Only web tab 201 is injected, never restricted chrome:// tab 202
+      expect(chrome.scripting.executeScript).toHaveBeenCalledWith({
+        target: { tabId: 201 },
+        files: ['edgeTrigger.js']
+      });
+      expect(chrome.scripting.executeScript).not.toHaveBeenCalledWith({
+        target: { tabId: 202 },
+        files: ['edgeTrigger.js']
+      });
+      // Direct visibility push sent with quickAccessItems and spaceItems to active tab
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(201, {
+        type: 'ARCTIC_SIDEPANEL_VISIBILITY',
+        windowId: 10,
+        isSidePanelOpen: false,
+        openWindowIds: [],
+        justCollapsed: true,
+        quickAccessItems: expect.any(Array),
+        spaceItems: expect.any(Array),
+        spaceName: 'Home'
+      });
+    });
+
+    it('ACTIVATE_QUICK_ACCESS_FROM_EDGE switches to bound tab, resets drifted active tab, or opens and binds unbound Quick Access bookmark', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: '12',
+                      title: 'Home',
+                      children: [
+                        {
+                          id: '11',
+                          title: 'Quick Access',
+                          children: [
+                            { id: 'qa-gh', title: 'GitHub', url: 'https://github.com' },
+                            { id: 'qa-yt', title: 'YouTube', url: 'https://youtube.com' }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      mockChrome.__setTabs([
+        {
+          id: 301,
+          windowId: 10,
+          url: 'https://github.com/notifications',
+          title: 'Notifications',
+          active: true
+        } as chrome.tabs.Tab
+      ]);
+
+      mockChrome.__setSessionStorage({
+        bindingsByBookmarkId: {
+          'qa-gh': {
+            bookmarkId: 'qa-gh',
+            tabId: 301,
+            windowId: 10,
+            originalUrl: 'https://github.com',
+            currentUrl: 'https://github.com/notifications',
+            currentTitle: 'Notifications',
+            isNavigatedAway: true
+          }
+        },
+        bookmarkIdByTabId: { 301: 'qa-gh' }
+      });
+
+      // 1. Clicking already-active drifted Quick Access bookmark resets it to originalUrl
+      const resp1 = vi.fn();
+      handleRuntimeMessage(
+        { type: 'ACTIVATE_QUICK_ACCESS_FROM_EDGE', bookmarkId: 'qa-gh' },
+        { tab: { id: 301, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        resp1
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(resp1).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.tabs.update).toHaveBeenCalledWith(301, {
+        url: 'https://github.com',
+        active: true
+      });
+      expect(mockChrome.sidePanel.open).not.toHaveBeenCalled();
+
+      // 2. Clicking unbound Quick Access bookmark 'qa-yt' creates a new tab and binds it
+      const resp2 = vi.fn();
+      handleRuntimeMessage(
+        { type: 'ACTIVATE_QUICK_ACCESS_FROM_EDGE', bookmarkId: 'qa-yt' },
+        { tab: { id: 301, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        resp2
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(resp2).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.tabs.create).toHaveBeenCalledWith({
+        url: 'https://youtube.com',
+        active: true,
+        windowId: 10
+      });
+      const session = mockChrome.__getSessionStorage();
+      expect((session.bindingsByBookmarkId as Record<string, any>)['qa-yt']).toBeDefined();
+    });
+
+    it('getEdgeRailDataForWindow returns Quick Access items alongside Active Space saved tabs and folders with aggregated folder status', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: '12',
+                      title: 'Work',
+                      children: [
+                        {
+                          id: '11',
+                          title: 'Quick Access',
+                          children: [{ id: 'qa-1', title: 'Gmail', url: 'https://mail.google.com' }]
+                        },
+                        { id: 'sp-bm-1', title: 'Linear', url: 'https://linear.app' },
+                        {
+                          id: 'sp-folder-1',
+                          title: 'Design Docs',
+                          children: [
+                            { id: 'f-bm-1', title: 'Figma Spec', url: 'https://figma.com/spec' },
+                            {
+                              id: 'sp-subfolder-1',
+                              title: 'Archive',
+                              children: [
+                                { id: 'f-bm-2', title: 'Old Spec', url: 'https://figma.com/old' }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      mockChrome.__setLocalStorage({
+        spaces: [{ id: 'work', name: 'Work', folderId: '12', quickAccessFolderId: '11' }],
+        activeSpaceId: 'work'
+      });
+
+      mockChrome.__setTabs([
+        {
+          id: 401,
+          windowId: 10,
+          url: 'https://figma.com/spec/edit',
+          title: 'Figma Editing',
+          active: true
+        } as chrome.tabs.Tab
+      ]);
+
+      mockChrome.__setSessionStorage({
+        bindingsByBookmarkId: {
+          'f-bm-1': {
+            bookmarkId: 'f-bm-1',
+            tabId: 401,
+            windowId: 10,
+            originalUrl: 'https://figma.com/spec',
+            currentUrl: 'https://figma.com/spec/edit',
+            currentTitle: 'Figma Editing',
+            isNavigatedAway: true
+          }
+        },
+        bookmarkIdByTabId: { 401: 'f-bm-1' }
+      });
+
+      const railData = await getEdgeRailDataForWindow(10);
+      expect(railData.spaceName).toBe('Work');
+      expect(railData.quickAccessItems).toHaveLength(1);
+      expect(railData.quickAccessItems[0].id).toBe('qa-1');
+
+      // Space items exclude the Quick Access subfolder and include Linear + Design Docs folder
+      expect(railData.spaceItems).toHaveLength(2);
+      expect(railData.spaceItems[0]).toMatchObject({
+        type: 'bookmark',
+        id: 'sp-bm-1',
+        title: 'Linear'
+      });
+      expect(railData.spaceItems[1]).toMatchObject({
+        type: 'folder',
+        id: 'sp-folder-1',
+        title: 'Design Docs',
+        hasActiveChild: true,
+        hasOpenChild: true,
+        hasNavigatedAwayChild: true,
+        itemCount: 2
+      });
+    });
+
+    it('only broadcasts ARCTIC_EDGE_ITEMS_UPDATED to the active tab and skips resolving rail data when sidebar is open', async () => {
+      mockChrome.__setLocalStorage({ edgeTriggerEnabled: true });
+      mockChrome.__setHostPermissionsGranted(true);
+      mockChrome.__setSessionStorage({ openSidePanelWindowIds: [] });
+      mockChrome.__setTabs([
+        { id: 501, windowId: 10, url: 'https://active.example', active: true, discarded: false } as chrome.tabs.Tab,
+        { id: 502, windowId: 10, url: 'https://bg1.example', active: false, discarded: false } as chrome.tabs.Tab,
+        { id: 503, windowId: 10, url: 'https://bg2.example', active: false, discarded: false } as chrome.tabs.Tab
+      ]);
+
+      vi.mocked(chrome.tabs.sendMessage).mockClear();
+      await handleTabActivated({ tabId: 501, windowId: 10 });
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Active tab 501 receives update; background tabs 502 & 503 are NOT spammed
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(
+        501,
+        expect.objectContaining({ type: 'ARCTIC_EDGE_ITEMS_UPDATED', windowId: 10 })
+      );
+      expect(chrome.tabs.sendMessage).not.toHaveBeenCalledWith(502, expect.anything());
+      expect(chrome.tabs.sendMessage).not.toHaveBeenCalledWith(503, expect.anything());
+
+      // When sidePanel is open in window 10 via active port, GET_EDGE_TRIGGER_STATE skips bookmark queries
+      mockChrome.runtime.onConnect.addListener(handleSidePanelPortConnect);
+      const port = chrome.runtime.connect({ name: 'arctic-sidepanel' });
+      port.postMessage({ type: 'SIDEPANEL_INIT', windowId: 10 });
+      await new Promise((r) => setTimeout(r, 20));
+
+      vi.mocked(chrome.bookmarks.getTree).mockClear();
+      vi.mocked(chrome.bookmarks.getSubTree).mockClear();
+
+      const resp = vi.fn();
+      handleRuntimeMessage(
+        { type: 'GET_EDGE_TRIGGER_STATE' },
+        { tab: { id: 501, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        resp
+      );
+      await new Promise((r) => setTimeout(r, 25));
+
+      expect(chrome.bookmarks.getTree).not.toHaveBeenCalled();
+      expect(chrome.bookmarks.getSubTree).not.toHaveBeenCalled();
+      expect(resp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          windowId: 10,
+          openWindowIds: [10],
+          quickAccessItems: [],
+          spaceItems: []
+        })
+      );
+
+      port.disconnect();
+      await new Promise((r) => setTimeout(r, 15));
+    });
+
+    it('ACTIVATE_QUICK_ACCESS_FROM_EDGE adopts an existing matching unbound tab instead of opening a duplicate, and reloads on forceReset', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: '12',
+                      title: 'Home',
+                      children: [{ id: 'sp-cal', title: 'Calendar', url: 'https://calendar.google.com' }]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+
+      mockChrome.__setTabs([
+        {
+          id: 601,
+          windowId: 10,
+          url: 'https://example.com',
+          title: 'Example',
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 602,
+          windowId: 10,
+          url: 'https://calendar.google.com/',
+          title: 'Google Calendar',
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+      mockChrome.__setSessionStorage({});
+
+      vi.mocked(chrome.tabs.create).mockClear();
+      vi.mocked(chrome.tabs.update).mockClear();
+
+      // 1. Clicking unbound bookmark 'sp-cal' adopts existing unbound tab 602 without creating a duplicate tab
+      const respAdopt = vi.fn();
+      handleRuntimeMessage(
+        { type: 'ACTIVATE_QUICK_ACCESS_FROM_EDGE', bookmarkId: 'sp-cal' },
+        { tab: { id: 601, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        respAdopt
+      );
+      await new Promise((r) => setTimeout(r, 25));
+
+      expect(respAdopt).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.tabs.create).not.toHaveBeenCalled();
+      expect(chrome.tabs.update).toHaveBeenCalledWith(602, { active: true });
+      expect(
+        (mockChrome.__getSessionStorage().bindingsByBookmarkId as Record<string, any>)['sp-cal']?.tabId
+      ).toBe(602);
+
+      // 2. Double-clicking ('forceReset: true') on bound non-drifted tab 602 reloads it
+      const respReload = vi.fn();
+      handleRuntimeMessage(
+        { type: 'ACTIVATE_QUICK_ACCESS_FROM_EDGE', bookmarkId: 'sp-cal', forceReset: true },
+        { tab: { id: 602, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        respReload
+      );
+      await new Promise((r) => setTimeout(r, 25));
+
+      expect(respReload).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.tabs.reload).toHaveBeenCalledWith(602);
+    });
+
+    it('SIDEPANEL_WILL_CLOSE marks window closed with closing guard and GET_EDGE_FOLDER_FAVICONS deduplicates URLs', async () => {
+      mockChrome.runtime.onConnect.addListener(handleSidePanelPortConnect);
+      const port = chrome.runtime.connect({ name: 'arctic-sidepanel' });
+      port.postMessage({ type: 'SIDEPANEL_INIT', windowId: 22 });
+      await new Promise((r) => setTimeout(r, 15));
+      expect(mockChrome.__getSessionStorage().openSidePanelWindowIds).toContain(22);
+
+      const closeResp = vi.fn();
+      handleRuntimeMessage(
+        { type: 'SIDEPANEL_WILL_CLOSE', windowId: 22 },
+        {} as chrome.runtime.MessageSender,
+        closeResp
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      expect(closeResp).toHaveBeenCalledWith({ ok: true, openWindowIds: [] });
+      expect(mockChrome.__getSessionStorage().openSidePanelWindowIds).toEqual([]);
+
+      // GET_EDGE_FOLDER_FAVICONS handles duplicate/empty URLs cleanly
+      const favResp = vi.fn();
+      handleRuntimeMessage(
+        {
+          type: 'GET_EDGE_FOLDER_FAVICONS',
+          urls: ['https://a.example', 'https://a.example', '']
+        },
+        {} as chrome.runtime.MessageSender,
+        favResp
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      expect(favResp).toHaveBeenCalledWith({
+        ok: true,
+        favicons: expect.any(Object)
+      });
+    });
+
+    it('hydrates openWindowIds via chrome.runtime.getContexts after extension reload while Side Panel is open, and immediately marks window open on OPEN_SIDE_PANEL_FROM_EDGE', async () => {
+      const rt = chrome.runtime as unknown as {
+        getContexts?: (filter: { contextTypes: string[] }) => Promise<Array<{ windowId?: number }>>;
+      };
+      const origGetContexts = rt.getContexts;
+      mockChrome.__setLocalStorage({ edgeTriggerEnabled: true });
+      mockChrome.__setSessionStorage({}); // Wiped on extension reload
+      mockChrome.__setHostPermissionsGranted(true);
+
+      rt.getContexts = vi.fn().mockResolvedValue([{ contextType: 'SIDE_PANEL', windowId: 10 }]);
+      try {
+        const resp = vi.fn();
+        handleRuntimeMessage(
+          { type: 'GET_EDGE_TRIGGER_STATE' },
+          { tab: { id: 701, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+          resp
+        );
+        await new Promise((r) => setTimeout(r, 25));
+
+        expect(resp).toHaveBeenCalledWith(
+          expect.objectContaining({
+            windowId: 10,
+            openWindowIds: [10]
+          })
+        );
+        expect(mockChrome.__getSessionStorage().openSidePanelWindowIds).toEqual([10]);
+      } finally {
+        if (origGetContexts === undefined) {
+          delete rt.getContexts;
+        } else {
+          rt.getContexts = origGetContexts;
+        }
+      }
+
+      // Also verify OPEN_SIDE_PANEL_FROM_EDGE immediately records windowId in session storage
+      const openResp = vi.fn();
+      handleRuntimeMessage(
+        { type: 'OPEN_SIDE_PANEL_FROM_EDGE' },
+        { tab: { id: 702, windowId: 33 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        openResp
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(openResp).toHaveBeenCalledWith({ ok: true });
+      expect(mockChrome.__getSessionStorage().openSidePanelWindowIds).toContain(33);
+
+      // Clean up window 33 state
+      const closeResp = vi.fn();
+      handleRuntimeMessage(
+        { type: 'SIDEPANEL_WILL_CLOSE', windowId: 33 },
+        {} as chrome.runtime.MessageSender,
+        closeResp
+      );
+      await new Promise((r) => setTimeout(r, 20));
+    });
   });
 });

@@ -190,4 +190,16 @@ describe('Header component', () => {
     // Reload button should not have animate-spin
     expect(container.querySelector('.animate-spin')).not.toBeInTheDocument();
   });
+
+  it('renders Hide sidebar button when onHideSidebar is provided and invokes callback on click', () => {
+    const onHideSidebar = vi.fn();
+    render(<Header {...defaultProps} onHideSidebar={onHideSidebar} sidebarDockSide="left" />);
+
+    const hideBtn = screen.getByLabelText('Hide sidebar');
+    expect(hideBtn).toBeInTheDocument();
+    expect(hideBtn).toHaveAttribute('data-tooltip', 'Hide sidebar');
+
+    fireEvent.click(hideBtn);
+    expect(onHideSidebar).toHaveBeenCalledTimes(1);
+  });
 });

@@ -41,6 +41,7 @@ import {
   isValidThemeMode,
   resolveEffectiveTheme
 } from '../sidepanel/utils/theme';
+import { NewTabEdgeTrigger } from './components/NewTabEdgeTrigger';
 import {
   findMatchingSiteEngine,
   getGhostAutocomplete,
@@ -2131,6 +2132,13 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           </div>
         )}
       </div>
+
+      {/* Edge Trigger Pill when Sidebar is Hidden */}
+      <NewTabEdgeTrigger
+        theme={theme}
+        colorTheme={colorTheme}
+        windowIdRef={currentWindowIdRef}
+      />
     </div>
   );
 };

@@ -118,4 +118,45 @@ describe('SettingsModal component', () => {
 
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'chrome://settings/appearance' });
   });
+
+  it('renders Edge Trigger When Hidden switch when onToggleEdgeTrigger is provided and toggles value', () => {
+    const onToggleEdgeTrigger = vi.fn();
+    render(
+      <SettingsModal
+        {...defaultProps}
+        edgeTriggerEnabled={false}
+        onToggleEdgeTrigger={onToggleEdgeTrigger}
+      />
+    );
+
+    const edgeSwitch = screen.getByRole('switch', { name: 'Edge Trigger When Hidden' });
+    expect(edgeSwitch).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(edgeSwitch);
+    expect(onToggleEdgeTrigger).toHaveBeenCalledWith(true);
+  });
+
+  it('renders Edge Stripe Behavior selector when edgeTriggerEnabled is true and calls onChangeEdgeTriggerMode', () => {
+    const onToggleEdgeTrigger = vi.fn();
+    const onChangeEdgeTriggerMode = vi.fn();
+    render(
+      <SettingsModal
+        {...defaultProps}
+        edgeTriggerEnabled={true}
+        edgeTriggerMode="push"
+        onToggleEdgeTrigger={onToggleEdgeTrigger}
+        onChangeEdgeTriggerMode={onChangeEdgeTriggerMode}
+      />
+    );
+
+    expect(screen.getByText('Edge Stripe Behavior')).toBeInTheDocument();
+
+    const hoverBtn = screen.getByRole('button', { name: 'Auto-Hide on Hover' });
+    fireEvent.click(hoverBtn);
+    expect(onChangeEdgeTriggerMode).toHaveBeenCalledWith('hover');
+
+    const pushBtn = screen.getByRole('button', { name: 'Push Page (No overlap)' });
+    fireEvent.click(pushBtn);
+    expect(onChangeEdgeTriggerMode).toHaveBeenCalledWith('push');
+  });
 });

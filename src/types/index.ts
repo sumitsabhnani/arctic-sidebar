@@ -54,6 +54,8 @@ export interface SiteSearchEngine {
   searchUrlTemplate: string;
 }
 
+export type EdgeTriggerMode = 'push' | 'hover';
+
 export interface LocalSettings {
   quickAccessFolderId?: string;
   workspaceFolderId?: string;
@@ -71,6 +73,9 @@ export interface LocalSettings {
   showMemorySaverBar?: boolean;
   hasDismissedLeftSideTip?: boolean;
   isSidebarCollapsed?: boolean;
+  edgeTriggerEnabled?: boolean;
+  edgeTriggerMode?: EdgeTriggerMode;
+  sidebarDockSide?: 'left' | 'right';
   collapsedSections?: {
     quickAccess?: boolean;
     workspace?: boolean;
@@ -84,6 +89,40 @@ export interface BookmarkFolderOption {
   id: string;
   title: string;
   path: string;
+}
+
+export interface EdgeQuickAccessItem {
+  id: string;
+  title: string;
+  url: string;
+  faviconDataUrl: string;
+  isActive: boolean;
+  isOpen: boolean;
+  isNavigatedAway: boolean;
+  currentTitle?: string;
+}
+
+export interface EdgeBookmarkNode extends EdgeQuickAccessItem {
+  type: 'bookmark';
+}
+
+export interface EdgeFolderNode {
+  type: 'folder';
+  id: string;
+  title: string;
+  children: EdgeSpaceNode[];
+  hasActiveChild: boolean;
+  hasOpenChild: boolean;
+  hasNavigatedAwayChild: boolean;
+  itemCount: number;
+}
+
+export type EdgeSpaceNode = EdgeBookmarkNode | EdgeFolderNode;
+
+export interface EdgeRailData {
+  quickAccessItems: EdgeQuickAccessItem[];
+  spaceItems: EdgeSpaceNode[];
+  spaceName: string;
 }
 
 export * from './reminder';

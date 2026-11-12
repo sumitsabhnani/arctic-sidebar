@@ -50,12 +50,16 @@ export default defineConfig({
       input: {
         sidepanel: resolve(rootDir, 'sidepanel.html'),
         command: resolve(rootDir, 'command.html'),
-        background: resolve(rootDir, 'src/background/index.ts')
+        background: resolve(rootDir, 'src/background/index.ts'),
+        edgeTrigger: resolve(rootDir, 'src/content/edgeTrigger.ts')
       },
       output: {
         entryFileNames: (chunkInfo) => {
           if (chunkInfo.name === 'background') {
             return 'background.js';
+          }
+          if (chunkInfo.name === 'edgeTrigger') {
+            return 'edgeTrigger.js';
           }
           return 'assets/[name]-[hash].js';
         },

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import { App } from './App';
 import { mockChrome } from '../test/setup';
@@ -457,5 +457,112 @@ describe('Sidepanel App Integration', () => {
     persisted = (mockChrome.__getLocalStorage().persistedBindingsByBookmarkId ||
       {}) as Record<string, { currentUrl: string; originalUrl: string }>;
     expect(Object.values(persisted).some((b) => b.originalUrl === 'https://docs.new')).toBe(true);
+  });
+
+  it('prompts on first Hide sidebar click, requests optional host permission, enables edge trigger, and closes panel', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {});
+
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setHostPermissionsGranted(false);
+
+    render(<App />);
+
+    const hideBtn = await screen.findByLabelText('Hide sidebar');
+    await act(async () => {
+      fireEvent.click(hideBtn);
+    });
+
+    // Confirmation prompt appears explaining why edge trigger needs permission
+    expect(await screen.findByText('Hide to Screen Edge?')).toBeInTheDocument();
+
+    const enableBtn = screen.getByRole('button', { name: /Enable Edge Trigger & Hide/i });
+    await act(async () => {
+      fireEvent.click(enableBtn);
+    });
+
+    expect(chrome.permissions.request).toHaveBeenCalledWith({
+      origins: ['http://*/*', 'https://*/*']
+    });
+    expect(mockChrome.__getLocalStorage().edgeTriggerEnabled).toBe(true);
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'PREPARE_HIDE_SIDEBAR',
+        injectIntoOpenTabs: true
+      })
+    );
+    expect(closeSpy).toHaveBeenCalled();
+
+    closeSpy.mockRestore();
+  });
+
+  it('closes sidebar immediately on Hide sidebar click when edgeTriggerEnabled and permission are already active', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {});
+
+    mockChrome.__setLocalStorage({ edgeTriggerEnabled: true });
+    mockChrome.__setHostPermissionsGranted(true);
+
+    render(<App />);
+
+    // Flush initial permission contains check
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 15));
+    });
+
+    const hideBtn = await screen.findByLabelText('Hide sidebar');
+    await act(async () => {
+      fireEvent.click(hideBtn);
+    });
+
+    expect(screen.queryByText('Hide to Screen Edge?')).not.toBeInTheDocument();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+
+    closeSpy.mockRestore();
+  });
+
+  it('allows closing sidebar without enabling edge trigger ("Just Close Sidebar") and persists edgeTriggerMode changes in Settings', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {});
+
+    mockChrome.__setLocalStorage({});
+    mockChrome.__setHostPermissionsGranted(false);
+
+    render(<App />);
+
+    // Click Hide sidebar -> choose "Just Close Sidebar"
+    const hideBtn = await screen.findByLabelText('Hide sidebar');
+    await act(async () => {
+      fireEvent.click(hideBtn);
+    });
+    const justCloseBtn = await screen.findByRole('button', { name: /Just Close Sidebar/i });
+    await act(async () => {
+      fireEvent.click(justCloseBtn);
+    });
+
+    expect(chrome.permissions.request).not.toHaveBeenCalled();
+    expect(mockChrome.__getLocalStorage().edgeTriggerEnabled).toBeUndefined();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+
+    // Enable edge trigger via Settings and switch behavior to Auto-Hide on Hover
+    const settingsBtn = screen.getByTitle('Settings & Appearance');
+    await act(async () => {
+      fireEvent.click(settingsBtn);
+    });
+
+    const edgeSwitch = await screen.findByRole('switch', { name: 'Edge Trigger When Hidden' });
+    await act(async () => {
+      fireEvent.click(edgeSwitch);
+    });
+
+    const hoverModeBtn = await screen.findByRole('button', { name: 'Auto-Hide on Hover' });
+    await act(async () => {
+      fireEvent.click(hoverModeBtn);
+    });
+
+    expect(mockChrome.__getLocalStorage().edgeTriggerEnabled).toBe(true);
+    expect(mockChrome.__getLocalStorage().edgeTriggerMode).toBe('hover');
+
+    closeSpy.mockRestore();
   });
 });
