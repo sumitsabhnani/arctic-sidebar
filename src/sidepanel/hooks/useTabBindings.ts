@@ -15,6 +15,11 @@ export function isArcticCommandTab(tab: chrome.tabs.Tab): boolean {
     u.includes('/newtab.html') ||
     u.includes('/command.html');
 
+  // If the tab is already navigating to a real non-newtab URL, it is no longer an empty Arctic Command tab
+  if (pendingUrl && pendingUrl !== 'about:blank' && !isCommandOrNewTabUrl(pendingUrl)) {
+    return false;
+  }
+
   // Once a tab has navigated to a real non-newtab URL, it is no longer an Arctic Command tab
   if (actualUrl && actualUrl !== 'about:blank' && !isCommandOrNewTabUrl(actualUrl)) {
     if (rawTitle === 'Arctic Command' && actualUrl.startsWith('chrome-extension://')) {
@@ -35,6 +40,86 @@ export function isArcticCommandTab(tab: chrome.tabs.Tab): boolean {
   }
 
   return false;
+}
+
+/**
+ * Closes any unfocused empty Arctic Command / New Tab tabs in the given window
+ * when focus switches to another tab (e.g. pressing Cmd+T repeatedly or clicking another tab).
+ */
+export async function closeInactiveArcticCommandTabs(
+  windowId: number,
+  activeTabId: number,
+  boundTabIds?: Record<number, string>
+): Promise<number[]> {
+  if (!chrome?.tabs?.query || !chrome?.tabs?.remove) return [];
+
+  try {
+    const tabs = await chrome.tabs.query({ windowId });
+    if (tabs.length <= 1) return [];
+
+    const currentActiveTab = tabs.find((t) => t.active);
+    const effectiveActiveTab =
+      tabs.find((t) => t.id === activeTabId) || currentActiveTab;
+
+    // Check if the activated tab is the transient newtab.html redirect stub (focus.js),
+    // which spawns command.html with a higher tab ID
+    const activeRawUrl = (
+      effectiveActiveTab?.url ||
+      effectiveActiveTab?.pendingUrl ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+    const isTransientNewTabRedirect =
+      activeRawUrl.startsWith('chrome://newtab') ||
+      activeRawUrl.startsWith('edge://newtab') ||
+      activeRawUrl === 'about:newtab' ||
+      activeRawUrl.includes('/newtab.html');
+
+    let bookmarkIdByTabId = boundTabIds;
+    if (!bookmarkIdByTabId && chrome?.storage?.session?.get) {
+      try {
+        const session = await chrome.storage.session.get(['bookmarkIdByTabId']);
+        bookmarkIdByTabId = (session.bookmarkIdByTabId as Record<number, string>) || {};
+      } catch {
+        bookmarkIdByTabId = {};
+      }
+    }
+
+    const candidates = tabs.filter((t) => {
+      if (typeof t.id !== 'number') return false;
+      if (t.id === activeTabId || t.id === currentActiveTab?.id || t.active) {
+        return false;
+      }
+      if (t.pinned || bookmarkIdByTabId?.[t.id]) {
+        return false;
+      }
+      if (isTransientNewTabRedirect && t.id > activeTabId) {
+        return false;
+      }
+      return isArcticCommandTab(t);
+    });
+
+    if (candidates.length === 0) return [];
+
+    // Always keep at least 1 tab open in the window
+    const maxToClose = Math.max(0, tabs.length - 1);
+    const tabIdsToClose = candidates
+      .slice(0, maxToClose)
+      .map((t) => t.id as number);
+
+    if (tabIdsToClose.length > 0) {
+      await Promise.allSettled(
+        tabIdsToClose.map((id) =>
+          Promise.resolve(chrome.tabs.remove(id)).catch(() => {})
+        )
+      );
+    }
+
+    return tabIdsToClose;
+  } catch {
+    return [];
+  }
 }
 
 export function useTabBindings(activeSpaceId: string = 'home') {
@@ -262,20 +347,24 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
     // Listen to tab activation
     const handleActivated: Parameters<typeof chrome.tabs.onActivated.addListener>[0] = (activeInfo) => {
-      chrome.windows.getCurrent((currentWin) => {
+      chrome.windows.getCurrent(async (currentWin) => {
         if (currentWin.id === activeInfo.windowId) {
           setActiveTabId(activeInfo.tabId);
           currentWindowIdRef.current = activeInfo.windowId;
-          refreshWindowTabs();
+          await closeInactiveArcticCommandTabs(
+            activeInfo.windowId,
+            activeInfo.tabId,
+            bookmarkIdByTabIdRef.current
+          );
+          await refreshWindowTabs();
         }
       });
     };
 
     // Listen to tab creation (e.g. Ctrl+T, link clicked)
     const handleCreated = (tab: chrome.tabs.Tab) => {
-      chrome.windows.getCurrent((currentWin) => {
+      chrome.windows.getCurrent(async (currentWin) => {
         if (currentWin.id === tab.windowId) {
-          refreshWindowTabs();
           if (typeof tab.id === 'number') {
             const currentSpace = currentActiveSpaceIdRef.current || 'home';
             setTabSpaceByTabId((prev) => {
@@ -289,7 +378,15 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               timestamps[tab.id!] = Date.now();
               chrome.storage.local.set({ tabOpenedAt: timestamps });
             });
+            if (tab.active && typeof tab.windowId === 'number') {
+              await closeInactiveArcticCommandTabs(
+                tab.windowId,
+                tab.id,
+                bookmarkIdByTabIdRef.current
+              );
+            }
           }
+          await refreshWindowTabs();
         }
       });
     };

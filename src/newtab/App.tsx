@@ -1387,7 +1387,9 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
               } catch {}
               // Close the temporary launcher tab
               if (currentTab?.id && currentTab.id !== boundTabId) {
-                await chrome.tabs.remove(currentTab.id);
+                try {
+                  await chrome.tabs.remove(currentTab.id);
+                } catch {}
               } else {
                 window.close();
               }
@@ -1438,7 +1440,9 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
               } catch {}
               if (currentTab?.id && currentTab.id !== matchedTabId) {
-                await chrome.tabs.remove(currentTab.id);
+                try {
+                  await chrome.tabs.remove(currentTab.id);
+                } catch {}
               }
               return;
             }

@@ -7,6 +7,8 @@ import {
   handleNotificationOpenTab,
   handleNotificationDismiss,
   handleStartup,
+  handleTabActivated,
+  handleTabCreated,
   reconcileReminders
 } from './index';
 import { mockChrome } from '../test/setup';
@@ -259,5 +261,48 @@ describe('Background service worker reminder lifecycle', () => {
     expect(
       (mockChrome.__getLocalStorage().scratchpad_local_draft as { text?: string })?.text
     ).toBe(preservedNote);
+  });
+
+  it('closes inactive empty Arctic Command tabs on tab activation and repeated Cmd+T tab creation', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        url: 'https://github.com',
+        title: 'GitHub',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 2,
+        windowId: 10,
+        url: 'chrome-extension://mock-extension-id/command.html',
+        title: 'Arctic Command',
+        active: false
+      } as chrome.tabs.Tab,
+      {
+        id: 3,
+        windowId: 10,
+        url: 'chrome-extension://mock-extension-id/command.html',
+        title: 'Arctic Command',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    // When tab 3 is created as active (e.g. pressing Cmd+T again), inactive tab 2 is closed
+    await handleTabCreated({
+      id: 3,
+      windowId: 10,
+      url: 'chrome-extension://mock-extension-id/command.html',
+      title: 'Arctic Command',
+      active: true
+    } as chrome.tabs.Tab);
+
+    expect(mockChrome.__getTabs().map((t) => t.id)).toEqual([1, 3]);
+
+    // When focus switches to tab 1, tab 3 becomes inactive and is closed
+    await mockChrome.tabs.update(1, { active: true });
+    await handleTabActivated({ tabId: 1, windowId: 10 });
+
+    expect(mockChrome.__getTabs().map((t) => t.id)).toEqual([1]);
   });
 });
