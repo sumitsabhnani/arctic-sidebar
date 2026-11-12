@@ -27,6 +27,9 @@ Arctic Sidebar only requests the minimum necessary permissions required to provi
 * **`history`**: Used solely on the New Tab Command Bar page to provide instant local autocomplete suggestions from your browsing history while you type. History data is queried locally on your machine and is never transmitted anywhere.
 * **`favicon`**: Uses Google Chrome's internal favicon provider (`chrome://favicon/`) to display website icons next to your tabs, bookmarks, and search suggestions.
 * **`search`**: Uses Chrome's native `chrome.search` API to execute web searches from the Command Bar and Sidebar address bar using your configured default browser search engine.
+* **`alarms` & `notifications`**: Used strictly to trigger your scheduled local Tab Reminders and display native desktop reminder notifications.
+* **`sessions`**: Used strictly for the `> Reopen Last Closed Tab` command action.
+* **`scripting` & `optional_host_permissions` (`http://*/*`, `https://*/*`)**: Optional, opt-in permissions requested **only** if you explicitly enable the **Edge Quick Access Stripe** feature when hiding the sidebar. Used solely to render the local `36px` Edge Quick Access & Space bar on web pages while the full Side Panel is closed—never reads, collects, or transmits page content.
 * **`host_permissions` (`https://suggestqueries.google.com/*`)**: Used exclusively on the New Tab Command Bar to fetch live Google search suggestions when a typed query is not found in your local bookmarks or history. Queries are sent directly to Google's public autocomplete endpoint only to display completions and are never collected, stored, or tracked by Arctic Sidebar.
 
 ---

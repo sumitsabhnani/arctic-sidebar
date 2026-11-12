@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.8.4-blue.svg" alt="Version 1.8.4" />
+  <img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="Version 2.0.0" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT" />
   <img src="https://img.shields.io/badge/manifest-v3-orange.svg" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/tests-278%20passed-brightgreen.svg" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-342%20passed-brightgreen.svg" alt="Tests" />
   <img src="https://img.shields.io/badge/privacy-100%25_local_%26_tracker--free-teal.svg" alt="Privacy" />
 </p>
 
@@ -37,6 +37,11 @@ Install Arctic directly from the official **Chrome Web Store**:
 * **Dedicated Spaces:** Group tabs by project, context, or persona (e.g., *Work*, *Personal*, *Research*).
 * **Instant Switching:** Cycle spaces seamlessly with a click or keyboard shortcut.
 * **Pinned Favorites:** Keep daily essentials (Email, Calendar, Slack, Notion) in a compact Quick Access grid pinned at the top.
+
+### 📐 Edge Quick Access & Space Stripe (Hide Sidebar)
+* **Reclaim Screen Real Estate:** Click **Hide sidebar** in the header when working on a laptop screen to switch into an ultra-compact `36px` vertical edge stripe.
+* **Quick Access, Space Tabs & Folder Flyouts:** Access all your Quick Access pins, active Space saved tabs, and click-to-open floating folder menus (including nested subfolders) without reopening the full sidebar—or click the top icon to restore the full Side Panel instantly.
+* **Two Layout Modes:** Choose between **Push Page (No overlap)** (shifts pages & fixed web sidebars cleanly by `36px`) or **Auto-Hide on Hover** (zero page layout shift, slides out when hovering the screen edge).
 
 ### ⚡ Arctic Command: Fast Keyboard-First Launcher & Actions
 * **Clean New Tab (`Cmd+T`):** Minimalist, distraction-free floating command palette.
@@ -119,7 +124,7 @@ cd arctic-sidebar
 # Install dependencies
 npm install
 
-# Run automated test suite (239 tests)
+# Run automated test suite (342 tests)
 npm test
 
 # Build for production
