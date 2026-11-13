@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Arctic: Sidebar & Commands",
   "short_name": "Arctic",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Vertical tab sidebar, spaces, and lightning-fast command bar.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu3zeFYJOq0MseM6qQJmknyga8+zZ5zR+zxQvA6janc2iMelLGkgtoJ1QwZXJVYytQddRoln/0kLrgXP8JTLG1GZwcDRsRbBIDVZ/RxSRFFh2VT7zvQteovqJLzLbCSMAAyPip5BcnNS0O2IxuSf89aHk3YiM5RcO22g6lVBOINuB38fRJ2524mF5Jg6qqpDwcPcYPAwvBXTLQDb6UkL7StQfhZLZtqLE7Em3D/CRtNAXWZ8iPqv+UeR2W5pEL2A3OfH0jEWPbyb/Ifx2/NxUu7fzhk0rJ2xPYmHeK03DuthX6mMAy7wC8mmAWWxLnB66qQKMe7J8/FSCnJqPkhAPHwIDAQAB",
   "permissions": [

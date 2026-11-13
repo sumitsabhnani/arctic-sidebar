@@ -1,6 +1,6 @@
 {
   "name": "arctic-sidebar",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Arctic: Sidebar & Commands Chrome Extension",
   "type": "module",
   "scripts": {
