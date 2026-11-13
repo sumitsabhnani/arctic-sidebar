@@ -23,6 +23,7 @@ import {
 import type { ColorThemeId, ThemeMode, SpaceItem, TabBinding, SiteSearchEngine } from '../types';
 import {
   doesTabUrlMatchBookmark,
+  getCanonicalUrlKey,
   getDomainFromUrl,
   getEffectiveTabUrl,
   getFaviconUrl,
@@ -33,6 +34,7 @@ import {
 import {
   findMatchingUnboundTabForBookmark,
   getPersistedBindings,
+  isArcticCommandTab,
   upsertPersistedBindings
 } from '../sidepanel/utils/reconcileBindings';
 import {
@@ -44,14 +46,23 @@ import {
 import { NewTabEdgeTrigger } from './components/NewTabEdgeTrigger';
 import {
   findMatchingSiteEngine,
-  getGhostAutocomplete,
   buildSiteSearchUrl,
-  doesUrlMatchEngineDomain
+  doesUrlMatchEngineDomain,
+  inferRegionalSiteDomains,
+  type RegionalDomainPreferences,
+  type DomainSignalInput
 } from './utils/siteSearch';
+import {
+  rankOmniboxCandidates,
+  scoreActionCommand,
+  computeInlineGhostSuffix,
+  getHistoryCollapseKey,
+  type OmniboxCandidate
+} from './utils/omniboxSearch';
 
 export interface SuggestionItem {
   id: string;
-  type: 'search' | 'bookmark' | 'history' | 'url' | 'command';
+  type: 'search' | 'bookmark' | 'history' | 'url' | 'command' | 'tab';
   title: string;
   searchQuery?: string;
   defaultSearchText?: string;
@@ -66,6 +77,9 @@ export interface SuggestionItem {
   spaceName?: string;
   isQuickAccess?: boolean;
   isArctic?: boolean;
+  isOpenTab?: boolean;
+  tabId?: number;
+  windowId?: number;
 }
 
 interface SpaceOption {
@@ -314,6 +328,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   const [siteTriggerQuery, setSiteTriggerQuery] = useState<string>('');
   const [dismissedEngineId, setDismissedEngineId] = useState<string | null>(null);
   const [customSearchEngines, setCustomSearchEngines] = useState<SiteSearchEngine[]>([]);
+  const [regionalPrefs, setRegionalPrefs] = useState<RegionalDomainPreferences>({});
 
   // Smoothly debounce query changes when debounceMs is configured
   useEffect(() => {
@@ -331,16 +346,27 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
   const candidateSiteEngine = activeSiteEngine
     ? null
-    : findMatchingSiteEngine(query, customSearchEngines);
+    : findMatchingSiteEngine(query, customSearchEngines, regionalPrefs);
   const matchedSiteEngine =
     candidateSiteEngine && candidateSiteEngine.id !== dismissedEngineId
       ? candidateSiteEngine
       : null;
 
   const visualMatchedSiteEngine = matchedSiteEngine;
+  const topActiveSuggestion =
+    activeQuery.trim() &&
+    activeQuery.trim() === query.trim() &&
+    suggestions.length > 0
+      ? suggestions[0]
+      : undefined;
   const ghostSuffix = activeSiteEngine
     ? ''
-    : getGhostAutocomplete(query, visualMatchedSiteEngine);
+    : computeInlineGhostSuffix(
+        query,
+        topActiveSuggestion?.url,
+        topActiveSuggestion?.type,
+        visualMatchedSiteEngine
+      );
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -348,6 +374,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   const arcticBookmarksRef = useRef<ArcticBookmarkItem[]>([]);
   const arcticBookmarksLoadedRef = useRef(false);
   const arcticBookmarksPromiseRef = useRef<Promise<ArcticBookmarkItem[]> | null>(null);
+  const regionalSignalsRef = useRef<DomainSignalInput[]>([]);
   const lastGoogleSuggestionsRef = useRef<SuggestionItem[]>([]);
   const isNavigatingRef = useRef(false);
   const currentTabRef = useRef<chrome.tabs.Tab | null>(null);
@@ -357,6 +384,21 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     query: '',
     engineId: null
   });
+
+  const mergeRegionalSignals = useCallback((newSignals: DomainSignalInput[]) => {
+    if (newSignals.length === 0) return;
+    const combined = [...newSignals, ...regionalSignalsRef.current].slice(0, 200);
+    regionalSignalsRef.current = combined;
+    const inferred = inferRegionalSiteDomains(combined);
+    setRegionalPrefs((prev) => {
+      const nextAmazon = inferred.amazon ?? prev.amazon;
+      const nextGoogle = inferred.google ?? prev.google;
+      if (nextAmazon === prev.amazon && nextGoogle === prev.google) {
+        return prev;
+      }
+      return { amazon: nextAmazon, google: nextGoogle };
+    });
+  }, []);
 
   useEffect(() => {
     if (selectedIndex < 0 || !listRef.current) return;
@@ -372,11 +414,31 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       arcticBookmarksPromiseRef.current = getArcticBookmarks().then((items) => {
         arcticBookmarksRef.current = items;
         arcticBookmarksLoadedRef.current = true;
+        mergeRegionalSignals(items.map((bm) => ({ url: bm.url, weight: 3 })));
         return items;
       });
     }
     return arcticBookmarksPromiseRef.current;
-  }, []);
+  }, [mergeRegionalSignals]);
+
+  // Pre-load open tab domain signals on mount so regional site search (e.g. amazon.de) is instant
+  useEffect(() => {
+    if (!chrome?.tabs?.query) return;
+    Promise.resolve(chrome.tabs.query({}))
+      .then((tabs) => {
+        if (!Array.isArray(tabs)) return;
+        const tabSignals: DomainSignalInput[] = [];
+        for (const t of tabs) {
+          if (isArcticCommandTab(t)) continue;
+          const effUrl = getEffectiveTabUrl(t);
+          if (effUrl) {
+            tabSignals.push({ url: effUrl, weight: 6 });
+          }
+        }
+        mergeRegionalSignals(tabSignals);
+      })
+      .catch(() => {});
+  }, [mergeRegionalSignals]);
 
   // Pre-load Arctic bookmarks for fast lookup and URL matching, and invalidate cache on bookmark/space changes
   useEffect(() => {
@@ -885,7 +947,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     return cmds;
   }, [theme, colorTheme, spaces, showToast]);
 
-  // Load suggestions from commands, history, bookmarks, and search
+  // Load suggestions from commands, open tabs, bookmarks, history, and search
   useEffect(() => {
     let isCancelled = false;
     const trimmed = activeQuery.trim();
@@ -925,9 +987,76 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           });
           seenUrls.add(siteHomeUrl.toLowerCase());
           seenUrls.add(normalizeUrl(siteHomeUrl).toLowerCase());
+          seenUrls.add(getCanonicalUrlKey(siteHomeUrl).toLowerCase());
         }
 
-        // 2. Domain-scoped Arctic Bookmarks
+        // 2. Domain-scoped Open Tabs (Today's Tabs & Open Space Tabs)
+        try {
+          if (chrome?.tabs?.query) {
+            const [openTabs, sessionData, localData] = await Promise.all([
+              chrome.tabs.query({}).catch(() => []),
+              chrome.storage?.session?.get
+                ? chrome.storage.session
+                    .get(['bookmarkIdByTabId', 'customTabTitles'])
+                    .catch(() => ({}))
+                : Promise.resolve({}),
+              chrome.storage?.local?.get
+                ? chrome.storage.local.get(['tabSpaceByTabId']).catch(() => ({}))
+                : Promise.resolve({})
+            ]);
+            const byTab =
+              ((sessionData as { bookmarkIdByTabId?: Record<number, string> })
+                ?.bookmarkIdByTabId as Record<number, string>) || {};
+            const customTitles =
+              ((sessionData as { customTabTitles?: Record<number, string> })
+                ?.customTabTitles as Record<number, string>) || {};
+            const tabSpaceByTabId =
+              ((localData as { tabSpaceByTabId?: Record<number, string> })
+                ?.tabSpaceByTabId as Record<number, string>) || {};
+
+            for (const t of openTabs) {
+              if (
+                typeof t.id !== 'number' ||
+                t.id === currentTabRef.current?.id ||
+                byTab[t.id] ||
+                isArcticCommandTab(t)
+              ) {
+                continue;
+              }
+              const effUrl = getEffectiveTabUrl(t);
+              const tabTitle = customTitles[t.id] || t.title || effUrl;
+              if (
+                effUrl &&
+                doesUrlMatchEngineDomain(effUrl, activeSiteEngine) &&
+                (!lowerTrimmed ||
+                  tabTitle.toLowerCase().includes(lowerTrimmed) ||
+                  effUrl.toLowerCase().includes(lowerTrimmed))
+              ) {
+                const canon = getCanonicalUrlKey(effUrl).toLowerCase();
+                if (!seenUrls.has(effUrl.toLowerCase()) && !seenUrls.has(canon)) {
+                  seenUrls.add(effUrl.toLowerCase());
+                  seenUrls.add(canon);
+                  results.push({
+                    id: `site-tab-${t.id}`,
+                    type: 'tab',
+                    title: tabTitle,
+                    url: effUrl,
+                    domain: getDomainFromUrl(effUrl),
+                    isOpenTab: true,
+                    tabId: t.id,
+                    windowId: t.windowId,
+                    spaceId: tabSpaceByTabId[t.id] || 'home'
+                  });
+                  if (results.length >= 5) break;
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore
+        }
+
+        // 3. Domain-scoped Arctic Bookmarks
         try {
           const arcticBm = arcticBookmarksLoadedRef.current
             ? arcticBookmarksRef.current
@@ -942,9 +1071,15 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
           for (const bm of matchingArctic) {
             const norm = normalizeUrl(bm.url).toLowerCase();
-            if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
+            const canon = getCanonicalUrlKey(bm.url).toLowerCase();
+            if (
+              !seenUrls.has(bm.url.toLowerCase()) &&
+              !seenUrls.has(norm) &&
+              !seenUrls.has(canon)
+            ) {
               seenUrls.add(bm.url.toLowerCase());
               seenUrls.add(norm);
+              seenUrls.add(canon);
               results.push({
                 id: `arctic-bm-${bm.id}`,
                 type: 'bookmark',
@@ -967,12 +1102,12 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           // ignore
         }
 
-        // 3. Domain-scoped History
+        // 4. Domain-scoped History
         try {
           if (chrome?.history?.search) {
             const historyItems = await chrome.history.search({
               text: trimmed || activeSiteEngine.domain,
-              maxResults: 12,
+              maxResults: 16,
               startTime: 0
             });
             for (const item of historyItems) {
@@ -984,9 +1119,15 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                   item.url.toLowerCase().includes(lowerTrimmed))
               ) {
                 const norm = normalizeUrl(item.url).toLowerCase();
-                if (!seenUrls.has(item.url.toLowerCase()) && !seenUrls.has(norm)) {
+                const collapseKey = getHistoryCollapseKey(item.url, item.title);
+                if (
+                  !seenUrls.has(item.url.toLowerCase()) &&
+                  !seenUrls.has(norm) &&
+                  !seenUrls.has(collapseKey)
+                ) {
                   seenUrls.add(item.url.toLowerCase());
                   seenUrls.add(norm);
+                  seenUrls.add(collapseKey);
                   results.push({
                     id: `hist-${item.id}`,
                     type: 'history',
@@ -1056,28 +1197,34 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       return;
     }
 
-    // EMPTY QUERY: fetch top 6 most visited / recent history items
+    // EMPTY QUERY: fetch top 6 most visited / recent history items (and seed regional domains)
     if (!trimmed) {
       lastGoogleSuggestionsRef.current = [];
       if (chrome?.history?.search) {
         chrome.history.search(
-          { text: '', maxResults: 6, startTime: 0 },
+          { text: '', maxResults: 40, startTime: 0 },
           (historyItems) => {
             if (isCancelled) return;
-            const items: SuggestionItem[] = (historyItems || [])
-              .filter(
-                (h) =>
-                  h.url &&
-                  !h.url.startsWith('chrome://') &&
-                  !h.url.startsWith('chrome-extension://')
-              )
-              .map((h) => ({
-                id: `hist-${h.id}`,
-                type: 'history',
-                title: h.title || h.url || 'Visited Page',
+            const validHistory = (historyItems || []).filter(
+              (h) =>
+                h.url &&
+                !h.url.startsWith('chrome://') &&
+                !h.url.startsWith('chrome-extension://') &&
+                !isScratchpadUrl(h.url)
+            );
+            mergeRegionalSignals(
+              validHistory.map((h) => ({
                 url: h.url!,
-                domain: getDomainFromUrl(h.url!)
-              }));
+                weight: Math.min(4, 1 + Math.floor((h.visitCount || 1) / 5))
+              }))
+            );
+            const items: SuggestionItem[] = validHistory.slice(0, 6).map((h) => ({
+              id: `hist-${h.id}`,
+              type: 'history',
+              title: h.title || h.url || 'Visited Page',
+              url: h.url!,
+              domain: getDomainFromUrl(h.url!)
+            }));
             setSuggestions(items);
             setSelectedIndex(-1);
           }
@@ -1091,143 +1238,407 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       };
     }
 
-    // NON-EMPTY QUERY: search commands + bookmarks + direct URL + history + web search
+    // NON-EMPTY QUERY: parallel omnibox search across Open Tabs, Bookmarks, History, Commands & Web
     const fetchResults = async () => {
-      const results: SuggestionItem[] = [];
-      const seenUrls = new Set<string>();
-
-      // 1. Matching Action Commands
-      const allCmds = getActionCommands();
-      const lowerQuery = trimmed.toLowerCase();
-      const matchedCmds = allCmds
-        .filter(
-          (c) =>
-            c.title.toLowerCase().includes(lowerQuery) ||
-            c.description?.toLowerCase().includes(lowerQuery) ||
-            c.commandCategory?.toLowerCase().includes(lowerQuery)
-        )
-        .slice(0, 3);
-
-      results.push(...matchedCmds);
-
-      // 2. Bookmarks Search (Prioritizes Arctic Bookmarks)
-      let matchingArcticCount = 0;
-      try {
-        const arcticBm = arcticBookmarksLoadedRef.current
-          ? arcticBookmarksRef.current
-          : await loadArcticBookmarks();
-        const lowerTrimmed = trimmed.toLowerCase();
-        const matchingArctic = arcticBm.filter(
-          (bm) =>
-            bm.title.toLowerCase().includes(lowerTrimmed) ||
-            bm.url.toLowerCase().includes(lowerTrimmed)
-        );
-        matchingArcticCount = matchingArctic.length;
-
-        for (const bm of matchingArctic) {
-          const norm = normalizeUrl(bm.url).toLowerCase();
-          if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
-            seenUrls.add(bm.url.toLowerCase());
-            seenUrls.add(norm);
-            results.push({
-              id: `arctic-bm-${bm.id}`,
-              type: 'bookmark',
-              title: bm.title,
-              url: bm.url,
-              bookmarkId: bm.id,
-              spaceId: bm.spaceId,
-              spaceName: bm.spaceName,
-              isQuickAccess: bm.isQuickAccess,
-              isArctic: true,
-              domain:
-                bm.spaceName.toLowerCase() === 'quick access'
-                  ? 'Quick Access'
-                  : `Space: ${bm.spaceName}`
-            });
-            if (results.length >= 8) break;
-          }
-        }
-      } catch {
-        // ignore
-      }
-
-      // Run General Chrome Bookmarks fallback and History search in parallel
-      const [generalNodes, historyItems] = await Promise.all([
-        matchingArcticCount === 0 && chrome?.bookmarks?.search
+      const [
+        arcticBm,
+        allOpenTabs,
+        sessionData,
+        localTabData,
+        generalNodes,
+        historyItems
+      ] = await Promise.all([
+        (arcticBookmarksLoadedRef.current
+          ? Promise.resolve(arcticBookmarksRef.current)
+          : loadArcticBookmarks()
+        ).catch(() => [] as ArcticBookmarkItem[]),
+        chrome?.tabs?.query ? chrome.tabs.query({}).catch(() => []) : Promise.resolve([]),
+        chrome?.storage?.session?.get
+          ? chrome.storage.session
+              .get(['bindingsByBookmarkId', 'bookmarkIdByTabId', 'customTabTitles'])
+              .catch(() => ({}))
+          : Promise.resolve({}),
+        chrome?.storage?.local?.get
+          ? chrome.storage.local
+              .get(['activeSpaceId', 'tabSpaceByTabId'])
+              .catch(() => ({}))
+          : Promise.resolve({}),
+        chrome?.bookmarks?.search
           ? chrome.bookmarks.search(trimmed).catch(() => [])
           : Promise.resolve([]),
         chrome?.history?.search
           ? chrome.history
               .search({
                 text: trimmed,
-                maxResults: 8,
+                maxResults: 50,
                 startTime: 0
               })
               .catch(() => [])
           : Promise.resolve([])
       ]);
 
-      for (const bm of generalNodes) {
-        if (bm.url && !isScratchpadUrl(bm.url) && bm.title !== 'Scratchpad Backup') {
-          const norm = normalizeUrl(bm.url).toLowerCase();
-          if (!seenUrls.has(bm.url.toLowerCase()) && !seenUrls.has(norm)) {
-            seenUrls.add(bm.url.toLowerCase());
-            seenUrls.add(norm);
-            results.push({
-              id: `chrome-bm-${bm.id}`,
-              type: 'bookmark',
-              title: bm.title || bm.url,
-              url: bm.url,
-              bookmarkId: bm.id,
-              isArctic: false,
-              domain: getDomainFromUrl(bm.url)
-            });
-            if (results.length >= 8) break;
-          }
+      const bindings =
+        ((sessionData as { bindingsByBookmarkId?: Record<string, TabBinding> })
+          ?.bindingsByBookmarkId as Record<string, TabBinding>) || {};
+      const rawByTab =
+        ((sessionData as { bookmarkIdByTabId?: Record<number, string> })
+          ?.bookmarkIdByTabId as Record<number, string>) || {};
+      const customTabTitles =
+        ((sessionData as { customTabTitles?: Record<number, string> })
+          ?.customTabTitles as Record<number, string>) || {};
+      const activeSpaceId =
+        typeof (localTabData as { activeSpaceId?: string })?.activeSpaceId === 'string' &&
+        (localTabData as { activeSpaceId?: string }).activeSpaceId
+          ? (localTabData as { activeSpaceId: string }).activeSpaceId
+          : 'home';
+      const tabSpaceByTabId =
+        ((localTabData as { tabSpaceByTabId?: Record<number, string> })
+          ?.tabSpaceByTabId as Record<number, string>) || {};
+
+      const launcherTabId = currentTabRef.current?.id;
+      const currentWinId =
+        currentWindowIdRef.current ?? currentTabRef.current?.windowId ?? null;
+
+      // Index live open tabs (excluding the temporary Command Bar launcher tab & internal pages)
+      const liveTabsById = new Map<number, chrome.tabs.Tab>();
+      const discoveredRegionalSignals: DomainSignalInput[] = [];
+
+      for (const tab of allOpenTabs) {
+        if (typeof tab.id !== 'number' || tab.id === launcherTabId) continue;
+        if (isArcticCommandTab(tab)) continue;
+        const effUrl = getEffectiveTabUrl(tab);
+        if (
+          !effUrl ||
+          effUrl === 'about:blank' ||
+          effUrl.startsWith('chrome://') ||
+          effUrl.startsWith('chrome-extension://') ||
+          isScratchpadUrl(effUrl)
+        ) {
+          continue;
+        }
+        liveTabsById.set(tab.id, tab);
+        discoveredRegionalSignals.push({ url: effUrl, weight: 6 });
+      }
+
+      // Build canonical history frecency lookup so Open Tabs & Bookmarks also benefit from visit stats
+      const historyStatsByCanon = new Map<
+        string,
+        { visitCount?: number; typedCount?: number; lastVisitTime?: number }
+      >();
+      for (const h of historyItems) {
+        if (!h.url) continue;
+        discoveredRegionalSignals.push({
+          url: h.url,
+          weight: Math.min(4, 1 + Math.floor((h.visitCount || 1) / 5))
+        });
+        const canon = getCanonicalUrlKey(h.url).toLowerCase();
+        const prev = historyStatsByCanon.get(canon);
+        if (!prev || (h.visitCount || 0) > (prev.visitCount || 0)) {
+          historyStatsByCanon.set(canon, {
+            visitCount: h.visitCount,
+            typedCount: h.typedCount,
+            lastVisitTime: h.lastVisitTime
+          });
         }
       }
 
-      // 3. Direct URL suggestion (if likely URL and not already shown as bookmark)
+      for (const bm of generalNodes) {
+        if (bm.url) {
+          discoveredRegionalSignals.push({ url: bm.url, weight: 2 });
+        }
+      }
+      mergeRegionalSignals(discoveredRegionalSignals);
+
+      // Determine which live tabs are genuinely bound to an Arctic bookmark
+      const liveBoundBookmarkIdByTabId: Record<number, string> = {};
+      for (const [tabIdStr, bmId] of Object.entries(rawByTab)) {
+        const numId = Number(tabIdStr);
+        if (liveTabsById.has(numId) && bmId) {
+          liveBoundBookmarkIdByTabId[numId] = bmId;
+        }
+      }
+
+      const candidates: OmniboxCandidate[] = [];
+      const consumedTabIds = new Set<number>();
+      const seenCanonicalUrls = new Set<string>();
+      const seenHistoryCollapseKeys = new Set<string>();
+      const arcticBookmarkIds = new Set<string>();
+
+      // 1. Arctic Bookmarks (Quick Access & Spaces, enriched with bound/matching open tab state)
+      for (const bm of arcticBm) {
+        arcticBookmarkIds.add(bm.id);
+        const bmCanon = getCanonicalUrlKey(bm.url).toLowerCase();
+        const histStats = historyStatsByCanon.get(bmCanon);
+
+        let matchedOpenTab: chrome.tabs.Tab | undefined;
+        let secondaryTitle: string | undefined;
+        let secondaryUrl: string | undefined;
+
+        const existingBinding = bindings[bm.id];
+        if (existingBinding && liveTabsById.has(existingBinding.tabId)) {
+          matchedOpenTab = liveTabsById.get(existingBinding.tabId);
+          consumedTabIds.add(existingBinding.tabId);
+          secondaryTitle =
+            customTabTitles[existingBinding.tabId] ||
+            existingBinding.currentTitle ||
+            matchedOpenTab?.title;
+          secondaryUrl =
+            getEffectiveTabUrl(matchedOpenTab) || existingBinding.currentUrl;
+        } else {
+          // Check if an unbound live tab matches this Arctic bookmark's URL
+          for (const [tId, tab] of liveTabsById.entries()) {
+            if (consumedTabIds.has(tId) || liveBoundBookmarkIdByTabId[tId]) continue;
+            const effUrl = getEffectiveTabUrl(tab);
+            if (effUrl && doesTabUrlMatchBookmark(effUrl, bm.url)) {
+              matchedOpenTab = tab;
+              consumedTabIds.add(tId);
+              secondaryTitle = customTabTitles[tId] || tab.title;
+              secondaryUrl = effUrl;
+              break;
+            }
+          }
+        }
+
+        seenCanonicalUrls.add(bmCanon);
+        seenCanonicalUrls.add(normalizeUrl(bm.url).toLowerCase());
+        if (secondaryUrl) {
+          seenCanonicalUrls.add(getCanonicalUrlKey(secondaryUrl).toLowerCase());
+        }
+
+        const isOpen = Boolean(matchedOpenTab);
+        const matchedTabId = matchedOpenTab?.id;
+        const lastAccessed = (
+          matchedOpenTab as (chrome.tabs.Tab & { lastAccessed?: number }) | undefined
+        )?.lastAccessed;
+
+        candidates.push({
+          id: `arctic-bm-${bm.id}`,
+          source: 'arctic-bookmark',
+          title: bm.title,
+          secondaryTitle,
+          url: bm.url,
+          secondaryUrl,
+          bookmarkId: bm.id,
+          spaceId: bm.spaceId,
+          spaceName: bm.spaceName,
+          isQuickAccess: bm.isQuickAccess,
+          isArctic: true,
+          isOpenTab: isOpen,
+          tabId: matchedTabId,
+          windowId: matchedOpenTab?.windowId,
+          isInActiveSpace: !bm.spaceId || bm.spaceId === activeSpaceId,
+          isInCurrentWindow:
+            !matchedOpenTab ||
+            currentWinId === null ||
+            matchedOpenTab.windowId === currentWinId,
+          lastAccessed,
+          visitCount: histStats?.visitCount,
+          typedCount: histStats?.typedCount,
+          lastVisitTime: histStats?.lastVisitTime,
+          domain:
+            bm.spaceName.toLowerCase() === 'quick access'
+              ? 'Quick Access'
+              : `Space: ${bm.spaceName}`
+        });
+      }
+
+      // 2. Unbound Live Open Tabs ("Today's Tabs")
+      const orderedUnboundTabs = Array.from(liveTabsById.values())
+        .filter((t) => typeof t.id === 'number' && !consumedTabIds.has(t.id))
+        .sort((a, b) => {
+          const aWin = currentWinId !== null && a.windowId === currentWinId ? 1 : 0;
+          const bWin = currentWinId !== null && b.windowId === currentWinId ? 1 : 0;
+          if (aWin !== bWin) return bWin - aWin;
+          const aAcc = (a as chrome.tabs.Tab & { lastAccessed?: number }).lastAccessed || 0;
+          const bAcc = (b as chrome.tabs.Tab & { lastAccessed?: number }).lastAccessed || 0;
+          return bAcc - aAcc;
+        });
+
+      for (const tab of orderedUnboundTabs) {
+        const tabId = tab.id as number;
+        const effUrl = getEffectiveTabUrl(tab);
+        if (!effUrl) continue;
+        const canon = getCanonicalUrlKey(effUrl).toLowerCase();
+        if (seenCanonicalUrls.has(canon)) continue;
+        seenCanonicalUrls.add(canon);
+        seenCanonicalUrls.add(normalizeUrl(effUrl).toLowerCase());
+
+        const histStats = historyStatsByCanon.get(canon);
+        const tabSpace = tabSpaceByTabId[tabId] || 'home';
+        const lastAccessed = (tab as chrome.tabs.Tab & { lastAccessed?: number })
+          .lastAccessed;
+
+        candidates.push({
+          id: `open-tab-${tabId}`,
+          source: 'tab',
+          title: customTabTitles[tabId] || tab.title || effUrl,
+          url: effUrl,
+          domain: getDomainFromUrl(effUrl),
+          isOpenTab: true,
+          tabId,
+          windowId: tab.windowId,
+          spaceId: tabSpace,
+          isInActiveSpace: tabSpace === activeSpaceId,
+          isInCurrentWindow: currentWinId === null || tab.windowId === currentWinId,
+          lastAccessed,
+          visitCount: histStats?.visitCount,
+          typedCount: histStats?.typedCount,
+          lastVisitTime: histStats?.lastVisitTime
+        });
+      }
+
+      // 3. General Chrome Bookmarks (always searched, deduplicated against Arctic & Open Tabs)
+      for (const bm of generalNodes) {
+        if (
+          !bm.url ||
+          arcticBookmarkIds.has(bm.id) ||
+          isScratchpadUrl(bm.url) ||
+          bm.title === 'Scratchpad Backup'
+        ) {
+          continue;
+        }
+        const canon = getCanonicalUrlKey(bm.url).toLowerCase();
+        const norm = normalizeUrl(bm.url).toLowerCase();
+        if (
+          seenCanonicalUrls.has(bm.url.toLowerCase()) ||
+          seenCanonicalUrls.has(norm) ||
+          seenCanonicalUrls.has(canon)
+        ) {
+          continue;
+        }
+        seenCanonicalUrls.add(bm.url.toLowerCase());
+        seenCanonicalUrls.add(norm);
+        seenCanonicalUrls.add(canon);
+
+        const histStats = historyStatsByCanon.get(canon);
+        candidates.push({
+          id: `chrome-bm-${bm.id}`,
+          source: 'chrome-bookmark',
+          title: bm.title || bm.url,
+          url: bm.url,
+          bookmarkId: bm.id,
+          isArctic: false,
+          domain: getDomainFromUrl(bm.url),
+          visitCount: histStats?.visitCount,
+          typedCount: histStats?.typedCount,
+          lastVisitTime: histStats?.lastVisitTime
+        });
+      }
+
+      // 4. Browser History (expanded pool, collapsing duplicate OAuth/sign-in redirects)
+      for (const item of historyItems) {
+        if (
+          !item.url ||
+          item.url.startsWith('chrome://') ||
+          item.url.startsWith('chrome-extension://') ||
+          isScratchpadUrl(item.url)
+        ) {
+          continue;
+        }
+        const canon = getCanonicalUrlKey(item.url).toLowerCase();
+        const norm = normalizeUrl(item.url).toLowerCase();
+        const collapseKey = getHistoryCollapseKey(item.url, item.title);
+        if (
+          seenCanonicalUrls.has(item.url.toLowerCase()) ||
+          seenCanonicalUrls.has(norm) ||
+          seenCanonicalUrls.has(canon) ||
+          seenHistoryCollapseKeys.has(collapseKey)
+        ) {
+          continue;
+        }
+        seenCanonicalUrls.add(item.url.toLowerCase());
+        seenCanonicalUrls.add(norm);
+        seenCanonicalUrls.add(canon);
+        seenHistoryCollapseKeys.add(collapseKey);
+
+        candidates.push({
+          id: `hist-${item.id}`,
+          source: 'history',
+          title: item.title || item.url,
+          url: item.url,
+          domain: getDomainFromUrl(item.url),
+          visitCount: item.visitCount,
+          typedCount: item.typedCount,
+          lastVisitTime: item.lastVisitTime
+        });
+      }
+
+      // 5. Score & Rank Omnibox Candidates + Strong Title-Matched Action Commands
+      const rankedOmnibox = rankOmniboxCandidates(candidates, trimmed, {
+        maxResults: 8
+      });
+
+      const scoredEntries: Array<{ score: number; item: SuggestionItem }> =
+        rankedOmnibox.map((r) => ({
+          score: r.score,
+          item: {
+            id: r.id,
+            type:
+              r.source === 'tab'
+                ? 'tab'
+                : r.source === 'arctic-bookmark' || r.source === 'chrome-bookmark'
+                  ? 'bookmark'
+                  : r.source === 'url'
+                    ? 'url'
+                    : 'history',
+            title: r.title,
+            url: r.url,
+            domain: r.domain,
+            bookmarkId: r.bookmarkId,
+            spaceId: r.spaceId,
+            spaceName: r.spaceName,
+            isQuickAccess: r.isQuickAccess,
+            isArctic: r.isArctic,
+            isOpenTab: r.isOpenTab,
+            tabId: r.tabId,
+            windowId: r.windowId
+          }
+        }));
+
+      const scoredCmds = getActionCommands()
+        .map((cmd) => ({
+          score: scoreActionCommand(cmd.title, trimmed),
+          item: cmd
+        }))
+        .filter((entry) => entry.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 2);
+
+      scoredEntries.push(...scoredCmds);
+      scoredEntries.sort((a, b) => b.score - a.score);
+
+      const results: SuggestionItem[] = scoredEntries.slice(0, 8).map((e) => e.item);
+
+      // 6. Direct URL suggestion (if user typed a URL-like input not already in ranked results)
       if (isLikelyUrl(trimmed)) {
         const directUrl = formatNavigationUrl(trimmed);
-        const norm = normalizeUrl(directUrl).toLowerCase();
-        if (!seenUrls.has(directUrl.toLowerCase()) && !seenUrls.has(norm)) {
-          results.push({
+        const directNorm = normalizeUrl(directUrl).toLowerCase();
+        const directCanon = getCanonicalUrlKey(directUrl).toLowerCase();
+        const alreadyShown = results.some(
+          (r) =>
+            r.url &&
+            (r.url.toLowerCase() === directUrl.toLowerCase() ||
+              normalizeUrl(r.url).toLowerCase() === directNorm ||
+              getCanonicalUrlKey(r.url).toLowerCase() === directCanon)
+        );
+        if (!alreadyShown) {
+          const directItem: SuggestionItem = {
             id: 'direct-url',
             type: 'url',
             title: `Open ${trimmed}`,
             url: directUrl,
             domain: getDomainFromUrl(directUrl)
-          });
-          seenUrls.add(directUrl.toLowerCase());
-          seenUrls.add(norm);
-        }
-      }
-
-      // 4. History
-      for (const item of historyItems) {
-        if (
-          item.url &&
-          !item.url.startsWith('chrome://') &&
-          !item.url.startsWith('chrome-extension://')
-        ) {
-          const norm = normalizeUrl(item.url).toLowerCase();
-          if (!seenUrls.has(item.url.toLowerCase()) && !seenUrls.has(norm)) {
-            seenUrls.add(item.url.toLowerCase());
-            seenUrls.add(norm);
-            results.push({
-              id: `hist-${item.id}`,
-              type: 'history',
-              title: item.title || item.url,
-              url: item.url,
-              domain: getDomainFromUrl(item.url)
-            });
-            if (results.length >= 9) break;
+          };
+          // Put explicit direct URL first if no high-confidence host match beat it
+          if (rankedOmnibox.length === 0 || rankedOmnibox[0].relevanceScore < 900) {
+            results.unshift(directItem);
+          } else {
+            results.push(directItem);
           }
         }
       }
 
-      // 5. Web Search Fallback (uses browser's default search engine via chrome.search)
+      // 7. Web Search Fallback (uses browser's default search engine via chrome.search)
       const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
       results.push({
         id: 'google-search',
@@ -1237,11 +1648,18 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         url: searchUrl
       });
 
-      const hasLocalBookmarkOrHistory = results.some(
-        (r) => r.type === 'bookmark' || r.type === 'history' || r.type === 'url'
+      const hasLocalDestination = results.some(
+        (r) =>
+          r.type === 'tab' ||
+          r.type === 'bookmark' ||
+          r.type === 'history' ||
+          r.type === 'url'
       );
+      const isMultiWordWeakLocal =
+        /\s/.test(trimmed) &&
+        !rankedOmnibox.some((r) => r.relevanceScore >= 320);
       const shouldFetchGoogleSuggestions =
-        !hasLocalBookmarkOrHistory && !isLikelyUrl(trimmed);
+        !isLikelyUrl(trimmed) && (!hasLocalDestination || isMultiWordWeakLocal);
 
       if (!shouldFetchGoogleSuggestions) {
         lastGoogleSuggestionsRef.current = [];
@@ -1260,15 +1678,16 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         });
       }
 
-      // 6. Live Google Suggestions when keyword is not found in bookmarks, history, or direct URL
+      // 8. Live Google Suggestions
       if (shouldFetchGoogleSuggestions) {
         const googleSuggestions = await fetchGoogleSuggestions(
           trimmed,
           abortController?.signal
         );
         if (!isCancelled) {
+          const maxGoogleItems = hasLocalDestination ? 3 : 5;
           const suggestionItems: SuggestionItem[] = googleSuggestions
-            .slice(0, 5)
+            .slice(0, maxGoogleItems)
             .map((suggestionText, idx) => ({
               id: `google-suggest-${idx}`,
               type: 'search',
@@ -1291,7 +1710,13 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       isCancelled = true;
       abortController?.abort();
     };
-  }, [activeQuery, activeSiteEngine, getActionCommands, loadArcticBookmarks]);
+  }, [
+    activeQuery,
+    activeSiteEngine,
+    getActionCommands,
+    loadArcticBookmarks,
+    mergeRegionalSignals
+  ]);
 
   // Navigate to destination (handling bookmark bindings and space switching)
   const openBookmarkOrUrl = useCallback(
@@ -1406,9 +1831,13 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                   await chrome.windows.update(boundTab.windowId, { focused: true });
                 } catch {}
               }
-              // Notify sidebar
+              // Notify sidebar and reveal the activated Space Tab
               try {
-                chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+                chrome.runtime?.sendMessage?.({
+                  type: 'REFRESH_TABS',
+                  revealTabId: boundTabId,
+                  revealBookmarkId: bookmarkId
+                });
               } catch {}
               // Close the temporary launcher tab
               if (currentTab?.id && currentTab.id !== boundTabId) {
@@ -1499,7 +1928,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 } catch {}
               }
               try {
-                chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+                chrome.runtime?.sendMessage?.({
+                  type: 'REFRESH_TABS',
+                  revealTabId: matchedTabId,
+                  ...(isArctic && bookmarkId ? { revealBookmarkId: bookmarkId } : {})
+                });
               } catch {}
               if (currentTab?.id && currentTab.id !== matchedTabId) {
                 try {
@@ -1552,7 +1985,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         }
 
         try {
-          chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+          chrome.runtime?.sendMessage?.({
+            type: 'REFRESH_TABS',
+            ...(typeof currentTab?.id === 'number' ? { revealTabId: currentTab.id } : {}),
+            ...(isArctic && bookmarkId ? { revealBookmarkId: bookmarkId } : {})
+          });
         } catch {}
       } catch (err) {
         console.warn('[Arctic] Navigation error:', err);
@@ -1624,7 +2061,12 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         }
 
         try {
-          chrome.runtime?.sendMessage?.({ type: 'REFRESH_TABS' });
+          chrome.runtime?.sendMessage?.({
+            type: 'REFRESH_TABS',
+            ...(typeof currentTabRef.current?.id === 'number'
+              ? { revealTabId: currentTabRef.current.id }
+              : {})
+          });
         } catch {}
       } catch (err) {
         try {
@@ -1642,7 +2084,98 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     [showToast]
   );
 
-  // Handle selection (URL navigation, Bookmark activation, Web search, or Command action)
+  // Activate an already-open unbound Today's Tab directly and close the Command Bar launcher
+  const focusOpenTab = useCallback(
+    async (item: SuggestionItem) => {
+      if (typeof item.tabId !== 'number' || isNavigatingRef.current) return;
+
+      isNavigatingRef.current = true;
+      setIsNavigating(true);
+      inputRef.current?.blur();
+
+      if (navTimeoutRef.current) clearTimeout(navTimeoutRef.current);
+      navTimeoutRef.current = setTimeout(() => {
+        isNavigatingRef.current = false;
+        setIsNavigating(false);
+      }, 12000);
+
+      try {
+        let currentTab: chrome.tabs.Tab | undefined = currentTabRef.current || undefined;
+        if (!currentTab && chrome?.tabs?.getCurrent) {
+          try {
+            const t = await chrome.tabs.getCurrent();
+            if (t) {
+              currentTab = t;
+              currentTabRef.current = t;
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (!currentTab && chrome?.tabs?.query) {
+          try {
+            const [activeTab] = await chrome.tabs.query({
+              active: true,
+              currentWindow: true
+            });
+            currentTab = activeTab;
+            if (currentTab) {
+              currentTabRef.current = currentTab;
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        if (item.spaceId) {
+          try {
+            await chrome?.storage?.local?.set({ activeSpaceId: item.spaceId });
+          } catch {
+            // ignore
+          }
+        }
+
+        await chrome.tabs.update(item.tabId, { active: true });
+        if (item.windowId) {
+          try {
+            await chrome.windows.update(item.windowId, { focused: true });
+          } catch {
+            // ignore
+          }
+        }
+
+        try {
+          chrome.runtime?.sendMessage?.({
+            type: 'REFRESH_TABS',
+            revealTabId: item.tabId
+          });
+        } catch {
+          // ignore
+        }
+
+        if (currentTab?.id && currentTab.id !== item.tabId) {
+          try {
+            await chrome.tabs.remove(currentTab.id);
+          } catch {
+            // ignore
+          }
+        } else {
+          window.close();
+        }
+      } catch {
+        // Tab was closed right before selection; fall back to opening URL
+        if (navTimeoutRef.current) clearTimeout(navTimeoutRef.current);
+        isNavigatingRef.current = false;
+        setIsNavigating(false);
+        if (item.url) {
+          await openBookmarkOrUrl(item.url);
+        }
+      }
+    },
+    [openBookmarkOrUrl]
+  );
+
+  // Handle selection (URL navigation, Tab switching, Bookmark activation, Web search, or Command action)
   const handleSelect = useCallback(
     async (item: SuggestionItem) => {
       if (isNavigatingRef.current) return;
@@ -1653,6 +2186,10 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         } else if (item.url) {
           openBookmarkOrUrl(item.url);
         }
+        return;
+      }
+      if (item.type === 'tab' && typeof item.tabId === 'number') {
+        await focusOpenTab(item);
         return;
       }
       if (item.defaultSearchText) {
@@ -1672,7 +2209,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         await performWebSearch(item.title);
       }
     },
-    [openBookmarkOrUrl, performWebSearch]
+    [focusOpenTab, openBookmarkOrUrl, performWebSearch]
   );
 
   // Load a suggestion's URL into the input box and place cursor at the end for editing
@@ -1701,6 +2238,37 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
     if (isNavigatingRef.current) {
       e.preventDefault();
       return;
+    }
+
+    if (
+      e.key === 'ArrowRight' &&
+      !e.shiftKey &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      ghostSuffix
+    ) {
+      const inputEl = e.currentTarget;
+      const selStart = inputEl.selectionStart ?? query.length;
+      const selEnd = inputEl.selectionEnd ?? query.length;
+      if (selStart === query.length && selEnd === query.length) {
+        e.preventDefault();
+        const completed = `${query}${ghostSuffix}`;
+        setHasArrowNavigated(false);
+        setQuery(completed);
+        setDebouncedQuery(completed);
+        if (inputRef.current) {
+          inputRef.current.value = completed;
+          inputRef.current.setSelectionRange(completed.length, completed.length);
+        }
+        requestAnimationFrame(() => {
+          if (inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(completed.length, completed.length);
+          }
+        });
+        return;
+      }
     }
 
     const selectedItem =
@@ -2039,6 +2607,8 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                               (e.target as HTMLElement).style.display = 'none';
                             }}
                           />
+                        ) : item.type === 'tab' ? (
+                          <Globe className="w-4 h-4 text-emerald-500" />
                         ) : item.type === 'bookmark' ? (
                           <Bookmark className="w-4 h-4 text-amber-500" />
                         ) : (
@@ -2073,12 +2643,27 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                           {item.commandCategory || 'Command'}
                         </span>
                       )}
-                      {item.type === 'bookmark' && (
-                        <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-300 border border-amber-500/20">
-                          {item.domain?.startsWith('Space:') ? 'Space Tab' : 'Tab'}
+                      {(item.type === 'tab' || item.isOpenTab) && (
+                        <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border border-emerald-500/20">
+                          Switch to Tab
                         </span>
                       )}
-                      {item.type === 'history' && (
+                      {item.type === 'bookmark' && !item.isOpenTab && item.isArctic && (
+                        <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-amber-500/10 text-amber-600 dark:text-amber-300 border border-amber-500/20">
+                          {item.isQuickAccess ? 'Pinned' : 'Space Tab'}
+                        </span>
+                      )}
+                      {item.type === 'bookmark' && !item.isOpenTab && !item.isArctic && (
+                        <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-zinc-200/70 dark:bg-white/10 text-zinc-600 dark:text-zinc-300 border border-black/5 dark:border-white/10">
+                          Bookmark
+                        </span>
+                      )}
+                      {item.type === 'url' && (
+                        <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 border border-indigo-500/20">
+                          Website
+                        </span>
+                      )}
+                      {item.type === 'history' && !item.isOpenTab && (
                         <span className="px-1.5 py-0.5 rounded text-[10.5px] font-medium bg-zinc-200/50 dark:bg-white/10 text-zinc-500 dark:text-zinc-400">
                           History
                         </span>
@@ -2099,6 +2684,9 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                       )}
                       {isSelected &&
                         item.type !== 'command' &&
+                        (hasArrowNavigated ||
+                          !visualMatchedSiteEngine ||
+                          Boolean(activeSiteEngine)) &&
                         (item.type === 'search'
                           ? Boolean(item.searchQuery)
                           : Boolean(item.url)) && (

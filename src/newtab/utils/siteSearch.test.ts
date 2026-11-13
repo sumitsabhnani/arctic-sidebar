@@ -4,7 +4,8 @@ import {
   findMatchingSiteEngine,
   getGhostAutocomplete,
   buildSiteSearchUrl,
-  doesUrlMatchEngineDomain
+  doesUrlMatchEngineDomain,
+  inferRegionalSiteDomains
 } from './siteSearch';
 import type { SiteSearchEngine } from '../../types';
 
@@ -84,6 +85,45 @@ describe('siteSearch utilities', () => {
       const xEngine = DEFAULT_SITE_SEARCH_ENGINES.find((e) => e.id === 'twitter')!;
       expect(doesUrlMatchEngineDomain('https://x.com/home', xEngine)).toBe(true);
       expect(doesUrlMatchEngineDomain('https://twitter.com/home', xEngine)).toBe(true);
+    });
+
+    it('excludes AWS console and sign-in URLs from retail Amazon engine domain matches', () => {
+      const amz = DEFAULT_SITE_SEARCH_ENGINES.find((e) => e.id === 'amazon')!;
+      expect(doesUrlMatchEngineDomain('https://www.amazon.com/dp/B012345', amz)).toBe(true);
+      expect(
+        doesUrlMatchEngineDomain(
+          'https://us-east-1.console.aws.amazon.com/costmanagement/home',
+          amz
+        )
+      ).toBe(false);
+      expect(doesUrlMatchEngineDomain('https://signin.aws.amazon.com/signin', amz)).toBe(false);
+    });
+  });
+
+  describe('regional domain adaptation', () => {
+    it('infers amazon.de over AWS console URLs and adapts Amazon engine + ghost autocomplete', () => {
+      const prefs = inferRegionalSiteDomains([
+        { url: 'https://us-east-1.console.aws.amazon.com/costmanagement/home', weight: 10 },
+        { url: 'https://signin.aws.amazon.com/signin', weight: 10 },
+        { url: 'https://www.amazon.de/b/ref=dp_bc_1?ie=UTF8&node=3167641', weight: 5 },
+        { url: 'https://mail.google.com/mail/u/0/#inbox', weight: 10 },
+        { url: 'https://www.google.de/search?q=test', weight: 3 }
+      ]);
+
+      expect(prefs.amazon).toBe('amazon.de');
+      expect(prefs.google).toBe('google.de');
+
+      const matched = findMatchingSiteEngine('amazon', [], prefs);
+      expect(matched?.domain).toBe('amazon.de');
+      expect(matched?.name).toBe('Amazon.de');
+      expect(getGhostAutocomplete('amazon', matched)).toBe('.de');
+      expect(buildSiteSearchUrl(matched!, 'coffee grinder')).toBe(
+        'https://www.amazon.de/s?k=coffee%20grinder'
+      );
+
+      // Explicit TLD input still respects user's explicit TLD
+      const explicitCom = findMatchingSiteEngine('amazon.com', [], prefs);
+      expect(explicitCom?.domain).toBe('amazon.com');
     });
   });
 });
