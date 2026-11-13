@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom';
 import { Trash2, ChevronDown, X, Plus } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
+import { scrollElementIntoContainerView } from '../utils/scrollIntoView';
 import type { SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -46,6 +47,7 @@ interface OpenTabsSectionProps {
   onChangeEditTitle?: (newTitle: string) => void;
   onSaveRename?: () => void;
   onCancelRename?: () => void;
+  revealRequest?: { tabId?: number; nonce: number } | null;
 }
 
 export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
@@ -88,7 +90,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onStartRename: controlledOnStartRename,
   onChangeEditTitle: controlledOnChangeEditTitle,
   onSaveRename: controlledOnSaveRename,
-  onCancelRename: controlledOnCancelRename
+  onCancelRename: controlledOnCancelRename,
+  revealRequest = null
 }) => {
   const [localEditingTabId, setLocalEditingTabId] = useState<number | null>(null);
   const [localEditingTitle, setLocalEditingTitle] = useState<string>('');
@@ -96,6 +99,10 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   const sectionRef = React.useRef<HTMLDivElement>(null);
   const prevTabIdsRef = React.useRef<Set<number> | null>(null);
   const prevSpaceIdRef = React.useRef<string | undefined>(activeSpaceId);
+  const prevActiveTabIdRef = React.useRef<number | null | undefined>(undefined);
+  const pendingScrollTabIdRef = React.useRef<number | null>(null);
+  const lastHandledRevealNonceRef = React.useRef<number>(0);
+  const justScrolledAddedTabIdRef = React.useRef<number | null>(null);
   const clearDropdownRef = React.useRef<HTMLDivElement>(null);
   const dropdownMenuRef = React.useRef<HTMLDivElement>(null);
   const [clearMenuCoords, setClearMenuCoords] = useState<{ top: number; right: number }>({
@@ -314,6 +321,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
 
     if (addedIds.length > 0 && !isCollapsed) {
       const latestTabId = addedIds[addedIds.length - 1];
+      justScrolledAddedTabIdRef.current = latestTabId;
       const sectionEl = sectionRef.current;
       if (sectionEl) {
         const rowEl = sectionEl.querySelector(
@@ -335,6 +343,62 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
       }
     }
   }, [unpinnedTabs, activeSpaceId, isInitialTabsLoaded, isCollapsed]);
+
+  // Automatically scroll an already-open Today's Tab into view when it becomes active
+  // (e.g. switched via Command Bar, keyboard shortcut, or tab strip)
+  useEffect(() => {
+    if (!isInitialTabsLoaded) return;
+
+    if (
+      revealRequest &&
+      revealRequest.nonce !== lastHandledRevealNonceRef.current
+    ) {
+      lastHandledRevealNonceRef.current = revealRequest.nonce;
+      if (typeof revealRequest.tabId === 'number') {
+        pendingScrollTabIdRef.current = revealRequest.tabId;
+      }
+    }
+
+    if (prevActiveTabIdRef.current === undefined) {
+      // Seed initial active tab without scrolling away from top on sidebar open
+      prevActiveTabIdRef.current = activeTabId;
+    } else if (activeTabId !== prevActiveTabIdRef.current) {
+      prevActiveTabIdRef.current = activeTabId;
+      if (typeof activeTabId === 'number') {
+        if (justScrolledAddedTabIdRef.current === activeTabId) {
+          justScrolledAddedTabIdRef.current = null;
+          pendingScrollTabIdRef.current = null;
+          return;
+        }
+        pendingScrollTabIdRef.current = activeTabId;
+      } else {
+        pendingScrollTabIdRef.current = null;
+      }
+    }
+
+    justScrolledAddedTabIdRef.current = null;
+
+    const targetTabId = pendingScrollTabIdRef.current;
+    if (typeof targetTabId !== 'number' || isCollapsed) return;
+    if (!unpinnedTabs.some((t) => t.id === targetTabId)) return;
+
+    const sectionEl = sectionRef.current;
+    if (!sectionEl) return;
+    const rowEl = sectionEl.querySelector(
+      `[data-tab-id="${targetTabId}"]`
+    ) as HTMLElement | null;
+    if (!rowEl) return;
+
+    pendingScrollTabIdRef.current = null;
+    scrollElementIntoContainerView(rowEl);
+  }, [
+    activeTabId,
+    unpinnedTabs,
+    activeSpaceId,
+    isInitialTabsLoaded,
+    isCollapsed,
+    revealRequest
+  ]);
 
   return (
     <div

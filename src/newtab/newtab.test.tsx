@@ -1262,4 +1262,298 @@ describe('newtab url detection and formatting', () => {
       expect(await screen.findByText('Closed 1 duplicate tab')).toBeInTheDocument();
     });
   });
+
+  describe('Omnibox Ranking, Open Today Tabs, and Regional Autocomplete', () => {
+    it('prioritizes open Amazon.de Today Tab #1 and synthesized amazon.de homepage #2 over AWS Console bookmarks, adapts ghost text to .de, and switches tab on Enter', async () => {
+      const originalHistorySearch = chrome.history.search;
+      const now = Date.now();
+      const customHistory: chrome.history.HistoryItem[] = [
+        {
+          id: 'aws-signin-1',
+          url: 'https://ap-south-1.signin.aws.amazon.com/oauth?client_id=arn%3Aaws%3Asignin%3A1&redirect_uri=https%3A%2F%2Fap-south-1.console.aws.amazon.com',
+          title: 'Amazon Web Services Sign-In',
+          lastVisitTime: now - 30_000,
+          visitCount: 5
+        },
+        {
+          id: 'aws-signin-2',
+          url: 'https://signin.aws.amazon.com/signin?redirect_uri=https%3A%2F%2Fus-east-1.console.aws.amazon.com%2Fbilling&state=abc',
+          title: 'Amazon Web Services Sign-In',
+          lastVisitTime: now - 40_000,
+          visitCount: 4
+        },
+        {
+          id: 'aws-signin-3',
+          url: 'https://signin.aws.amazon.com/signin?redirect_uri=https%3A%2F%2Fus-east-1.console.aws.amazon.com%2Fcostmanagement&state=xyz',
+          title: 'Amazon Web Services Sign-In',
+          lastVisitTime: now - 50_000,
+          visitCount: 4
+        },
+        {
+          id: 'amz-watch',
+          url: 'https://www.amazon.de/dp/B0F1234567',
+          title: 'Apple Watch Ultra 3 GPS + Cellular 49 mm Premium Smartwatch',
+          lastVisitTime: now - 120_000,
+          visitCount: 2
+        }
+      ];
+
+      chrome.history.search = vi.fn(
+        async (
+          q: chrome.history.HistoryQuery,
+          cb?: (results: chrome.history.HistoryItem[]) => void
+        ) => {
+          const filtered = q.text
+            ? customHistory.filter(
+                (r) =>
+                  r.title?.toLowerCase().includes(q.text.toLowerCase()) ||
+                  r.url?.toLowerCase().includes(q.text.toLowerCase())
+              )
+            : customHistory;
+          if (cb) cb(filtered);
+          return filtered;
+        }
+      );
+
+      try {
+        // Non-Arctic Chrome Bookmarks for AWS Console
+        mockChrome.__setBookmarksTree([
+          {
+            id: '0',
+            title: 'Root',
+            children: [
+              {
+                id: '1',
+                parentId: '0',
+                title: 'Bookmarks Bar',
+                children: [
+                  {
+                    id: 'bm-aws-billing',
+                    parentId: '1',
+                    title: 'Billing Management',
+                    url: 'https://us-east-1.console.aws.amazon.com/costmanagement/home?region=us-east-1'
+                  },
+                  {
+                    id: 'bm-aws-rds',
+                    parentId: '1',
+                    title: 'bhavkosh-db Database',
+                    url: 'https://ap-south-1.console.aws.amazon.com/rds/home?region=ap-south-1#database:id=bhavkosh-db'
+                  }
+                ]
+              },
+              { id: '2', parentId: '0', title: 'Other Bookmarks', children: [] }
+            ]
+          }
+        ]);
+
+        // Tab 1 = Command Bar launcher; Tab 42 = unbound open Amazon.de Today's Tab
+        mockChrome.__setTabs([
+          {
+            id: 1,
+            windowId: 10,
+            url: 'chrome-extension://mock-extension-id/command.html',
+            title: 'Arctic Command',
+            active: true
+          } as chrome.tabs.Tab,
+          {
+            id: 42,
+            windowId: 10,
+            url: 'https://www.amazon.de/b/ref=dp_bc_1?ie=UTF8&node=3167641',
+            title: 'Amazon.de: Home & Kitchen',
+            active: false,
+            lastAccessed: now - 10_000
+          } as chrome.tabs.Tab
+        ]);
+
+        vi.mocked(chrome.tabs.update).mockClear();
+        vi.mocked(chrome.tabs.remove).mockClear();
+
+        render(<App />);
+        const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+        await act(async () => {
+          fireEvent.change(input, { target: { value: 'amazon' } });
+        });
+
+        // 1. Open Today's Tab is rendered at #1 and synthesized root homepage at #2
+        const openTabRow = await screen.findByText('Amazon.de: Home & Kitchen');
+        expect(openTabRow).toBeInTheDocument();
+        expect(screen.getByText('Switch to Tab')).toBeInTheDocument();
+        expect(screen.getByText('https://www.amazon.de')).toBeInTheDocument();
+        expect(screen.getByText('Website')).toBeInTheDocument();
+
+        // Verify relative order in the dropdown list: Open Tab (#0) -> Root Website (#1)
+        const optionButtons = screen
+          .getAllByRole('button')
+          .filter((el) => el.getAttribute('tabindex') === '0');
+        expect(optionButtons[0]).toHaveTextContent('Amazon.de: Home & Kitchen');
+        expect(optionButtons[1]).toHaveTextContent('amazon.de');
+        expect(optionButtons[1]).toHaveTextContent('https://www.amazon.de');
+
+        // 2. AWS Console deep-subdomain Chrome bookmarks are suppressed for bare "amazon"
+        expect(screen.queryByText('Billing Management')).not.toBeInTheDocument();
+        expect(screen.queryByText('bhavkosh-db Database')).not.toBeInTheDocument();
+
+        // 3. Inline ghost text and Tab-to-Search pill dynamically adapt to Amazon.de
+        expect(screen.getByTestId('ghost-autocomplete')).toHaveTextContent('amazon.de');
+        expect(screen.getByTestId('tab-to-search-hint')).toHaveTextContent('Search Amazon.de');
+
+        // 4. Conflicting row "Tab ⇥" badge is hidden until user presses ArrowDown
+        expect(screen.queryByTestId('row-tab-to-edit-hint')).not.toBeInTheDocument();
+
+        // 5. Pressing Enter immediately activates open Tab 42 and closes launcher Tab 1
+        await act(async () => {
+          fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+        });
+
+        expect(chrome.tabs.update).toHaveBeenCalledWith(42, { active: true });
+        expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+          type: 'REFRESH_TABS',
+          revealTabId: 42
+        });
+        expect(chrome.tabs.remove).toHaveBeenCalledWith(1);
+      } finally {
+        chrome.history.search = originalHistorySearch;
+      }
+    });
+
+    it('completes inline ghost suffix on ArrowRight and searches regional Amazon.de on Tab', async () => {
+      mockChrome.__setTabs([
+        {
+          id: 1,
+          windowId: 10,
+          url: 'chrome-extension://mock-extension-id/command.html',
+          title: 'Arctic Command',
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 42,
+          windowId: 10,
+          url: 'https://www.amazon.de/b/ref=dp_bc_1?ie=UTF8&node=3167641',
+          title: 'Amazon.de: Home & Kitchen',
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+
+      vi.mocked(chrome.tabs.update).mockClear();
+      render(<App />);
+      const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'amazon' } });
+      });
+
+      expect(await screen.findByTestId('ghost-autocomplete')).toHaveTextContent('amazon.de');
+
+      // Place cursor at end and press ArrowRight -> completes "amazon" to "amazon.de"
+      input.setSelectionRange(6, 6);
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'ArrowRight', code: 'ArrowRight' });
+      });
+      expect(input.value).toBe('amazon.de');
+
+      // Press Tab on "amazon.de" -> enters "Search Amazon.de" mode and searches amazon.de
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Tab', code: 'Tab' });
+      });
+      expect(screen.getByTestId('active-site-pill')).toHaveTextContent('Search Amazon.de');
+
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'coffee grinder' } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+      });
+
+      expect(chrome.tabs.update).toHaveBeenCalledWith(1, {
+        url: 'https://www.amazon.de/s?k=coffee%20grinder',
+        active: true
+      });
+    });
+
+    it('surfaces AWS Console Chrome bookmarks with "Bookmark" badge when explicitly queried and collapses duplicate OAuth sign-in history items', async () => {
+      const originalHistorySearch = chrome.history.search;
+      const now = Date.now();
+      const customHistory: chrome.history.HistoryItem[] = [
+        {
+          id: 'aws-signin-1',
+          url: 'https://signin.aws.amazon.com/signin?redirect_uri=https%3A%2F%2Fus-east-1.console.aws.amazon.com%2Fbilling&state=1',
+          title: 'Amazon Web Services Sign-In',
+          lastVisitTime: now - 10_000,
+          visitCount: 5
+        },
+        {
+          id: 'aws-signin-2',
+          url: 'https://signin.aws.amazon.com/signin?redirect_uri=https%3A%2F%2Fus-east-1.console.aws.amazon.com%2Frds&state=2',
+          title: 'Amazon Web Services Sign-In',
+          lastVisitTime: now - 20_000,
+          visitCount: 4
+        }
+      ];
+
+      chrome.history.search = vi.fn(
+        async (
+          q: chrome.history.HistoryQuery,
+          cb?: (results: chrome.history.HistoryItem[]) => void
+        ) => {
+          const filtered = q.text
+            ? customHistory.filter(
+                (r) =>
+                  r.title?.toLowerCase().includes(q.text.toLowerCase()) ||
+                  r.url?.toLowerCase().includes(q.text.toLowerCase())
+              )
+            : customHistory;
+          if (cb) cb(filtered);
+          return filtered;
+        }
+      );
+
+      try {
+        mockChrome.__setBookmarksTree([
+          {
+            id: '0',
+            title: 'Root',
+            children: [
+              {
+                id: '1',
+                parentId: '0',
+                title: 'Bookmarks Bar',
+                children: [
+                  {
+                    id: 'bm-aws-billing',
+                    parentId: '1',
+                    title: 'Billing Management',
+                    url: 'https://us-east-1.console.aws.amazon.com/costmanagement/home?region=us-east-1'
+                  }
+                ]
+              },
+              { id: '2', parentId: '0', title: 'Other Bookmarks', children: [] }
+            ]
+          }
+        ]);
+
+        render(<App />);
+        const input = screen.getByPlaceholderText(/type > for commands/i) as HTMLInputElement;
+
+        // 1. Typing "billing" ranks Billing Management #1 with "Bookmark" badge (not "Tab")
+        await act(async () => {
+          fireEvent.change(input, { target: { value: 'billing' } });
+        });
+
+        expect(await screen.findByText('Billing Management')).toBeInTheDocument();
+        expect(screen.getByText('Bookmark')).toBeInTheDocument();
+        expect(screen.queryByText('Tab')).not.toBeInTheDocument();
+
+        // 2. Typing "signin" collapses duplicate OAuth redirect URLs to a single History item
+        await act(async () => {
+          fireEvent.change(input, { target: { value: 'signin' } });
+        });
+
+        const signInRows = await screen.findAllByText('Amazon Web Services Sign-In');
+        expect(signInRows).toHaveLength(1);
+      } finally {
+        chrome.history.search = originalHistorySearch;
+      }
+    });
+  });
 });

@@ -102,6 +102,24 @@ export function useBookmarks() {
     });
   }, [allFolders]);
 
+  const expandFoldersById = useCallback((folderIds: string[]) => {
+    if (folderIds.length === 0) return;
+    setCollapsedFolderIds((prev) => {
+      let changed = false;
+      const updated = { ...prev };
+      for (const fId of folderIds) {
+        const isCurrentlyCollapsed = updated[fId] !== undefined ? updated[fId] : true;
+        if (isCurrentlyCollapsed) {
+          updated[fId] = false;
+          changed = true;
+        }
+      }
+      if (!changed) return prev;
+      chrome.storage.local.set({ collapsedFolderIds: updated });
+      return updated;
+    });
+  }, []);
+
   /**
    * Traverse bookmark tree to collect all folders with path names for dropdown
    */
@@ -1379,6 +1397,7 @@ export function useBookmarks() {
     collapsedFolderIds,
     toggleFolderCollapse,
     setAllFoldersCollapsed,
+    expandFoldersById,
     spaces,
     activeSpaceId,
     selectSpace,

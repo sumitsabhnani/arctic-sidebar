@@ -490,6 +490,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     <div
       role="button"
       tabIndex={0}
+      data-bookmark-id={bookmark.id}
+      data-bound-tab-id={binding?.tabId}
       title={tooltip}
       draggable={true}
       onDragStart={handleDragStart}

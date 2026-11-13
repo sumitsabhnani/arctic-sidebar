@@ -409,4 +409,167 @@ describe('OpenTabsSection component', () => {
     expect(screen.queryByTitle("Close temporary Today's tabs")).not.toBeInTheDocument();
     expect(screen.queryByTitle('Clear options')).not.toBeInTheDocument();
   });
+
+  it('smoothly scrolls an already-open Today Tab into view when activeTabId switches to an off-screen tab (e.g. from Command Bar)', () => {
+    const scrollToMock = vi.fn();
+    const tabsList: chrome.tabs.Tab[] = [
+      ...mockTabs,
+      {
+        id: 142,
+        index: 9,
+        windowId: 1,
+        highlighted: false,
+        active: false,
+        pinned: false,
+        incognito: false,
+        url: 'https://www.amazon.de/b/ref=dp_bc_1?ie=UTF8&node=3167641',
+        title: 'Amazon.de: Home & Kitchen'
+      } as chrome.tabs.Tab
+    ];
+
+    const { rerender } = render(
+      <div
+        data-testid="scroll-container"
+        className="overflow-y-auto"
+        style={{ height: '300px' }}
+      >
+        <OpenTabsSection {...defaultProps} unpinnedTabs={tabsList} activeTabId={101} />
+      </div>
+    );
+
+    const scrollContainer = screen.getByTestId('scroll-container');
+    Object.defineProperty(scrollContainer, 'scrollHeight', {
+      value: 900,
+      configurable: true
+    });
+    Object.defineProperty(scrollContainer, 'clientHeight', {
+      value: 300,
+      configurable: true
+    });
+    scrollContainer.scrollTop = 0;
+    scrollContainer.scrollTo = scrollToMock;
+    scrollContainer.getBoundingClientRect = () =>
+      ({
+        top: 100,
+        bottom: 400,
+        left: 0,
+        right: 280,
+        width: 280,
+        height: 300,
+        x: 0,
+        y: 100,
+        toJSON: () => ({})
+      }) as DOMRect;
+
+    const visibleRow = scrollContainer.querySelector('[data-tab-id="102"]') as HTMLElement;
+    visibleRow.getBoundingClientRect = () =>
+      ({
+        top: 150,
+        bottom: 184,
+        left: 0,
+        right: 280,
+        width: 280,
+        height: 34,
+        x: 0,
+        y: 150,
+        toJSON: () => ({})
+      }) as DOMRect;
+
+    const offscreenAmazonRow = scrollContainer.querySelector(
+      '[data-tab-id="142"]'
+    ) as HTMLElement;
+    offscreenAmazonRow.getBoundingClientRect = () =>
+      ({
+        top: 640,
+        bottom: 674,
+        left: 0,
+        right: 280,
+        width: 280,
+        height: 34,
+        x: 0,
+        y: 640,
+        toJSON: () => ({})
+      }) as DOMRect;
+
+    // 1. Switching to an ALREADY visible tab (102) does NOT jump/scroll
+    rerender(
+      <div
+        data-testid="scroll-container"
+        className="overflow-y-auto"
+        style={{ height: '300px' }}
+      >
+        <OpenTabsSection {...defaultProps} unpinnedTabs={tabsList} activeTabId={102} />
+      </div>
+    );
+    expect(scrollToMock).not.toHaveBeenCalled();
+
+    // 2. Switching to off-screen Amazon.de tab (142) via Command Bar scrolls container down smoothly
+    rerender(
+      <div
+        data-testid="scroll-container"
+        className="overflow-y-auto"
+        style={{ height: '300px' }}
+      >
+        <OpenTabsSection {...defaultProps} unpinnedTabs={tabsList} activeTabId={142} />
+      </div>
+    );
+
+    // deltaDown = (674 - 400) + 12 = 286
+    expect(scrollToMock).toHaveBeenCalledWith({
+      top: 286,
+      behavior: 'smooth'
+    });
+  });
+
+  it('defers scrolling until Today Tabs uncollapses when revealRequest targets a tab while collapsed', () => {
+    const scrollIntoViewMock = vi.fn();
+    const originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock;
+
+    try {
+      const { rerender } = render(
+        <div className="overflow-y-auto">
+          <OpenTabsSection
+            {...defaultProps}
+            unpinnedTabs={mockTabs}
+            activeTabId={101}
+            isCollapsed={true}
+          />
+        </div>
+      );
+
+      // Command Bar activates tab 102 while section is still collapsed on first tick
+      rerender(
+        <div className="overflow-y-auto">
+          <OpenTabsSection
+            {...defaultProps}
+            unpinnedTabs={mockTabs}
+            activeTabId={102}
+            isCollapsed={true}
+            revealRequest={{ tabId: 102, nonce: 1 }}
+          />
+        </div>
+      );
+      expect(scrollIntoViewMock).not.toHaveBeenCalled();
+
+      // Sidebar auto-expands Today's Tabs -> deferred scroll fires immediately
+      rerender(
+        <div className="overflow-y-auto">
+          <OpenTabsSection
+            {...defaultProps}
+            unpinnedTabs={mockTabs}
+            activeTabId={102}
+            isCollapsed={false}
+            revealRequest={{ tabId: 102, nonce: 1 }}
+          />
+        </div>
+      );
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'nearest'
+      });
+    } finally {
+      HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
+    }
+  });
 });

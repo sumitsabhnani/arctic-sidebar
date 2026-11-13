@@ -16,10 +16,31 @@ import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode, EdgeTriggerMode } from '../types';
 import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
 import { isScratchpadUrl } from './utils/url';
+import { scrollElementIntoContainerView } from './utils/scrollIntoView';
 import { upsertPersistedBindings } from './utils/reconcileBindings';
 import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose } from 'lucide-react';
 
 const EDGE_TRIGGER_ORIGINS = ['http://*/*', 'https://*/*'];
+
+function findAncestorFolderIdsForBookmark(
+  nodes: chrome.bookmarks.BookmarkTreeNode[],
+  targetBookmarkId: string,
+  ancestors: string[] = []
+): string[] | null {
+  for (const node of nodes) {
+    if (node.id === targetBookmarkId) {
+      return ancestors;
+    }
+    if (node.children && node.children.length > 0) {
+      const found = findAncestorFolderIdsForBookmark(node.children, targetBookmarkId, [
+        ...ancestors,
+        node.id
+      ]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
 
 export const App: React.FC = () => {
   const {
@@ -29,6 +50,7 @@ export const App: React.FC = () => {
     allFolders,
     collapsedFolderIds,
     toggleFolderCollapse,
+    expandFoldersById,
     spaces,
     activeSpaceId,
     selectSpace,
@@ -139,6 +161,15 @@ export const App: React.FC = () => {
   const [showEdgeTriggerPrompt, setShowEdgeTriggerPrompt] = useState<boolean>(false);
   const sidePanelWindowIdRef = React.useRef<number | null>(null);
   const isClosingPanelRef = React.useRef<boolean>(false);
+  const mainScrollRef = React.useRef<HTMLDivElement>(null);
+  const [revealRequest, setRevealRequest] = useState<{
+    tabId?: number;
+    bookmarkId?: string;
+    nonce: number;
+  } | null>(null);
+  const lastExpandedRevealNonceRef = React.useRef<number>(0);
+  const prevSidebarActiveTabIdRef = React.useRef<number | null | undefined>(undefined);
+  const pendingBookmarkScrollIdRef = React.useRef<string | null>(null);
 
   // Section Collapsed States
   const [collapsedSections, setCollapsedSections] = useState<{
@@ -263,9 +294,25 @@ export const App: React.FC = () => {
       }
     };
 
-    const handleRuntimeMessage = (message: { type?: string }) => {
+    const handleRuntimeMessage = (message: {
+      type?: string;
+      revealTabId?: number;
+      revealBookmarkId?: string;
+    }) => {
       if (message && message.type === 'OPEN_ARCTIC_SETTINGS') {
         setIsSettingsOpen(true);
+      }
+      if (
+        message &&
+        (message.type === 'REFRESH_TABS' || message.type === 'REVEAL_TAB_IN_SIDEBAR') &&
+        (typeof message.revealTabId === 'number' ||
+          typeof message.revealBookmarkId === 'string')
+      ) {
+        setRevealRequest({
+          tabId: message.revealTabId,
+          bookmarkId: message.revealBookmarkId,
+          nonce: Date.now() + Math.random()
+        });
       }
     };
 
@@ -765,6 +812,93 @@ export const App: React.FC = () => {
       })
       .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
   }, [unpinnedTabs, tabSpaceByTabId, activeSpaceId]);
+
+  // Expand collapsed Today's Tabs section or ancestor Space folders when explicitly jumping from Command Bar
+  useEffect(() => {
+    if (!revealRequest || revealRequest.nonce === lastExpandedRevealNonceRef.current) {
+      return;
+    }
+    lastExpandedRevealNonceRef.current = revealRequest.nonce;
+
+    if (revealRequest.bookmarkId) {
+      pendingBookmarkScrollIdRef.current = revealRequest.bookmarkId;
+      const spaceRootIds = new Set(spaces.map((s) => s.folderId).filter(Boolean));
+      if (activeFolderIds.workspaceId) spaceRootIds.add(activeFolderIds.workspaceId);
+      const searchRoots =
+        allSpaceBookmarkNodes.length > 0
+          ? allSpaceBookmarkNodes
+          : workspaceNode
+            ? [workspaceNode]
+            : [];
+      const ancestors = findAncestorFolderIdsForBookmark(
+        searchRoots,
+        revealRequest.bookmarkId
+      );
+      if (ancestors && ancestors.length > 0) {
+        const collapsibleAncestors = ancestors.filter((id) => !spaceRootIds.has(id));
+        if (collapsibleAncestors.length > 0) {
+          expandFoldersById(collapsibleAncestors);
+        }
+      }
+    } else if (
+      typeof revealRequest.tabId === 'number' &&
+      !bookmarkIdByTabId[revealRequest.tabId]
+    ) {
+      setCollapsedSections((prev) => {
+        if (!prev.todayTabs) return prev;
+        const updated = { ...prev, todayTabs: false };
+        chrome.storage.local.set({ collapsedSections: updated });
+        return updated;
+      });
+    }
+  }, [
+    revealRequest,
+    allSpaceBookmarkNodes,
+    workspaceNode,
+    spaces,
+    activeFolderIds.workspaceId,
+    expandFoldersById,
+    bookmarkIdByTabId
+  ]);
+
+  // Automatically scroll active Space Bookmark row into view when activeTabId changes or revealed
+  useEffect(() => {
+    if (!isInitialTabsLoaded || loading) return;
+
+    if (prevSidebarActiveTabIdRef.current === undefined) {
+      prevSidebarActiveTabIdRef.current = activeTabId;
+    } else if (activeTabId !== prevSidebarActiveTabIdRef.current) {
+      prevSidebarActiveTabIdRef.current = activeTabId;
+      if (typeof activeTabId === 'number' && bookmarkIdByTabId[activeTabId]) {
+        pendingBookmarkScrollIdRef.current = bookmarkIdByTabId[activeTabId];
+      }
+    }
+
+    const targetBookmarkId = pendingBookmarkScrollIdRef.current;
+    if (!targetBookmarkId || !mainScrollRef.current) return;
+
+    const rows = mainScrollRef.current.querySelectorAll<HTMLElement>('[data-bookmark-id]');
+    let matchedRow: HTMLElement | null = null;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.bookmarkId === targetBookmarkId) {
+        matchedRow = rows[i];
+        break;
+      }
+    }
+
+    if (matchedRow) {
+      pendingBookmarkScrollIdRef.current = null;
+      scrollElementIntoContainerView(matchedRow);
+    }
+  }, [
+    activeTabId,
+    bookmarkIdByTabId,
+    workspaceBookmarks,
+    collapsedFolderIds,
+    isInitialTabsLoaded,
+    loading,
+    revealRequest
+  ]);
 
   const hasOpenActiveSpaceTabs = useMemo(() => {
     const checkNodes = (nodes: chrome.bookmarks.BookmarkTreeNode[]): boolean => {
@@ -1607,6 +1741,7 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <div
+        ref={mainScrollRef}
         onClick={handleContainerClick}
         className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 pt-3 pb-7 space-y-4"
       >
@@ -1923,6 +2058,7 @@ export const App: React.FC = () => {
           onPinMultipleTabsToWorkspace={handlePinMultipleTabsToWorkspace}
           onPinMultipleTabsToSpace={handlePinMultipleTabsToSpace}
           onDiscardMultipleTabs={handleDiscardMultipleTabs}
+          revealRequest={revealRequest}
         />
       </div>
 
