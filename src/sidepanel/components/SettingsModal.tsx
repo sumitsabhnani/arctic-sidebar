@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   X,
   Palette,
@@ -16,6 +16,7 @@ import {
   Loader2,
   PanelLeft,
   PanelLeftClose,
+  Keyboard,
   ExternalLink
 } from 'lucide-react';
 import type { BookmarkFolderOption, ColorThemeId, EdgeTriggerMode, ThemeMode } from '../../types';
@@ -83,6 +84,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 }) => {
   const [isHibernating, setIsHibernating] = useState(false);
   const [hibernateFeedback, setHibernateFeedback] = useState<{ text: string; isError?: boolean } | null>(null);
+  const [sidebarShortcut, setSidebarShortcut] = useState<string>('');
+
+  const refreshSidebarShortcut = useCallback(() => {
+    try {
+      if (!chrome?.commands?.getAll) return;
+      Promise.resolve(chrome.commands.getAll())
+        .then((commands) => {
+          if (!Array.isArray(commands)) return;
+          const toggleCmd = commands.find((c) => c.name === '_execute_action');
+          setSidebarShortcut((toggleCmd?.shortcut || '').trim());
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    refreshSidebarShortcut();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshSidebarShortcut();
+      }
+    };
+
+    window.addEventListener('focus', refreshSidebarShortcut);
+    document.addEventListener('visibilitychange', handleVisibility);
+    const pollId = setInterval(refreshSidebarShortcut, 1500);
+
+    return () => {
+      window.removeEventListener('focus', refreshSidebarShortcut);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      clearInterval(pollId);
+    };
+  }, [isOpen, refreshSidebarShortcut]);
+
+  const handleOpenShortcutSettings = () => {
+    const shortcutsUrl = 'chrome://extensions/shortcuts';
+    try {
+      if (chrome?.tabs?.query && chrome?.tabs?.update) {
+        Promise.resolve(chrome.tabs.query({ currentWindow: true }))
+          .then((tabs) => {
+            const existing = Array.isArray(tabs)
+              ? tabs.find((t) => typeof t.id === 'number' && t.url?.startsWith(shortcutsUrl))
+              : undefined;
+            if (existing && typeof existing.id === 'number') {
+              chrome.tabs.update(existing.id, { active: true });
+            } else if (chrome?.tabs?.create) {
+              chrome.tabs.create({ url: shortcutsUrl });
+            }
+          })
+          .catch(() => {
+            chrome?.tabs?.create?.({ url: shortcutsUrl });
+          });
+        return;
+      }
+      chrome?.tabs?.create?.({ url: shortcutsUrl });
+    } catch {
+      // ignore
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -119,13 +183,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
+    >
       <div
+        onClick={(e) => e.stopPropagation()}
         style={{
           backgroundColor: 'var(--theme-header-bg)',
           borderColor: 'var(--theme-border-subtle)'
         }}
-        className="w-full max-h-[85vh] rounded-t-2xl sm:rounded-2xl border shadow-2xl flex flex-col overflow-hidden text-zinc-800 dark:text-zinc-200 text-xs animate-in slide-in-from-bottom-2 duration-150"
+        className="w-full max-h-[60vh] rounded-t-2xl sm:rounded-2xl border shadow-2xl flex flex-col overflow-hidden text-zinc-800 dark:text-zinc-200 text-xs animate-in slide-in-from-bottom-2 duration-150"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-black/[0.08] dark:border-white/[0.08]">
@@ -339,6 +407,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
           </div>
 
+          {/* Global Sidebar Keyboard Shortcut */}
+          <div className="flex flex-col space-y-1.5 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap pr-1 min-w-0">
+                <Keyboard className="w-3.5 h-3.5 theme-accent-text flex-shrink-0" />
+                <span className="font-semibold text-zinc-900 dark:text-white">
+                  Sidebar Toggle Shortcut
+                </span>
+                <kbd
+                  data-testid="sidebar-shortcut-badge"
+                  className={`px-1.5 py-0.5 rounded text-[10.5px] font-mono font-semibold border ${
+                    sidebarShortcut
+                      ? 'bg-black/[0.06] dark:bg-white/10 border-black/10 dark:border-white/15 text-zinc-800 dark:text-zinc-100'
+                      : 'bg-amber-500/10 border-amber-500/25 text-amber-700 dark:text-amber-300 font-sans'
+                  }`}
+                >
+                  {sidebarShortcut || 'Not set'}
+                </kbd>
+              </div>
+              <button
+                type="button"
+                onClick={handleOpenShortcutSettings}
+                className="flex items-center space-x-1.5 px-2.5 py-1 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/15 text-zinc-700 dark:text-zinc-200 text-[11px] font-medium transition-colors flex-shrink-0"
+              >
+                <ExternalLink className="w-3 h-3" />
+                <span>{sidebarShortcut ? 'Change Shortcut' : 'Set Shortcut'}</span>
+              </button>
+            </div>
+          </div>
+
           {/* Edge Trigger When Hidden Toggle */}
           {onToggleEdgeTrigger && (
             <div className="flex flex-col space-y-2 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
@@ -405,6 +503,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {edgeTriggerMode === 'push'
                       ? 'Shifts webpage content inward by 36px while hidden so nothing on the page is covered.'
                       : 'Keeps webpages at full width and slides the stripe out when your mouse touches the screen edge.'}
+                  </p>
+                  <p className="text-[10.5px] text-zinc-400 dark:text-zinc-500 italic leading-normal">
+                    Note: Chrome blocks page overlays on internal chrome:// pages and the Chrome Web Store — use the shortcut above or toolbar icon on those tabs.
                   </p>
                 </div>
               )}

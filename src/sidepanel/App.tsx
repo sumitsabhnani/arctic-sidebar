@@ -415,6 +415,7 @@ export const App: React.FC = () => {
     }
 
     const handlePageHide = () => {
+      if (isClosingPanelRef.current) return;
       const winId = sidePanelWindowIdRef.current;
       if (typeof winId === 'number') {
         try {
@@ -453,22 +454,29 @@ export const App: React.FC = () => {
       }
     }
 
+    // Dispatch close preparation to the background service worker WITHOUT awaiting its roundtrip
+    // before window.close() so Chrome begins animating the Side Panel closed immediately at t=0ms
+    // instead of stalling while content scripts or broadcasts run.
     if (injectIntoOpenTabs) {
       try {
-        await chrome.runtime?.sendMessage?.({
-          type: 'PREPARE_HIDE_SIDEBAR',
-          windowId: typeof winId === 'number' ? winId : undefined,
-          injectIntoOpenTabs: true
-        });
+        Promise.resolve(
+          chrome.runtime?.sendMessage?.({
+            type: 'PREPARE_HIDE_SIDEBAR',
+            windowId: typeof winId === 'number' ? winId : undefined,
+            injectIntoOpenTabs: true
+          })
+        ).catch(() => {});
       } catch {
         // ignore
       }
     } else if (typeof winId === 'number') {
       try {
-        await chrome.runtime?.sendMessage?.({
-          type: 'SIDEPANEL_WILL_CLOSE',
-          windowId: winId
-        });
+        Promise.resolve(
+          chrome.runtime?.sendMessage?.({
+            type: 'SIDEPANEL_WILL_CLOSE',
+            windowId: winId
+          })
+        ).catch(() => {});
       } catch {
         // ignore
       }

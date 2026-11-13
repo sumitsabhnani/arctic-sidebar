@@ -35,6 +35,17 @@
   type EdgeSpaceNode = EdgeBookmarkNode | EdgeFolderNode;
   type EdgeTriggerMode = 'push' | 'hover';
 
+  interface EdgeTodayTabItem {
+    tabId: number;
+    title: string;
+    url: string;
+    faviconDataUrl: string;
+    isActive: boolean;
+    isDiscarded?: boolean;
+    isAudible?: boolean;
+    isMuted?: boolean;
+  }
+
   interface SavedFixedStyle {
     prop: 'left' | 'right';
     value: string;
@@ -362,6 +373,7 @@
   let colorTheme = 'pure-monochrome';
   let quickAccessItems: EdgeQuickAccessItem[] = [];
   let spaceItems: EdgeSpaceNode[] = [];
+  let todayTabItems: EdgeTodayTabItem[] = [];
   let isOptimisticallyOpening = false;
   let optimisticTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -369,6 +381,14 @@
   let isPointerInsideRail = false;
   let isHoverTrackingActive = false;
   let hoverCollapseTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const MIN_THUMB_HEIGHT_PX = 24;
+  let isDraggingScrollbar = false;
+  let scrollbarDragStartY = 0;
+  let scrollbarDragStartScrollTop = 0;
+  let scrollFadeTimer: ReturnType<typeof setTimeout> | null = null;
+  let listResizeObserver: ResizeObserver | null = null;
+  let lastActiveItemKey: string | null = null;
 
   let openFolderId: string | null = null;
   let openFolderAnchorTop = 48;
@@ -381,13 +401,27 @@
   let pagePushSettleTimer: ReturnType<typeof setTimeout> | null = null;
   let pagePushObserver: MutationObserver | null = null;
 
+  // Viewport-synchronized handoff state (prevents opposite-direction page bounce in 'push' mode)
+  let pendingOpenHandoff = false;
+  let openHandoffBaselineWidth = 0;
+  let openHandoffTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingCloseHandoff = false;
+  let closeHandoffBaselineWidth = 0;
+  let closeHandoffTimer: ReturnType<typeof setTimeout> | null = null;
+  let wasSidePanelOpenInMyWindow = false;
+  let lastOpenPanelViewportWidth: number | null = null;
+  let openWidthSettleTimer: ReturnType<typeof setTimeout> | null = null;
+
   let hostEl: HTMLDivElement | null = null;
   let shadowRootRef: ShadowRoot | null = null;
   let hoverSensorEl: HTMLDivElement | null = null;
   let railEl: HTMLElement | null = null;
   let expandBtnEl: HTMLButtonElement | null = null;
   let dividerEl: HTMLDivElement | null = null;
+  let scrollWrapEl: HTMLDivElement | null = null;
   let listEl: HTMLDivElement | null = null;
+  let scrollTrackEl: HTMLDivElement | null = null;
+  let scrollThumbEl: HTMLDivElement | null = null;
   let flyoutEl: HTMLDivElement | null = null;
   let tooltipEl: HTMLDivElement | null = null;
 
@@ -441,6 +475,78 @@
     if (isSidePanelOpenInMyWindow()) return false;
     if (typeof document !== 'undefined' && document.fullscreenElement) return false;
     return true;
+  }
+
+  function hasRealViewportLayout(): boolean {
+    if (
+      typeof window === 'undefined' ||
+      typeof document === 'undefined' ||
+      !document.documentElement
+    ) {
+      return false;
+    }
+    const vw = window.innerWidth || 0;
+    if (vw <= 0) return false;
+    const rect = document.documentElement.getBoundingClientRect();
+    return rect.width > 0 || rect.height > 0;
+  }
+
+  function clearOpenHandoff(restoreInteractivity = false): void {
+    pendingOpenHandoff = false;
+    openHandoffBaselineWidth = 0;
+    if (openHandoffTimer) {
+      clearTimeout(openHandoffTimer);
+      openHandoffTimer = null;
+    }
+    if (restoreInteractivity && railEl) {
+      railEl.removeAttribute('data-opening');
+    }
+  }
+
+  function clearCloseHandoff(): void {
+    pendingCloseHandoff = false;
+    closeHandoffBaselineWidth = 0;
+    if (closeHandoffTimer) {
+      clearTimeout(closeHandoffTimer);
+      closeHandoffTimer = null;
+    }
+  }
+
+  function recordOpenPanelViewportWidth(immediate: boolean): void {
+    if (!hasRealViewportLayout()) return;
+    const vw = window.innerWidth;
+    if (immediate || lastOpenPanelViewportWidth === null || vw < lastOpenPanelViewportWidth) {
+      lastOpenPanelViewportWidth = vw;
+      if (openWidthSettleTimer) {
+        clearTimeout(openWidthSettleTimer);
+        openWidthSettleTimer = null;
+      }
+      return;
+    }
+    if (openWidthSettleTimer) {
+      clearTimeout(openWidthSettleTimer);
+    }
+    openWidthSettleTimer = setTimeout(() => {
+      openWidthSettleTimer = null;
+      if (isSidePanelOpenInMyWindow() && hasRealViewportLayout()) {
+        lastOpenPanelViewportWidth = window.innerWidth;
+      }
+    }, 250);
+  }
+
+  function canHoldPushForOpening(): boolean {
+    return (
+      isExtensionContextValid() &&
+      isStateInitialized &&
+      typeof myWindowId === 'number' &&
+      isEnabled &&
+      triggerMode === 'push' &&
+      !(typeof document !== 'undefined' && document.fullscreenElement) &&
+      (isOptimisticallyOpening || isSidePanelOpenInMyWindow()) &&
+      Boolean(hostEl) &&
+      activePushedSide !== null &&
+      hasRealViewportLayout()
+    );
   }
 
   /* -------------------------------------------------------------
@@ -523,24 +629,16 @@
   function shiftEdgeFixedElements(side: 'left' | 'right'): void {
     if (typeof document === 'undefined' || !document.body) return;
 
-    // Clean up any disconnected nodes from previous passes
+    // Pass 1 (Pure DOM Reads): collect any previously shifted elements that are no longer fixed,
+    // plus all new outermost fixed elements overlapping the docked edge, without mutating styles mid-loop.
+    const toRestore: Array<[HTMLElement, SavedFixedStyle]> = [];
     for (const [el, saved] of Array.from(shiftedFixedElements.entries())) {
       if (!el.isConnected) {
         shiftedFixedElements.delete(el);
         continue;
       }
-      // If page updated and element is no longer fixed, restore it
       if (window.getComputedStyle(el).position !== 'fixed') {
-        if (saved.value) el.style.setProperty(saved.prop, saved.value, saved.priority);
-        else el.style.removeProperty(saved.prop);
-        if (saved.adjustedMaxWidth) {
-          if (saved.maxWidthValue) {
-            el.style.setProperty('max-width', saved.maxWidthValue, saved.maxWidthPriority);
-          } else {
-            el.style.removeProperty('max-width');
-          }
-        }
-        shiftedFixedElements.delete(el);
+        toRestore.push([el, saved]);
       }
     }
 
@@ -598,23 +696,36 @@
     walkShallow(document.body, 1);
 
     const fixedCandidates: HTMLElement[] = [];
+    const fixedCandidateSet = new Set<HTMLElement>();
     for (const el of candidates) {
       if (shiftedFixedElements.has(el)) continue;
       try {
         if (window.getComputedStyle(el).position === 'fixed') {
           fixedCandidates.push(el);
+          fixedCandidateSet.add(el);
         }
       } catch {
         // ignore
       }
     }
 
+    interface PendingFixedShift {
+      el: HTMLElement;
+      prop: 'left' | 'right';
+      targetPx: number;
+      spansFullViewport: boolean;
+      saved: SavedFixedStyle;
+    }
+
+    const pendingShifts: PendingFixedShift[] = [];
+    const vw = window.innerWidth || 0;
+
     // Only shift outermost fixed elements (avoid double-shifting a fixed child inside a fixed parent)
     for (const el of fixedCandidates) {
       let hasFixedAncestor = false;
       let parent = el.parentElement;
       while (parent && parent !== document.body && parent !== document.documentElement) {
-        if (shiftedFixedElements.has(parent) || fixedCandidates.includes(parent)) {
+        if (shiftedFixedElements.has(parent) || fixedCandidateSet.has(parent)) {
           hasFixedAncestor = true;
           break;
         }
@@ -625,7 +736,6 @@
       const cs = window.getComputedStyle(el);
       const rect = el.getBoundingClientRect();
       const hasLayoutBox = rect.width > 0 || rect.height > 0;
-      const vw = window.innerWidth || 0;
 
       let overlapsEdge = false;
       let baseOffsetPx = 0;
@@ -660,26 +770,44 @@
       if (!overlapsEdge) continue;
 
       const prop: 'left' | 'right' = side;
-      const origValue = el.style.getPropertyValue(prop);
-      const origPriority = el.style.getPropertyPriority(prop);
-      const origMaxW = el.style.getPropertyValue('max-width');
-      const origMaxWPrio = el.style.getPropertyPriority('max-width');
-
       const spansFullViewport = hasLayoutBox && vw > 0 && rect.width >= vw - 4;
 
-      el.style.setProperty(prop, `${baseOffsetPx + RAIL_WIDTH_PX}px`, 'important');
-      if (spansFullViewport) {
-        el.style.setProperty('max-width', `calc(100vw - ${RAIL_WIDTH_PX}px)`, 'important');
-      }
-
-      shiftedFixedElements.set(el, {
+      pendingShifts.push({
+        el,
         prop,
-        value: origValue,
-        priority: origPriority,
-        maxWidthValue: origMaxW,
-        maxWidthPriority: origMaxWPrio,
-        adjustedMaxWidth: spansFullViewport
+        targetPx: baseOffsetPx + RAIL_WIDTH_PX,
+        spansFullViewport,
+        saved: {
+          prop,
+          value: el.style.getPropertyValue(prop),
+          priority: el.style.getPropertyPriority(prop),
+          maxWidthValue: el.style.getPropertyValue('max-width'),
+          maxWidthPriority: el.style.getPropertyPriority('max-width'),
+          adjustedMaxWidth: spansFullViewport
+        }
       });
+    }
+
+    // Pass 2 (Pure DOM Writes): apply all style restorations and fixed shifts in a single batch
+    for (const [el, saved] of toRestore) {
+      if (saved.value) el.style.setProperty(saved.prop, saved.value, saved.priority);
+      else el.style.removeProperty(saved.prop);
+      if (saved.adjustedMaxWidth) {
+        if (saved.maxWidthValue) {
+          el.style.setProperty('max-width', saved.maxWidthValue, saved.maxWidthPriority);
+        } else {
+          el.style.removeProperty('max-width');
+        }
+      }
+      shiftedFixedElements.delete(el);
+    }
+
+    for (const shift of pendingShifts) {
+      shift.el.style.setProperty(shift.prop, `${shift.targetPx}px`, 'important');
+      if (shift.spansFullViewport) {
+        shift.el.style.setProperty('max-width', `calc(100vw - ${RAIL_WIDTH_PX}px)`, 'important');
+      }
+      shiftedFixedElements.set(shift.el, shift.saved);
     }
   }
 
@@ -704,9 +832,11 @@
     }
 
     activePushedSide = dockSide;
+    // Measure & shift viewport-anchored fixed elements BEFORE dirtying documentElement layout
+    // so Blink performs zero forced synchronous reflows in JS.
+    shiftEdgeFixedElements(dockSide);
     ensurePagePushStylesheet();
     document.documentElement?.setAttribute('data-arctic-edge-push', dockSide);
-    shiftEdgeFixedElements(dockSide);
 
     if (!pagePushObserver && typeof MutationObserver !== 'undefined' && document.body) {
       pagePushObserver = new MutationObserver(() => {
@@ -810,6 +940,9 @@
         opacity: 1;
         pointer-events: auto;
       }
+      .arctic-rail[data-opening="true"] {
+        pointer-events: none !important;
+      }
       .arctic-expand-btn {
         position: relative;
         width: 28px;
@@ -861,6 +994,19 @@
         margin: 4px 0;
         flex-shrink: 0;
       }
+      .arctic-scroll-wrap {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        width: calc(100% + 8px);
+        margin: 0 -4px;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .arctic-scroll-wrap[data-hidden="true"] {
+        display: none;
+      }
       .arctic-qa-list {
         display: flex;
         flex-direction: column;
@@ -868,13 +1014,76 @@
         gap: 5px;
         width: 100%;
         flex: 1;
+        min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
         scrollbar-width: none;
-        padding: 1px 0 8px 0;
+        padding: 1px 4px 8px 4px;
+        box-sizing: border-box;
       }
       .arctic-qa-list::-webkit-scrollbar {
         display: none;
+      }
+      .arctic-qa-list[data-can-scroll-up="true"][data-can-scroll-down="false"] {
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0px, #000 12px, #000 100%);
+        mask-image: linear-gradient(to bottom, transparent 0px, #000 12px, #000 100%);
+      }
+      .arctic-qa-list[data-can-scroll-up="false"][data-can-scroll-down="true"] {
+        -webkit-mask-image: linear-gradient(to bottom, #000 0px, #000 calc(100% - 14px), transparent 100%);
+        mask-image: linear-gradient(to bottom, #000 0px, #000 calc(100% - 14px), transparent 100%);
+      }
+      .arctic-qa-list[data-can-scroll-up="true"][data-can-scroll-down="true"] {
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0px, #000 12px, #000 calc(100% - 14px), transparent 100%);
+        mask-image: linear-gradient(to bottom, transparent 0px, #000 12px, #000 calc(100% - 14px), transparent 100%);
+      }
+      .arctic-scroll-track {
+        position: absolute;
+        top: 2px;
+        bottom: 4px;
+        width: 6px;
+        z-index: 4;
+        display: flex;
+        padding: 0 1px;
+        box-sizing: border-box;
+        cursor: pointer;
+        touch-action: none;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 150ms ease;
+      }
+      .arctic-rail[data-side="left"] .arctic-scroll-track {
+        right: 0;
+        justify-content: flex-end;
+      }
+      .arctic-rail[data-side="right"] .arctic-scroll-track {
+        left: 0;
+        justify-content: flex-start;
+      }
+      .arctic-scroll-track[data-scrollable="true"] {
+        opacity: 0.38;
+        pointer-events: auto;
+      }
+      .arctic-rail:hover .arctic-scroll-track[data-scrollable="true"],
+      .arctic-scroll-track[data-scrollable="true"][data-scrolling="true"] {
+        opacity: 0.78;
+      }
+      .arctic-scroll-track[data-scrollable="true"]:hover,
+      .arctic-scroll-track[data-scrollable="true"][data-dragging="true"] {
+        opacity: 0.96;
+      }
+      .arctic-scroll-thumb {
+        width: 2.5px;
+        min-height: 24px;
+        border-radius: 99px;
+        background: var(--arctic-muted-fg);
+        transform: translateY(0px);
+        transition: width 120ms ease, background 120ms ease;
+        will-change: transform, height;
+      }
+      .arctic-scroll-track:hover .arctic-scroll-thumb,
+      .arctic-scroll-track[data-dragging="true"] .arctic-scroll-thumb {
+        width: 4px;
+        background: var(--arctic-indicator);
       }
       .arctic-qa-btn {
         position: relative;
@@ -976,6 +1185,20 @@
         border-radius: 99px;
         background: #fbbf24;
         pointer-events: none;
+      }
+      .arctic-audio-dot {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        width: 5px;
+        height: 5px;
+        border-radius: 99px;
+        background: #34d399;
+        pointer-events: none;
+      }
+      .arctic-qa-btn[data-discarded="true"]:not([data-active="true"]) .arctic-qa-favicon,
+      .arctic-qa-btn[data-discarded="true"]:not([data-active="true"]) .arctic-qa-monogram {
+        opacity: 0.52;
       }
       .arctic-folder-flyout {
         position: fixed;
@@ -1192,7 +1415,7 @@
       }
     } else {
       isPointerInsideRail = false;
-      if (!openFolderId && !hoverCollapseTimer) {
+      if (!openFolderId && !isDraggingScrollbar && !hoverCollapseTimer) {
         scheduleHoverCollapse();
       }
     }
@@ -1203,7 +1426,7 @@
       cleanupAll();
       return;
     }
-    if (triggerMode !== 'hover' || !isHoverExpanded || openFolderId) return;
+    if (triggerMode !== 'hover' || !isHoverExpanded || openFolderId || isDraggingScrollbar) return;
     // Do not collapse if cursor simply pressed right up against the docked screen bezel (x <= 2)
     const pressedAgainstDockedEdge =
       dockSide === 'left'
@@ -1234,7 +1457,12 @@
     if (hoverCollapseTimer) clearTimeout(hoverCollapseTimer);
     hoverCollapseTimer = setTimeout(() => {
       hoverCollapseTimer = null;
-      if (triggerMode === 'hover' && !isPointerInsideRail && !openFolderId) {
+      if (
+        triggerMode === 'hover' &&
+        !isPointerInsideRail &&
+        !openFolderId &&
+        !isDraggingScrollbar
+      ) {
         isHoverExpanded = false;
         syncHoverTrackingListeners();
         hideTooltip();
@@ -1249,7 +1477,11 @@
     const effective = resolveEffectiveTheme();
     const p = getRailPalette(colorTheme, effective);
 
-    const expanded = triggerMode === 'push' || isHoverExpanded || Boolean(openFolderId);
+    const expanded =
+      triggerMode === 'push' ||
+      isHoverExpanded ||
+      Boolean(openFolderId) ||
+      isDraggingScrollbar;
 
     railEl.setAttribute('data-side', dockSide);
     railEl.setAttribute('data-mode', triggerMode);
@@ -1744,6 +1976,221 @@
     return btn;
   }
 
+  function sendActivateTodayTab(tabId: number, forceReload: boolean): void {
+    if (!isExtensionContextValid()) {
+      cleanupAll();
+      return;
+    }
+    hideTooltip();
+    closeFolderFlyout();
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: 'ACTIVATE_TODAY_TAB_FROM_EDGE',
+          tabId,
+          forceReload
+        },
+        () => {
+          void chrome.runtime.lastError;
+        }
+      );
+    } catch {
+      cleanupAll();
+    }
+  }
+
+  function sendCloseTodayTab(tabId: number): void {
+    if (!isExtensionContextValid()) {
+      cleanupAll();
+      return;
+    }
+    hideTooltip();
+    closeFolderFlyout();
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: 'CLOSE_TODAY_TAB_FROM_EDGE',
+          tabId
+        },
+        () => {
+          void chrome.runtime.lastError;
+        }
+      );
+    } catch {
+      cleanupAll();
+    }
+  }
+
+  function createTodayTabRailButton(item: EdgeTodayTabItem): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'arctic-qa-btn arctic-today-btn';
+    btn.setAttribute('data-section', 'today');
+    btn.setAttribute('data-tab-id', String(item.tabId));
+    btn.setAttribute('data-active', item.isActive ? 'true' : 'false');
+    btn.setAttribute('data-open', 'true');
+    btn.setAttribute('data-discarded', item.isDiscarded ? 'true' : 'false');
+    btn.setAttribute('aria-label', item.title || item.url);
+
+    if (item.isActive) {
+      const bar = document.createElement('span');
+      bar.className = 'arctic-active-bar';
+      btn.appendChild(bar);
+    }
+
+    const appendMonogram = () => {
+      const mono = document.createElement('span');
+      mono.className = 'arctic-qa-monogram';
+      mono.textContent = getMonogram(item.title, item.url);
+      btn.appendChild(mono);
+    };
+
+    const favSrc = item.faviconDataUrl || localFaviconCache.get(item.url) || '';
+    if (item.faviconDataUrl && item.url) {
+      localFaviconCache.set(item.url, item.faviconDataUrl);
+    }
+
+    if (favSrc) {
+      const img = document.createElement('img');
+      img.className = 'arctic-qa-favicon';
+      img.alt = '';
+      img.src = favSrc;
+      img.addEventListener('error', () => {
+        img.remove();
+        appendMonogram();
+      });
+      btn.appendChild(img);
+    } else {
+      appendMonogram();
+    }
+
+    if (item.isAudible && !item.isMuted) {
+      const audioDot = document.createElement('span');
+      audioDot.className = 'arctic-audio-dot';
+      btn.appendChild(audioDot);
+    }
+
+    let tipLabel = item.title || item.url;
+    if (item.isDiscarded) {
+      tipLabel = `${tipLabel} · Sleeping`;
+    }
+
+    btn.addEventListener('mouseenter', () => showTooltipForElement(btn, tipLabel));
+    btn.addEventListener('mouseleave', hideTooltip);
+    btn.addEventListener('focus', () => showTooltipForElement(btn, tipLabel));
+    btn.addEventListener('blur', hideTooltip);
+
+    btn.addEventListener('mousedown', (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+      }
+    });
+
+    btn.addEventListener('auxclick', (e) => {
+      if (e.button === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        sendCloseTodayTab(item.tabId);
+      }
+    });
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sendActivateTodayTab(item.tabId, false);
+    });
+
+    btn.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sendActivateTodayTab(item.tabId, true);
+    });
+
+    return btn;
+  }
+
+  function updateScrollbarMetrics(): void {
+    if (!listEl || !scrollTrackEl || !scrollThumbEl) return;
+    const scrollHeight = listEl.scrollHeight || 0;
+    const clientHeight = listEl.clientHeight || 0;
+    const scrollTop = listEl.scrollTop || 0;
+    const maxScrollTop = scrollHeight - clientHeight;
+    const isScrollable = clientHeight > 0 && maxScrollTop > 1;
+
+    scrollTrackEl.setAttribute('data-scrollable', isScrollable ? 'true' : 'false');
+
+    const canScrollUp = isScrollable && scrollTop > 2;
+    const canScrollDown = isScrollable && scrollTop < maxScrollTop - 2;
+    listEl.setAttribute('data-can-scroll-up', canScrollUp ? 'true' : 'false');
+    listEl.setAttribute('data-can-scroll-down', canScrollDown ? 'true' : 'false');
+
+    if (!isScrollable) {
+      scrollThumbEl.style.height = '0px';
+      scrollThumbEl.style.transform = 'translateY(0px)';
+      return;
+    }
+
+    const trackHeight = Math.max(MIN_THUMB_HEIGHT_PX, clientHeight - 6);
+    const rawThumbH = (clientHeight / scrollHeight) * trackHeight;
+    const thumbHeight = Math.max(
+      MIN_THUMB_HEIGHT_PX,
+      Math.min(trackHeight, Math.round(rawThumbH))
+    );
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+    const ratio = Math.max(0, Math.min(1, scrollTop / Math.max(1, maxScrollTop)));
+    const thumbTop = Math.round(ratio * maxThumbTop * 10) / 10;
+
+    scrollThumbEl.style.height = `${thumbHeight}px`;
+    scrollThumbEl.style.transform = `translateY(${thumbTop}px)`;
+  }
+
+  function handleScrollbarPointerMove(e: PointerEvent | MouseEvent): void {
+    if (!isDraggingScrollbar || !listEl) return;
+    const scrollHeight = listEl.scrollHeight || 0;
+    const clientHeight = listEl.clientHeight || 0;
+    const maxScrollTop = Math.max(1, scrollHeight - clientHeight);
+    const trackHeight = Math.max(MIN_THUMB_HEIGHT_PX, clientHeight - 6);
+    const thumbHeight = Math.max(
+      MIN_THUMB_HEIGHT_PX,
+      Math.min(trackHeight, Math.round((clientHeight / scrollHeight) * trackHeight))
+    );
+    const maxThumbTop = Math.max(1, trackHeight - thumbHeight);
+    const deltaY = e.clientY - scrollbarDragStartY;
+    const nextScrollTop = Math.max(
+      0,
+      Math.min(maxScrollTop, scrollbarDragStartScrollTop + (deltaY / maxThumbTop) * maxScrollTop)
+    );
+    listEl.scrollTop = nextScrollTop;
+    updateScrollbarMetrics();
+  }
+
+  function stopScrollbarDrag(): void {
+    if (!isDraggingScrollbar) return;
+    isDraggingScrollbar = false;
+    scrollTrackEl?.setAttribute('data-dragging', 'false');
+    window.removeEventListener('pointermove', handleScrollbarPointerMove);
+    window.removeEventListener('pointerup', stopScrollbarDrag);
+    window.removeEventListener('pointercancel', stopScrollbarDrag);
+    if (triggerMode === 'hover' && !isPointerInsideRail && !openFolderId) {
+      scheduleHoverCollapse();
+    } else {
+      updateVisualAttributes();
+    }
+  }
+
+  function resolveCurrentActiveItemKey(): string | null {
+    for (const qa of quickAccessItems) {
+      if (qa.isActive) return `qa:${qa.id}`;
+    }
+    for (const node of spaceItems) {
+      if (node.type === 'bookmark' && node.isActive) return `space:${node.id}`;
+      if (node.type === 'folder' && node.hasActiveChild) return `folder:${node.id}`;
+    }
+    for (const tab of todayTabItems) {
+      if (tab.isActive) return `today:${tab.tabId}`;
+    }
+    return null;
+  }
+
   function renderRailItems(): void {
     if (!listEl || !dividerEl) return;
     hideTooltip();
@@ -1751,14 +2198,27 @@
 
     const hasQa = Array.isArray(quickAccessItems) && quickAccessItems.length > 0;
     const hasSpace = Array.isArray(spaceItems) && spaceItems.length > 0;
+    const hasToday = Array.isArray(todayTabItems) && todayTabItems.length > 0;
 
-    if (!hasQa && !hasSpace) {
+    if (!hasQa && !hasSpace && !hasToday) {
       dividerEl.setAttribute('data-hidden', 'true');
+      scrollWrapEl?.setAttribute('data-hidden', 'true');
+      lastActiveItemKey = null;
       closeFolderFlyout();
+      updateScrollbarMetrics();
       return;
     }
 
     dividerEl.setAttribute('data-hidden', 'false');
+    scrollWrapEl?.setAttribute('data-hidden', 'false');
+
+    const appendSeparator = () => {
+      const sep = document.createElement('div');
+      sep.className = 'arctic-section-sep';
+      sep.setAttribute('role', 'separator');
+      sep.setAttribute('aria-orientation', 'horizontal');
+      listEl!.appendChild(sep);
+    };
 
     if (hasQa) {
       for (const item of quickAccessItems) {
@@ -1767,11 +2227,7 @@
     }
 
     if (hasQa && hasSpace) {
-      const sep = document.createElement('div');
-      sep.className = 'arctic-section-sep';
-      sep.setAttribute('role', 'separator');
-      sep.setAttribute('aria-orientation', 'horizontal');
-      listEl.appendChild(sep);
+      appendSeparator();
     }
 
     if (hasSpace) {
@@ -1784,13 +2240,53 @@
       }
     }
 
+    if ((hasQa || hasSpace) && hasToday) {
+      appendSeparator();
+    }
+
+    if (hasToday) {
+      for (const tab of todayTabItems) {
+        listEl.appendChild(createTodayTabRailButton(tab));
+      }
+    }
+
     if (openFolderId) {
       renderFolderFlyout();
+    }
+
+    const nextActiveKey = resolveCurrentActiveItemKey();
+    if (nextActiveKey && nextActiveKey !== lastActiveItemKey) {
+      lastActiveItemKey = nextActiveKey;
+      const activeBtn = listEl.querySelector<HTMLElement>('button.arctic-qa-btn[data-active="true"]');
+      if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
+        try {
+          activeBtn.scrollIntoView({ block: 'nearest' });
+        } catch {
+          // ignore
+        }
+      }
+    } else if (!nextActiveKey) {
+      lastActiveItemKey = null;
+    }
+
+    updateScrollbarMetrics();
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => updateScrollbarMetrics());
     }
   }
 
   function unmountHost(): void {
+    stopScrollbarDrag();
+    if (scrollFadeTimer) {
+      clearTimeout(scrollFadeTimer);
+      scrollFadeTimer = null;
+    }
+    if (listResizeObserver) {
+      listResizeObserver.disconnect();
+      listResizeObserver = null;
+    }
     openFolderId = null;
+    lastActiveItemKey = null;
     isHoverExpanded = false;
     isPointerInsideRail = false;
     syncHoverTrackingListeners();
@@ -1807,7 +2303,10 @@
       railEl = null;
       expandBtnEl = null;
       dividerEl = null;
+      scrollWrapEl = null;
       listEl = null;
+      scrollTrackEl = null;
+      scrollThumbEl = null;
       flyoutEl = null;
       tooltipEl = null;
     }
@@ -1958,11 +2457,93 @@
     const divider = document.createElement('div');
     divider.className = 'arctic-divider';
 
+    const scrollWrap = document.createElement('div');
+    scrollWrap.className = 'arctic-scroll-wrap';
+
     const list = document.createElement('div');
     list.className = 'arctic-qa-list';
     list.setAttribute('role', 'toolbar');
     list.setAttribute('aria-label', 'Quick Access and Space Tabs');
-    list.addEventListener('scroll', hideTooltip, { passive: true });
+    list.setAttribute('data-can-scroll-up', 'false');
+    list.setAttribute('data-can-scroll-down', 'false');
+    list.addEventListener(
+      'scroll',
+      () => {
+        hideTooltip();
+        updateScrollbarMetrics();
+        if (scrollTrackEl) {
+          scrollTrackEl.setAttribute('data-scrolling', 'true');
+          if (scrollFadeTimer) clearTimeout(scrollFadeTimer);
+          scrollFadeTimer = setTimeout(() => {
+            scrollFadeTimer = null;
+            scrollTrackEl?.setAttribute('data-scrolling', 'false');
+          }, 650);
+        }
+      },
+      { passive: true }
+    );
+
+    const scrollTrack = document.createElement('div');
+    scrollTrack.className = 'arctic-scroll-track';
+    scrollTrack.setAttribute('data-scrollable', 'false');
+    scrollTrack.setAttribute('data-scrolling', 'false');
+    scrollTrack.setAttribute('data-dragging', 'false');
+    scrollTrack.setAttribute('aria-hidden', 'true');
+
+    const scrollThumb = document.createElement('div');
+    scrollThumb.className = 'arctic-scroll-thumb';
+    scrollTrack.appendChild(scrollThumb);
+
+    scrollTrack.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
+
+    scrollTrack.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button !== 0 || !listEl) return;
+      e.preventDefault();
+      e.stopPropagation();
+      hideTooltip();
+
+      const scrollHeight = listEl.scrollHeight || 0;
+      const clientHeight = listEl.clientHeight || 0;
+      const maxScrollTop = scrollHeight - clientHeight;
+      if (clientHeight <= 0 || maxScrollTop <= 1) return;
+
+      const trackHeight = Math.max(MIN_THUMB_HEIGHT_PX, clientHeight - 6);
+      const thumbHeight = Math.max(
+        MIN_THUMB_HEIGHT_PX,
+        Math.min(trackHeight, Math.round((clientHeight / scrollHeight) * trackHeight))
+      );
+      const maxThumbTop = Math.max(1, trackHeight - thumbHeight);
+
+      if (e.target !== scrollThumb) {
+        const trackRect = scrollTrack.getBoundingClientRect();
+        const trackTop = trackRect.height > 0 ? trackRect.top : 0;
+        const clickOffsetY = e.clientY - trackTop - thumbHeight / 2;
+        const targetRatio = Math.max(0, Math.min(1, clickOffsetY / maxThumbTop));
+        listEl.scrollTop = targetRatio * maxScrollTop;
+        updateScrollbarMetrics();
+      }
+
+      isDraggingScrollbar = true;
+      scrollbarDragStartY = e.clientY;
+      scrollbarDragStartScrollTop = listEl.scrollTop;
+      scrollTrack.setAttribute('data-dragging', 'true');
+      updateVisualAttributes();
+
+      try {
+        scrollTrack.setPointerCapture?.(e.pointerId);
+      } catch {
+        // ignore
+      }
+
+      window.addEventListener('pointermove', handleScrollbarPointerMove);
+      window.addEventListener('pointerup', stopScrollbarDrag);
+      window.addEventListener('pointercancel', stopScrollbarDrag);
+    });
+
+    scrollWrap.appendChild(list);
+    scrollWrap.appendChild(scrollTrack);
 
     const flyout = document.createElement('div');
     flyout.className = 'arctic-folder-flyout';
@@ -1976,15 +2557,29 @@
 
     rail.appendChild(expandBtn);
     rail.appendChild(divider);
-    rail.appendChild(list);
+    rail.appendChild(scrollWrap);
 
     hoverSensorEl = sensor;
     railEl = rail;
     expandBtnEl = expandBtn;
     dividerEl = divider;
+    scrollWrapEl = scrollWrap;
     listEl = list;
+    scrollTrackEl = scrollTrack;
+    scrollThumbEl = scrollThumb;
     flyoutEl = flyout;
     tooltipEl = tip;
+
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        listResizeObserver = new ResizeObserver(() => {
+          updateScrollbarMetrics();
+        });
+        listResizeObserver.observe(list);
+      } catch {
+        // ignore
+      }
+    }
 
     shadowRootRef.appendChild(styleEl);
     shadowRootRef.appendChild(sensor);
@@ -1992,25 +2587,103 @@
     shadowRootRef.appendChild(flyout);
     shadowRootRef.appendChild(tip);
 
+    document.documentElement.appendChild(hostEl);
     updateVisualAttributes();
     renderRailItems();
-    document.documentElement.appendChild(hostEl);
   }
 
-  function syncMountState(): void {
+  function mountAndPushNow(): void {
+    const wasMounted = Boolean(hostEl);
+    mountHost();
+    syncPagePush();
+    updateVisualAttributes();
+    if (wasMounted) {
+      renderRailItems();
+    }
+  }
+
+  function syncMountState(justCollapsedHint = false): void {
     if (!isExtensionContextValid()) {
       cleanupAll();
       return;
     }
+
+    const currentlyOpenInMyWin = isSidePanelOpenInMyWindow();
+    const justTransitionedFromOpen =
+      (wasSidePanelOpenInMyWindow && !currentlyOpenInMyWin) ||
+      (justCollapsedHint && !currentlyOpenInMyWin);
+
+    if (currentlyOpenInMyWin) {
+      recordOpenPanelViewportWidth(!wasSidePanelOpenInMyWindow);
+    }
+    wasSidePanelOpenInMyWindow = currentlyOpenInMyWin;
+
     if (shouldShowTrigger()) {
-      const wasMounted = Boolean(hostEl);
-      mountHost();
-      syncPagePush();
-      updateVisualAttributes();
-      if (wasMounted) {
-        renderRailItems();
+      clearOpenHandoff(true);
+
+      if (
+        !hostEl &&
+        triggerMode === 'push' &&
+        justTransitionedFromOpen &&
+        hasRealViewportLayout()
+      ) {
+        const vw = window.innerWidth;
+        const alreadyExpanded =
+          lastOpenPanelViewportWidth !== null && vw > lastOpenPanelViewportWidth + 8;
+
+        if (!alreadyExpanded) {
+          if (!pendingCloseHandoff) {
+            pendingCloseHandoff = true;
+            closeHandoffBaselineWidth = vw;
+            if (closeHandoffTimer) clearTimeout(closeHandoffTimer);
+            closeHandoffTimer = setTimeout(() => {
+              clearCloseHandoff();
+              lastOpenPanelViewportWidth = null;
+              if (shouldShowTrigger()) {
+                mountAndPushNow();
+              }
+            }, 80);
+          }
+          return;
+        }
       }
+
+      if (pendingCloseHandoff) {
+        if (
+          triggerMode === 'push' &&
+          !hostEl &&
+          hasRealViewportLayout() &&
+          window.innerWidth <= closeHandoffBaselineWidth + 2
+        ) {
+          return;
+        }
+        clearCloseHandoff();
+      }
+
+      lastOpenPanelViewportWidth = null;
+      mountAndPushNow();
     } else {
+      clearCloseHandoff();
+
+      if (canHoldPushForOpening()) {
+        if (!pendingOpenHandoff) {
+          pendingOpenHandoff = true;
+          openHandoffBaselineWidth = window.innerWidth;
+          hideTooltip();
+          closeFolderFlyout();
+          railEl?.setAttribute('data-opening', 'true');
+          if (openHandoffTimer) clearTimeout(openHandoffTimer);
+          openHandoffTimer = setTimeout(() => {
+            clearOpenHandoff(false);
+            if (!shouldShowTrigger()) {
+              unmountHost();
+            }
+          }, 280);
+        }
+        return;
+      }
+
+      clearOpenHandoff(false);
       unmountHost();
     }
   }
@@ -2030,6 +2703,10 @@
         }
         if (Array.isArray(resp.spaceItems)) {
           spaceItems = resp.spaceItems;
+          hasHydratedItems = true;
+        }
+        if (Array.isArray(resp.todayTabItems)) {
+          todayTabItems = resp.todayTabItems;
           hasHydratedItems = true;
         }
         if (resp.mode === 'push' || resp.mode === 'hover') {
@@ -2113,8 +2790,10 @@
     windowId?: number;
     isSidePanelOpen?: boolean;
     openWindowIds?: number[];
+    justCollapsed?: boolean;
     quickAccessItems?: EdgeQuickAccessItem[];
     spaceItems?: EdgeSpaceNode[];
+    todayTabItems?: EdgeTodayTabItem[];
   }) => {
     if (!message || typeof message !== 'object') return;
     if (message.type === 'ARCTIC_SIDEPANEL_VISIBILITY') {
@@ -2148,12 +2827,16 @@
           spaceItems = message.spaceItems;
           hasHydratedItems = true;
         }
+        if (Array.isArray(message.todayTabItems)) {
+          todayTabItems = message.todayTabItems;
+          hasHydratedItems = true;
+        }
       }
       if (message.isSidePanelOpen === true) {
         isOptimisticallyOpening = false;
         if (optimisticTimer) clearTimeout(optimisticTimer);
       }
-      syncMountState();
+      syncMountState(Boolean(message.justCollapsed));
     } else if (message.type === 'ARCTIC_EDGE_ITEMS_UPDATED') {
       if (
         typeof message.windowId === 'number' &&
@@ -2173,6 +2856,11 @@
         hasHydratedItems = true;
         updated = true;
       }
+      if (Array.isArray(message.todayTabItems)) {
+        todayTabItems = message.todayTabItems;
+        hasHydratedItems = true;
+        updated = true;
+      }
       if (updated && hostEl) {
         renderRailItems();
       }
@@ -2184,6 +2872,8 @@
       syncMountState();
     } else if (message.type === 'ARCTIC_REMOVE_EDGE_TRIGGER') {
       isEnabled = false;
+      clearOpenHandoff(false);
+      clearCloseHandoff();
       unmountHost();
     }
   };
@@ -2219,9 +2909,41 @@
       cleanupAll();
       return;
     }
+
+    if (pendingOpenHandoff) {
+      if (!canHoldPushForOpening() || window.innerWidth < openHandoffBaselineWidth - 2) {
+        clearOpenHandoff(false);
+        if (isSidePanelOpenInMyWindow()) {
+          recordOpenPanelViewportWidth(true);
+        }
+        if (!shouldShowTrigger()) {
+          unmountHost();
+        }
+        return;
+      }
+    }
+
+    if (pendingCloseHandoff) {
+      if (!shouldShowTrigger()) {
+        clearCloseHandoff();
+        return;
+      }
+      if (triggerMode !== 'push' || window.innerWidth > closeHandoffBaselineWidth + 2) {
+        clearCloseHandoff();
+        lastOpenPanelViewportWidth = null;
+        mountAndPushNow();
+        return;
+      }
+    }
+
+    if (isSidePanelOpenInMyWindow()) {
+      recordOpenPanelViewportWidth(false);
+    }
+
     if (activePushedSide && shouldShowTrigger() && triggerMode === 'push') {
       schedulePagePushFixedPass();
     }
+    updateScrollbarMetrics();
   };
 
   const handleFullscreenChange = () => {
@@ -2262,6 +2984,12 @@
       clearTimeout(optimisticTimer);
       optimisticTimer = null;
     }
+    if (openWidthSettleTimer) {
+      clearTimeout(openWidthSettleTimer);
+      openWidthSettleTimer = null;
+    }
+    clearOpenHandoff(false);
+    clearCloseHandoff();
     unmountHost();
     window.removeEventListener('pointerdown', handleWindowPointerDown, true);
     window.removeEventListener('keydown', handleWindowKeyDown, true);
@@ -2351,6 +3079,12 @@
               }
               if (Array.isArray(resp.spaceItems)) {
                 spaceItems = resp.spaceItems;
+                if (!openWindowIds.includes(resp.windowId)) {
+                  hasHydratedItems = true;
+                }
+              }
+              if (Array.isArray(resp.todayTabItems)) {
+                todayTabItems = resp.todayTabItems;
                 if (!openWindowIds.includes(resp.windowId)) {
                   hasHydratedItems = true;
                 }

@@ -743,6 +743,7 @@ describe('Background service worker reminder lifecycle', () => {
         justCollapsed: false,
         quickAccessItems: expect.any(Array),
         spaceItems: expect.any(Array),
+        todayTabItems: expect.any(Array),
         spaceName: expect.any(String)
       });
 
@@ -808,7 +809,7 @@ describe('Background service worker reminder lifecycle', () => {
         target: { tabId: 202 },
         files: ['edgeTrigger.js']
       });
-      // Direct visibility push sent with quickAccessItems and spaceItems to active tab
+      // Direct visibility push sent with quickAccessItems, spaceItems, and todayTabItems to active tab
       expect(chrome.tabs.sendMessage).toHaveBeenCalledWith(201, {
         type: 'ARCTIC_SIDEPANEL_VISIBILITY',
         windowId: 10,
@@ -817,8 +818,26 @@ describe('Background service worker reminder lifecycle', () => {
         justCollapsed: true,
         quickAccessItems: expect.any(Array),
         spaceItems: expect.any(Array),
+        todayTabItems: expect.any(Array),
         spaceName: 'Home'
       });
+
+      // Subsequent PREPARE_HIDE_SIDEBAR when script is already registered does NOT tear down/re-inject open tabs
+      vi.mocked(chrome.scripting.executeScript).mockClear();
+      vi.mocked(chrome.tabs.sendMessage).mockClear();
+      mockChrome.__setSessionStorage({ openSidePanelWindowIds: [10] });
+
+      const sendResponseSecond = vi.fn();
+      handleRuntimeMessage(
+        { type: 'PREPARE_HIDE_SIDEBAR', windowId: 10, injectIntoOpenTabs: true },
+        {} as chrome.runtime.MessageSender,
+        sendResponseSecond
+      );
+      await new Promise((r) => setTimeout(r, 25));
+
+      expect(sendResponseSecond).toHaveBeenCalledWith({ ok: true, active: true });
+      expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+      expect(chrome.tabs.sendMessage).toHaveBeenCalledTimes(2); // Once per tab in window 10 (no duplicate broadcast)
     });
 
     it('ACTIVATE_QUICK_ACCESS_FROM_EDGE switches to bound tab, resets drifted active tab, or opens and binds unbound Quick Access bookmark', async () => {
@@ -1234,6 +1253,185 @@ describe('Background service worker reminder lifecycle', () => {
         closeResp
       );
       await new Promise((r) => setTimeout(r, 20));
+    });
+
+    it('resolves Today Tabs scoped to activeSpaceId even when bookmarks are empty, excluding bound and command tabs and preserving customTabTitles', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [{ id: '2', title: 'Other Bookmarks', children: [] }]
+        }
+      ]);
+
+      mockChrome.__setLocalStorage({
+        spaces: [
+          { id: 'home', name: 'Home', folderId: 'missing-home', quickAccessFolderId: 'missing-qa' },
+          { id: 'work', name: 'Work', folderId: 'missing-work' }
+        ],
+        activeSpaceId: 'work',
+        tabSpaceByTabId: {
+          801: 'work',
+          802: 'home',
+          803: 'work',
+          804: 'work',
+          805: 'work'
+        }
+      });
+
+      mockChrome.__setSessionStorage({
+        bookmarkIdByTabId: { 803: 'bm-bound' },
+        customTabTitles: { 804: 'Custom Sprint Notes' }
+      });
+
+      mockChrome.__setTabs([
+        {
+          id: 804,
+          windowId: 10,
+          index: 2,
+          url: 'https://notes.example.com',
+          title: 'Raw Notes Title',
+          active: false,
+          discarded: true,
+          audible: false
+        } as chrome.tabs.Tab,
+        {
+          id: 801,
+          windowId: 10,
+          index: 0,
+          url: 'https://music.example.com',
+          title: 'Lo-Fi Radio',
+          active: true,
+          discarded: false,
+          audible: true,
+          mutedInfo: { muted: false }
+        } as chrome.tabs.Tab,
+        {
+          id: 802,
+          windowId: 10,
+          index: 1,
+          url: 'https://home-only.example.com',
+          title: 'Home Space Tab',
+          active: false
+        } as chrome.tabs.Tab,
+        {
+          id: 803,
+          windowId: 10,
+          index: 3,
+          url: 'https://bound.example.com',
+          title: 'Bound Bookmark Tab',
+          active: false
+        } as chrome.tabs.Tab,
+        {
+          id: 805,
+          windowId: 10,
+          index: 4,
+          url: 'chrome://newtab/',
+          title: 'New Tab',
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+
+      const railData = await getEdgeRailDataForWindow(10);
+      expect(railData.spaceName).toBe('Work');
+      expect(railData.quickAccessItems).toEqual([]);
+      expect(railData.spaceItems).toEqual([]);
+      // Sorted by index (801 index 0, then 804 index 2); excludes home tab 802, bound tab 803, and newtab 805
+      expect(railData.todayTabItems).toEqual([
+        {
+          tabId: 801,
+          title: 'Lo-Fi Radio',
+          url: 'https://music.example.com',
+          faviconDataUrl: '',
+          isActive: true,
+          isDiscarded: false,
+          isAudible: true,
+          isMuted: false
+        },
+        {
+          tabId: 804,
+          title: 'Custom Sprint Notes',
+          url: 'https://notes.example.com',
+          faviconDataUrl: '',
+          isActive: false,
+          isDiscarded: true,
+          isAudible: false,
+          isMuted: false
+        }
+      ]);
+    });
+
+    it('handles ACTIVATE_TODAY_TAB_FROM_EDGE, CLOSE_TODAY_TAB_FROM_EDGE (preserving window on last tab), and space assignment when Side Panel is closed', async () => {
+      mockChrome.__setLocalStorage({
+        activeSpaceId: 'work',
+        tabSpaceByTabId: {}
+      });
+      mockChrome.__setSessionStorage({ openSidePanelWindowIds: [] });
+
+      // 1. Opening a tab while Side Panel is closed assigns it to activeSpaceId ('work')
+      await handleTabCreated({
+        id: 901,
+        windowId: 10,
+        url: 'https://docs.example.com',
+        active: true
+      } as chrome.tabs.Tab);
+
+      expect(
+        (mockChrome.__getLocalStorage().tabSpaceByTabId as Record<number, string>)[901]
+      ).toBe('work');
+
+      // 2. ACTIVATE_TODAY_TAB_FROM_EDGE activates tab and optionally reloads on forceReload
+      mockChrome.__setTabs([
+        { id: 901, windowId: 10, url: 'https://docs.example.com', active: false } as chrome.tabs.Tab,
+        { id: 902, windowId: 10, url: 'https://chat.example.com', active: true } as chrome.tabs.Tab
+      ]);
+
+      vi.mocked(chrome.tabs.update).mockClear();
+      vi.mocked(chrome.tabs.reload).mockClear();
+
+      const actResp = vi.fn();
+      handleRuntimeMessage(
+        { type: 'ACTIVATE_TODAY_TAB_FROM_EDGE', tabId: 901, forceReload: true },
+        { tab: { id: 902, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        actResp
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(actResp).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.tabs.update).toHaveBeenCalledWith(901, { active: true });
+      expect(chrome.tabs.reload).toHaveBeenCalledWith(901);
+
+      // 3. CLOSE_TODAY_TAB_FROM_EDGE closes non-last tab directly without creating a blank tab
+      vi.mocked(chrome.tabs.create).mockClear();
+      vi.mocked(chrome.tabs.remove).mockClear();
+
+      const closeFirstResp = vi.fn();
+      handleRuntimeMessage(
+        { type: 'CLOSE_TODAY_TAB_FROM_EDGE', tabId: 901 },
+        { tab: { id: 902, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        closeFirstResp
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(closeFirstResp).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.tabs.create).not.toHaveBeenCalled();
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(901);
+
+      // 4. Closing the last remaining tab in window 10 creates a blank active tab first so window stays open
+      mockChrome.__setTabs([
+        { id: 902, windowId: 10, url: 'https://chat.example.com', active: true } as chrome.tabs.Tab
+      ]);
+      vi.mocked(chrome.tabs.create).mockClear();
+      vi.mocked(chrome.tabs.remove).mockClear();
+
+      const closeLastResp = vi.fn();
+      handleRuntimeMessage(
+        { type: 'CLOSE_TODAY_TAB_FROM_EDGE', tabId: 902 },
+        { tab: { id: 902, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        closeLastResp
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(closeLastResp).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.tabs.create).toHaveBeenCalledWith({ windowId: 10, active: true });
+      expect(chrome.tabs.remove).toHaveBeenCalledWith(902);
     });
   });
 });
