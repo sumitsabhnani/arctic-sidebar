@@ -21,6 +21,7 @@ import {
   type EdgeQuickAccessItem,
   type EdgeRailData,
   type EdgeSpaceNode,
+  type EdgeTodayTabItem,
   type SessionState,
   type SpaceItem,
   type TabBinding,
@@ -109,6 +110,14 @@ export async function handleStartup(): Promise<void> {
 
 chrome.runtime.onInstalled.addListener(handleInstalled);
 chrome.runtime.onStartup.addListener(handleStartup);
+
+// Ensure action click & _execute_action keyboard shortcut always toggle the native Side Panel,
+// even immediately after an unpacked extension reload before onInstalled/onStartup next runs.
+if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function') {
+  Promise.resolve(chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })).catch(
+    () => {}
+  );
+}
 
 /**
  * Helper to fetch session state safely
@@ -222,9 +231,40 @@ export async function handleTabRemoved(
       if (!removeInfo?.isWindowClosing) {
         await removePersistedBindings([bookmarkId]);
       }
-      scheduleEdgeItemsBroadcast(removeInfo?.windowId);
     }
   });
+
+  if (!removeInfo?.isWindowClosing) {
+    const openWinIds = await getStoredOpenWindowIds();
+    const isSidePanelOpenInWin =
+      typeof removeInfo?.windowId === 'number' && openWinIds.includes(removeInfo.windowId);
+
+    if (!isSidePanelOpenInWin && chrome.storage?.local?.get && chrome.storage?.local?.set) {
+      try {
+        const local = await chrome.storage.local.get(['tabSpaceByTabId', 'tabOpenedAt']);
+        const updates: Record<string, unknown> = {};
+        const tabSpaces = local.tabSpaceByTabId as Record<number, string> | undefined;
+        if (tabSpaces && tabSpaces[tabId] !== undefined) {
+          const nextSpaces = { ...tabSpaces };
+          delete nextSpaces[tabId];
+          updates.tabSpaceByTabId = nextSpaces;
+        }
+        const tabOpenedAt = local.tabOpenedAt as Record<number, number> | undefined;
+        if (tabOpenedAt && tabOpenedAt[tabId] !== undefined) {
+          const nextOpened = { ...tabOpenedAt };
+          delete nextOpened[tabId];
+          updates.tabOpenedAt = nextOpened;
+        }
+        if (Object.keys(updates).length > 0) {
+          await chrome.storage.local.set(updates);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    scheduleEdgeItemsBroadcast(removeInfo?.windowId);
+  }
 }
 
 chrome.tabs.onRemoved.addListener(handleTabRemoved);
@@ -262,6 +302,39 @@ export async function handleTabCreated(tab: chrome.tabs.Tab): Promise<void> {
     );
   }
 
+  if (typeof tab.id === 'number' && chrome.storage?.local?.get && chrome.storage?.local?.set) {
+    try {
+      const openWinIds = await getStoredOpenWindowIds();
+      const isSidePanelOpenInWin =
+        typeof tab.windowId === 'number' && openWinIds.includes(tab.windowId);
+      if (!isSidePanelOpenInWin) {
+        const local = await chrome.storage.local.get([
+          'activeSpaceId',
+          'tabSpaceByTabId',
+          'tabOpenedAt'
+        ]);
+        const activeSpaceId =
+          typeof local.activeSpaceId === 'string' && local.activeSpaceId
+            ? local.activeSpaceId
+            : 'home';
+        const existingSpaces = (local.tabSpaceByTabId as Record<number, string>) || {};
+        const existingTimestamps = (local.tabOpenedAt as Record<number, number>) || {};
+        const updates: Record<string, unknown> = {};
+        if (!existingSpaces[tab.id]) {
+          updates.tabSpaceByTabId = { ...existingSpaces, [tab.id]: activeSpaceId };
+        }
+        if (!existingTimestamps[tab.id]) {
+          updates.tabOpenedAt = { ...existingTimestamps, [tab.id]: Date.now() };
+        }
+        if (Object.keys(updates).length > 0) {
+          await chrome.storage.local.set(updates);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   if (
     typeof tab.id === 'number' &&
     Boolean(tab.discarded) &&
@@ -271,6 +344,8 @@ export async function handleTabCreated(tab: chrome.tabs.Tab): Promise<void> {
   ) {
     scheduleBackgroundReconcile();
   }
+
+  scheduleEdgeItemsBroadcast(tab.windowId);
 }
 
 if (chrome.tabs && chrome.tabs.onCreated) {
@@ -343,6 +418,10 @@ export async function handleTabUpdated(
     !changeInfo.url &&
     changeInfo.status !== 'complete' &&
     !changeInfo.title &&
+    !changeInfo.favIconUrl &&
+    changeInfo.discarded === undefined &&
+    changeInfo.audible === undefined &&
+    !changeInfo.mutedInfo &&
     !tab.pendingUrl
   ) {
     return;
@@ -361,6 +440,7 @@ export async function handleTabUpdated(
       ) {
         scheduleBackgroundReconcile();
       }
+      scheduleEdgeItemsBroadcast(tab.windowId);
       return;
     }
 
@@ -386,6 +466,8 @@ export async function handleTabUpdated(
       session.bindingsByBookmarkId[bookmarkId] = binding;
       await saveSessionState(session);
       await upsertPersistedBindings({ [bookmarkId]: binding });
+      scheduleEdgeItemsBroadcast(tab.windowId);
+    } else if (changeInfo.favIconUrl || changeInfo.status === 'complete') {
       scheduleEdgeItemsBroadcast(tab.windowId);
     }
   });
@@ -622,8 +704,17 @@ if (chrome.storage && chrome.storage.onChanged) {
       areaName === 'local' &&
       (changes.activeSpaceId !== undefined ||
         changes.spaces !== undefined ||
+        changes.tabSpaceByTabId !== undefined ||
         changes.quickAccessFolderId !== undefined ||
         changes.workspaceFolderId !== undefined)
+    ) {
+      scheduleEdgeItemsBroadcast();
+    }
+    if (
+      areaName === 'session' &&
+      (changes.bindingsByBookmarkId !== undefined ||
+        changes.bookmarkIdByTabId !== undefined ||
+        changes.customTabTitles !== undefined)
     ) {
       scheduleEdgeItemsBroadcast();
     }
@@ -747,22 +838,38 @@ async function resolveActiveSpaceBookmarkTrees(): Promise<{
   qaBookmarks: chrome.bookmarks.BookmarkTreeNode[];
   spaceNodes: chrome.bookmarks.BookmarkTreeNode[];
   spaceName: string;
+  activeSpaceId: string;
+  tabSpaceByTabId: Record<number, string>;
 }> {
-  if (!chrome.bookmarks) {
-    return { qaBookmarks: [], spaceNodes: [], spaceName: 'Home' };
-  }
+  let activeSpaceId = 'home';
+  let spaceName = 'Home';
+  let tabSpaceByTabId: Record<number, string> = {};
 
   try {
-    const local = await chrome.storage.local.get([
-      'spaces',
-      'activeSpaceId',
-      'quickAccessFolderId',
-      'workspaceFolderId'
-    ]);
+    const local = chrome.storage?.local?.get
+      ? await chrome.storage.local.get([
+          'spaces',
+          'activeSpaceId',
+          'tabSpaceByTabId',
+          'quickAccessFolderId',
+          'workspaceFolderId'
+        ])
+      : {};
     const spaces = Array.isArray(local.spaces) ? (local.spaces as SpaceItem[]) : [];
-    const activeSpaceId = typeof local.activeSpaceId === 'string' ? local.activeSpaceId : 'home';
-    const activeSpace = spaces.find((s) => s.id === activeSpaceId) || spaces[0];
-    const spaceName = activeSpace?.name || 'Home';
+    const rawActiveSpaceId =
+      typeof local.activeSpaceId === 'string' && local.activeSpaceId
+        ? local.activeSpaceId
+        : 'home';
+    const activeSpace = spaces.find((s) => s.id === rawActiveSpaceId) || spaces[0];
+    activeSpaceId = activeSpace?.id || rawActiveSpaceId || 'home';
+    spaceName = activeSpace?.name || 'Home';
+    if (local.tabSpaceByTabId && typeof local.tabSpaceByTabId === 'object') {
+      tabSpaceByTabId = local.tabSpaceByTabId as Record<number, string>;
+    }
+
+    if (!chrome.bookmarks) {
+      return { qaBookmarks: [], spaceNodes: [], spaceName, activeSpaceId, tabSpaceByTabId };
+    }
 
     const candidateSpaceFolderId =
       activeSpace?.folderId ||
@@ -888,10 +995,12 @@ async function resolveActiveSpaceBookmarkTrees(): Promise<{
     return {
       qaBookmarks: qaBookmarks || [],
       spaceNodes,
-      spaceName
+      spaceName,
+      activeSpaceId,
+      tabSpaceByTabId
     };
   } catch {
-    return { qaBookmarks: [], spaceNodes: [], spaceName: 'Home' };
+    return { qaBookmarks: [], spaceNodes: [], spaceName, activeSpaceId, tabSpaceByTabId };
   }
 }
 
@@ -899,15 +1008,24 @@ export async function getEdgeRailDataForWindow(
   windowId: number | null
 ): Promise<EdgeRailData> {
   try {
-    const [{ qaBookmarks, spaceNodes, spaceName }, session, allTabs] = await Promise.all([
+    const [
+      { qaBookmarks, spaceNodes, spaceName, activeSpaceId, tabSpaceByTabId },
+      session,
+      customTitlesData,
+      allTabs
+    ] = await Promise.all([
       resolveActiveSpaceBookmarkTrees(),
       getSessionState(),
+      chrome.storage?.session?.get
+        ? chrome.storage.session.get(['customTabTitles']).catch(() => ({}))
+        : Promise.resolve({}),
       chrome.tabs?.query ? chrome.tabs.query({}).catch(() => []) : Promise.resolve([])
     ]);
 
-    if (qaBookmarks.length === 0 && spaceNodes.length === 0) {
-      return { quickAccessItems: [], spaceItems: [], spaceName };
-    }
+    const customTabTitles =
+      ((customTitlesData as { customTabTitles?: Record<number, string> })?.customTabTitles as
+        | Record<number, string>
+        | undefined) || {};
 
     const tabsById = new Map<number, chrome.tabs.Tab>();
     for (const t of allTabs) {
@@ -920,6 +1038,24 @@ export async function getEdgeRailDataForWindow(
       typeof windowId === 'number'
         ? allTabs.find((t) => t.windowId === windowId && t.active)
         : allTabs.find((t) => t.active);
+
+    const targetWindowId =
+      typeof windowId === 'number'
+        ? windowId
+        : typeof activeTabInWindow?.windowId === 'number'
+        ? activeTabInWindow.windowId
+        : undefined;
+
+    const rawTodayTabs = allTabs
+      .filter((t) => {
+        if (typeof t.id !== 'number') return false;
+        if (typeof targetWindowId === 'number' && t.windowId !== targetWindowId) return false;
+        if (session.bookmarkIdByTabId[t.id]) return false;
+        if (isArcticCommandTab(t)) return false;
+        const tabSpace = tabSpaceByTabId[t.id] || 'home';
+        return tabSpace === activeSpaceId;
+      })
+      .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
 
     const buildBookmarkItem = async (
       bm: chrome.bookmarks.BookmarkTreeNode,
@@ -995,7 +1131,26 @@ export async function getEdgeRailDataForWindow(
       };
     };
 
-    const [quickAccessItems, spaceItems] = await Promise.all([
+    const buildTodayTabItem = async (tab: chrome.tabs.Tab): Promise<EdgeTodayTabItem> => {
+      const tabId = tab.id as number;
+      const effectiveUrl = getEffectiveTabUrl(tab) || tab.url || '';
+      const title = customTabTitles[tabId] || tab.title || effectiveUrl || 'Untitled Tab';
+      const isActive = Boolean(activeTabInWindow && activeTabInWindow.id === tabId);
+      const faviconDataUrl = await resolveFaviconDataUrl(effectiveUrl, tab.favIconUrl);
+
+      return {
+        tabId,
+        title,
+        url: effectiveUrl,
+        faviconDataUrl,
+        isActive,
+        isDiscarded: Boolean(tab.discarded),
+        isAudible: Boolean(tab.audible),
+        isMuted: Boolean(tab.mutedInfo?.muted)
+      };
+    };
+
+    const [quickAccessItems, spaceItems, todayTabItems] = await Promise.all([
       Promise.all(qaBookmarks.map((bm) => buildBookmarkItem(bm, true))),
       Promise.all(
         spaceNodes.map(async (node): Promise<EdgeSpaceNode> => {
@@ -1005,12 +1160,13 @@ export async function getEdgeRailDataForWindow(
           }
           return buildFolderNode(node);
         })
-      )
+      ),
+      Promise.all(rawTodayTabs.map((t) => buildTodayTabItem(t)))
     ]);
 
-    return { quickAccessItems, spaceItems, spaceName };
+    return { quickAccessItems, spaceItems, todayTabItems, spaceName };
   } catch {
-    return { quickAccessItems: [], spaceItems: [], spaceName: 'Home' };
+    return { quickAccessItems: [], spaceItems: [], todayTabItems: [], spaceName: 'Home' };
   }
 }
 
@@ -1167,6 +1323,53 @@ export async function activateQuickAccessFromEdge(
   return ok;
 }
 
+export async function activateTodayTabFromEdge(
+  tabId: number,
+  windowId?: number,
+  forceReload = false
+): Promise<boolean> {
+  if (typeof tabId !== 'number' || !chrome.tabs?.update) return false;
+  try {
+    const updatedTab = await chrome.tabs.update(tabId, { active: true });
+    if (forceReload && chrome.tabs.reload) {
+      await chrome.tabs.reload(tabId);
+    }
+    const targetWinId =
+      typeof updatedTab?.windowId === 'number' ? updatedTab.windowId : windowId;
+    if (typeof targetWinId === 'number' && chrome.windows?.update) {
+      try {
+        await chrome.windows.update(targetWinId, { focused: true });
+      } catch {
+        // ignore
+      }
+    }
+    scheduleEdgeItemsBroadcast(targetWinId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function closeTodayTabFromEdge(
+  tabId: number,
+  windowId?: number
+): Promise<boolean> {
+  if (typeof tabId !== 'number' || !chrome.tabs?.remove) return false;
+  try {
+    if (chrome.tabs.query && chrome.tabs.create && typeof windowId === 'number') {
+      const winTabs = await chrome.tabs.query({ windowId }).catch(() => []);
+      if (winTabs.length <= 1 && winTabs.some((t) => t.id === tabId)) {
+        await chrome.tabs.create({ windowId, active: true });
+      }
+    }
+    await chrome.tabs.remove(tabId);
+    scheduleEdgeItemsBroadcast(windowId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function scheduleEdgeItemsBroadcast(windowId?: number): void {
   pendingEdgeBroadcastWinIds.add(typeof windowId === 'number' ? windowId : 'ALL');
   if (edgeBroadcastTimer) return;
@@ -1212,6 +1415,7 @@ function scheduleEdgeItemsBroadcast(windowId?: number): void {
               windowId: winId,
               quickAccessItems: railData.quickAccessItems,
               spaceItems: railData.spaceItems,
+              todayTabItems: railData.todayTabItems,
               spaceName: railData.spaceName
             })
             .catch(() => {});
@@ -1361,13 +1565,15 @@ async function broadcastWindowVisibility(
       const railData =
         !isOpen && activeTabs.length > 0
           ? await getEdgeRailDataForWindow(windowId)
-          : { quickAccessItems: [], spaceItems: [], spaceName: 'Home' };
+          : { quickAccessItems: [], spaceItems: [], todayTabItems: [], spaceName: 'Home' };
 
       for (const t of tabs) {
         if (typeof t.id === 'number' && !t.discarded) {
           const isTabActive = Boolean(t.active);
+          const tabId = t.id;
+          const tabUrl = t.url;
           chrome.tabs
-            .sendMessage(t.id, {
+            .sendMessage(tabId, {
               type: 'ARCTIC_SIDEPANEL_VISIBILITY',
               windowId,
               isSidePanelOpen: isOpen,
@@ -1377,11 +1583,37 @@ async function broadcastWindowVisibility(
                 ? {
                     quickAccessItems: railData.quickAccessItems,
                     spaceItems: railData.spaceItems,
+                    todayTabItems: railData.todayTabItems,
                     spaceName: railData.spaceName
                   }
                 : {})
             })
-            .catch(() => {});
+            .catch(async () => {
+              // Self-healing fallback: if the active web tab missed content-script injection,
+              // lazily inject edgeTrigger.js into just this tab without disturbing other tabs.
+              if (
+                !isOpen &&
+                isTabActive &&
+                isInjectableWebUrl(tabUrl) &&
+                chrome.scripting?.executeScript &&
+                chrome.storage?.local?.get
+              ) {
+                try {
+                  const [local, hasPerm] = await Promise.all([
+                    chrome.storage.local.get(['edgeTriggerEnabled']),
+                    hasEdgeTriggerHostPermission()
+                  ]);
+                  if (local.edgeTriggerEnabled && hasPerm) {
+                    await chrome.scripting.executeScript({
+                      target: { tabId },
+                      files: ['edgeTrigger.js']
+                    });
+                  }
+                } catch {
+                  // ignore
+                }
+              }
+            });
         }
       }
     } catch {
@@ -1467,7 +1699,8 @@ export async function hasEdgeTriggerHostPermission(): Promise<boolean> {
 }
 
 export async function syncEdgeTriggerContentScript(
-  injectIntoOpenTabs = false
+  injectIntoOpenTabs = false,
+  onlyInjectWhenUnregistered = false
 ): Promise<boolean> {
   return withScriptSyncLock(async () => {
     if (!chrome.scripting?.registerContentScripts || !chrome.storage?.local?.get) {
@@ -1503,7 +1736,10 @@ export async function syncEdgeTriggerContentScript(
           }
         }
 
-        if (injectIntoOpenTabs && chrome.tabs?.query && chrome.scripting?.executeScript) {
+        const shouldInjectOpenTabs =
+          injectIntoOpenTabs && (!onlyInjectWhenUnregistered || !isRegistered);
+
+        if (shouldInjectOpenTabs && chrome.tabs?.query && chrome.scripting?.executeScript) {
           const allTabs = await chrome.tabs.query({}).catch(() => []);
           const targetTabs = allTabs.filter(
             (t) => typeof t.id === 'number' && !t.discarded && isInjectableWebUrl(t.url)
@@ -1550,7 +1786,9 @@ export function handleRuntimeMessage(
     windowId?: number;
     injectIntoOpenTabs?: boolean;
     bookmarkId?: string;
+    tabId?: number;
     forceReset?: boolean;
+    forceReload?: boolean;
     urls?: string[];
   },
   sender: chrome.runtime.MessageSender,
@@ -1620,6 +1858,36 @@ export function handleRuntimeMessage(
     return true;
   }
 
+  if (message.type === 'ACTIVATE_TODAY_TAB_FROM_EDGE' && typeof message.tabId === 'number') {
+    const windowId =
+      typeof sender?.tab?.windowId === 'number'
+        ? sender.tab.windowId
+        : typeof message.windowId === 'number'
+        ? message.windowId
+        : undefined;
+    void activateTodayTabFromEdge(
+      message.tabId,
+      windowId,
+      Boolean(message.forceReload)
+    ).then((ok) => {
+      sendResponse({ ok });
+    });
+    return true;
+  }
+
+  if (message.type === 'CLOSE_TODAY_TAB_FROM_EDGE' && typeof message.tabId === 'number') {
+    const windowId =
+      typeof sender?.tab?.windowId === 'number'
+        ? sender.tab.windowId
+        : typeof message.windowId === 'number'
+        ? message.windowId
+        : undefined;
+    void closeTodayTabFromEdge(message.tabId, windowId).then((ok) => {
+      sendResponse({ ok });
+    });
+    return true;
+  }
+
   if (message.type === 'GET_EDGE_FOLDER_FAVICONS' && Array.isArray(message.urls)) {
     const uniqueUrls = Array.from(
       new Set(
@@ -1665,7 +1933,7 @@ export function handleRuntimeMessage(
         const shouldLoadItems = Boolean(local.edgeTriggerEnabled) && !isOpenInWin;
         const railData = shouldLoadItems
           ? await getEdgeRailDataForWindow(windowId)
-          : { quickAccessItems: [], spaceItems: [], spaceName: 'Home' };
+          : { quickAccessItems: [], spaceItems: [], todayTabItems: [], spaceName: 'Home' };
 
         const detectedSide = await syncSidePanelLayoutSide();
         const side =
@@ -1687,6 +1955,7 @@ export function handleRuntimeMessage(
           justCollapsed,
           quickAccessItems: railData.quickAccessItems,
           spaceItems: railData.spaceItems,
+          todayTabItems: railData.todayTabItems,
           spaceName: railData.spaceName
         });
       } catch {
@@ -1699,6 +1968,7 @@ export function handleRuntimeMessage(
           justCollapsed: false,
           quickAccessItems: [],
           spaceItems: [],
+          todayTabItems: [],
           spaceName: 'Home'
         });
       }
@@ -1714,32 +1984,38 @@ export function handleRuntimeMessage(
   }
 
   if (message.type === 'PREPARE_HIDE_SIDEBAR') {
+    const initialWinId = typeof message.windowId === 'number' ? message.windowId : undefined;
+    if (typeof initialWinId === 'number') {
+      openingGuardUntilByWindow.delete(initialWinId);
+      closingGuardUntilByWindow.set(initialWinId, Date.now() + 1200);
+      for (const [port, pWinId] of sidePanelPorts.entries()) {
+        if (pWinId === initialWinId) {
+          sidePanelPorts.delete(port);
+        }
+      }
+    }
     void (async () => {
-      let winId = typeof message.windowId === 'number' ? message.windowId : undefined;
+      let winId = initialWinId;
       if (typeof winId !== 'number' && chrome.windows?.getCurrent) {
         try {
           const currentWin = await chrome.windows.getCurrent();
           if (typeof currentWin?.id === 'number') {
             winId = currentWin.id;
+            openingGuardUntilByWindow.delete(winId);
+            closingGuardUntilByWindow.set(winId, Date.now() + 1200);
+            for (const [port, pWinId] of sidePanelPorts.entries()) {
+              if (pWinId === winId) {
+                sidePanelPorts.delete(port);
+              }
+            }
           }
         } catch {
           // ignore
         }
       }
+      const active = await syncEdgeTriggerContentScript(Boolean(message.injectIntoOpenTabs), true);
       if (typeof winId === 'number') {
-        openingGuardUntilByWindow.delete(winId);
-        closingGuardUntilByWindow.set(winId, Date.now() + 1200);
-        for (const [port, pWinId] of sidePanelPorts.entries()) {
-          if (pWinId === winId) {
-            sidePanelPorts.delete(port);
-          }
-        }
         await markSidePanelWindowState(winId, false, true);
-      }
-      const active = await syncEdgeTriggerContentScript(Boolean(message.injectIntoOpenTabs));
-      if (typeof winId === 'number') {
-        const openWindowIds = await getStoredOpenWindowIds();
-        await broadcastWindowVisibility(winId, false, openWindowIds, true);
       }
       sendResponse({ ok: true, active });
     })();
@@ -1769,6 +2045,7 @@ if (chrome.runtime && chrome.runtime.onMessage) {
 
 if (chrome.tabs && chrome.tabs.onAttached) {
   chrome.tabs.onAttached.addListener((tabId, attachInfo) => {
+    scheduleEdgeItemsBroadcast(attachInfo.newWindowId);
     void getStoredOpenWindowIds().then((openWindowIds) => {
       chrome.tabs
         .sendMessage(tabId, {
@@ -1778,6 +2055,18 @@ if (chrome.tabs && chrome.tabs.onAttached) {
         })
         .catch(() => {});
     });
+  });
+}
+
+if (chrome.tabs && 'onDetached' in chrome.tabs) {
+  chrome.tabs.onDetached?.addListener((_tabId, detachInfo) => {
+    scheduleEdgeItemsBroadcast(detachInfo.oldWindowId);
+  });
+}
+
+if (chrome.tabs && 'onMoved' in chrome.tabs) {
+  chrome.tabs.onMoved?.addListener((_tabId, moveInfo) => {
+    scheduleEdgeItemsBroadcast(moveInfo.windowId);
   });
 }
 

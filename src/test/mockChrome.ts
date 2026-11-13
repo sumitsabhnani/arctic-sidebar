@@ -94,6 +94,13 @@ export function createMockChrome() {
   const runtimeConnectListeners = new Set<(port: chrome.runtime.Port) => void>();
   let hostPermissionsGranted = false;
   let registeredScripts: chrome.scripting.RegisteredContentScript[] = [];
+  let commandsState: chrome.commands.Command[] = [
+    {
+      name: '_execute_action',
+      description: 'Toggle Arctic Sidebar',
+      shortcut: 'Alt+Shift+S'
+    }
+  ];
 
   function findNode(nodes: MockBookmarkNode[], id: string): MockBookmarkNode | null {
     for (const n of nodes) {
@@ -730,6 +737,13 @@ export function createMockChrome() {
         badgeColor = details.color;
       })
     },
+    commands: {
+      getAll: vi.fn(async (cb?: (commands: chrome.commands.Command[]) => void) => {
+        const list = cloneTree(commandsState);
+        if (typeof cb === 'function') cb(list);
+        return list;
+      })
+    },
     search: {
       query: vi.fn(async (options: chrome.search.QueryInfo, cb?: () => void) => {
         const text = options.text || '';
@@ -784,6 +798,9 @@ export function createMockChrome() {
     // Test helpers to inspect or reset internal states
     __setHostPermissionsGranted: (granted: boolean) => {
       hostPermissionsGranted = granted;
+    },
+    __setCommands: (commands: chrome.commands.Command[]) => {
+      commandsState = cloneTree(commands);
     },
     __setLocalStorage: (state: Record<string, unknown>) => {
       localStorageState = { ...state };
@@ -867,6 +884,13 @@ export function createMockChrome() {
       runtimeConnectListeners.clear();
       hostPermissionsGranted = false;
       registeredScripts = [];
+      commandsState = [
+        {
+          name: '_execute_action',
+          description: 'Toggle Arctic Sidebar',
+          shortcut: 'Alt+Shift+S'
+        }
+      ];
       alarmListeners.clear();
       notifClickedListeners.clear();
       notifButtonClickedListeners.clear();

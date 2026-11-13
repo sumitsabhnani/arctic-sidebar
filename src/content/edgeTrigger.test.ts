@@ -754,4 +754,257 @@ describe('edgeTrigger content script (full-height Quick Access stripe)', () => {
       fixedRightPanel.remove();
     }
   });
+
+  it('renders Today Tabs with click, double-click reload, and middle-click close, and supports Option A overlay scrollbar drag without collapsing hover mode', async () => {
+    mockChrome.__setLocalStorage({
+      edgeTriggerEnabled: true,
+      edgeTriggerMode: 'hover',
+      sidebarDockSide: 'left'
+    });
+
+    mockChrome.runtime.onMessage.addListener(
+      (
+        msg: unknown,
+        _sender: chrome.runtime.MessageSender,
+        sendResponse: (resp?: unknown) => void
+      ) => {
+        const m = msg as { type?: string };
+        if (m?.type === 'GET_EDGE_TRIGGER_STATE') {
+          sendResponse({
+            windowId: 10,
+            openWindowIds: [],
+            edgeTriggerEnabled: true,
+            side: 'left',
+            mode: 'hover',
+            quickAccessItems: [
+              {
+                id: 'qa-1',
+                title: 'GitHub',
+                url: 'https://github.com',
+                faviconDataUrl: '',
+                isActive: false,
+                isOpen: false,
+                isNavigatedAway: false
+              }
+            ],
+            spaceItems: [],
+            todayTabItems: [
+              {
+                tabId: 777,
+                title: 'Hacker News',
+                url: 'https://news.ycombinator.com',
+                faviconDataUrl: '',
+                isActive: true,
+                isDiscarded: false,
+                isAudible: true,
+                isMuted: false
+              },
+              {
+                tabId: 778,
+                title: 'Sleeping Article',
+                url: 'https://blog.example.com',
+                faviconDataUrl: '',
+                isActive: false,
+                isDiscarded: true,
+                isAudible: false,
+                isMuted: false
+              }
+            ]
+          });
+        }
+      }
+    );
+
+    await import('./edgeTrigger');
+    await new Promise((r) => setTimeout(r, 15));
+
+    const root = capturedShadowRoots[0];
+    const sensor = root.querySelector('div.arctic-hover-sensor') as HTMLDivElement;
+    const rail = root.querySelector('aside.arctic-rail') as HTMLElement;
+    const list = root.querySelector('div.arctic-qa-list') as HTMLDivElement;
+    const track = root.querySelector('div.arctic-scroll-track') as HTMLDivElement;
+    const thumb = root.querySelector('div.arctic-scroll-thumb') as HTMLDivElement;
+
+    // Expand rail via hover sensor
+    sensor.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+    expect(rail.getAttribute('data-expanded')).toBe('true');
+
+    // Today's Tabs rendered below Quick Access with separator and status attributes
+    const separators = list.querySelectorAll('div.arctic-section-sep');
+    expect(separators.length).toBe(1);
+
+    const hnBtn = list.querySelector('button[data-section="today"][data-tab-id="777"]') as HTMLButtonElement;
+    const sleepBtn = list.querySelector('button[data-section="today"][data-tab-id="778"]') as HTMLButtonElement;
+    expect(hnBtn).not.toBeNull();
+    expect(hnBtn.getAttribute('data-active')).toBe('true');
+    expect(hnBtn.querySelector('.arctic-audio-dot')).not.toBeNull();
+    expect(sleepBtn.getAttribute('data-discarded')).toBe('true');
+
+    // Single-click activates Today tab
+    mockChrome.runtime.sendMessage.mockClear();
+    sleepBtn.click();
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
+      { type: 'ACTIVATE_TODAY_TAB_FROM_EDGE', tabId: 778, forceReload: false },
+      expect.any(Function)
+    );
+
+    // Double-click reloads Today tab
+    mockChrome.runtime.sendMessage.mockClear();
+    hnBtn.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
+      { type: 'ACTIVATE_TODAY_TAB_FROM_EDGE', tabId: 777, forceReload: true },
+      expect.any(Function)
+    );
+
+    // Middle-click closes Today tab
+    mockChrome.runtime.sendMessage.mockClear();
+    sleepBtn.dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true }));
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
+      { type: 'CLOSE_TODAY_TAB_FROM_EDGE', tabId: 778 },
+      expect.any(Function)
+    );
+
+    // Simulate vertical overflow on list container for Option A overlay scrollbar
+    let currentScrollTop = 0;
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, get: () => 600 });
+    Object.defineProperty(list, 'clientHeight', { configurable: true, get: () => 200 });
+    Object.defineProperty(list, 'scrollTop', {
+      configurable: true,
+      get: () => currentScrollTop,
+      set: (val: number) => {
+        currentScrollTop = val;
+      }
+    });
+
+    list.dispatchEvent(new Event('scroll'));
+    expect(track.getAttribute('data-scrollable')).toBe('true');
+    expect(list.getAttribute('data-can-scroll-up')).toBe('false');
+    expect(list.getAttribute('data-can-scroll-down')).toBe('true');
+    expect(parseFloat(thumb.style.height)).toBeGreaterThanOrEqual(24);
+
+    // Dragging the scrollbar thumb updates scrollTop AND keeps hover rail expanded even when cursor drifts outside 40px zone
+    const PointerEv = typeof PointerEvent !== 'undefined' ? PointerEvent : MouseEvent;
+    thumb.dispatchEvent(
+      new PointerEv('pointerdown', { button: 0, clientX: 34, clientY: 20, bubbles: true })
+    );
+    expect(track.getAttribute('data-dragging')).toBe('true');
+
+    window.dispatchEvent(
+      new PointerEv('pointermove', { clientX: 180, clientY: 90, bubbles: true })
+    );
+    window.dispatchEvent(
+      new MouseEvent('mousemove', { clientX: 180, clientY: 90, bubbles: true })
+    );
+
+    expect(currentScrollTop).toBeGreaterThan(100);
+    expect(list.getAttribute('data-can-scroll-up')).toBe('true');
+    await new Promise((r) => setTimeout(r, 200));
+    // Must remain expanded while dragging scrollbar!
+    expect(rail.getAttribute('data-expanded')).toBe('true');
+
+    // Releasing pointer outside the rail schedules normal hover collapse
+    window.dispatchEvent(new PointerEv('pointerup', { clientX: 180, clientY: 90, bubbles: true }));
+    expect(track.getAttribute('data-dragging')).toBe('false');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(rail.getAttribute('data-expanded')).toBe('false');
+  });
+
+  it('synchronizes push-mode open and close transitions with viewport resize frames to prevent opposite-direction page bounce', async () => {
+    const origInnerWidth = window.innerWidth;
+    let mockViewportWidth = 1440;
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      get: () => mockViewportWidth
+    });
+    const rectSpy = vi
+      .spyOn(document.documentElement, 'getBoundingClientRect')
+      .mockImplementation(
+        () =>
+          ({
+            width: mockViewportWidth,
+            height: 900,
+            top: 0,
+            left: 0,
+            right: mockViewportWidth,
+            bottom: 900,
+            x: 0,
+            y: 0,
+            toJSON: () => ({})
+          }) as DOMRect
+      );
+
+    try {
+      mockChrome.__setLocalStorage({
+        edgeTriggerEnabled: true,
+        edgeTriggerMode: 'push',
+        sidebarDockSide: 'left'
+      });
+
+      mockChrome.runtime.onMessage.addListener(
+        (
+          msg: unknown,
+          _sender: chrome.runtime.MessageSender,
+          sendResponse: (resp?: unknown) => void
+        ) => {
+          const m = msg as { type?: string };
+          if (m?.type === 'GET_EDGE_TRIGGER_STATE') {
+            sendResponse({
+              windowId: 10,
+              openWindowIds: [],
+              edgeTriggerEnabled: true,
+              side: 'left',
+              mode: 'push',
+              quickAccessItems: []
+            });
+          } else if (m?.type === 'OPEN_SIDE_PANEL_FROM_EDGE') {
+            sendResponse({ ok: true });
+          }
+        }
+      );
+
+      await import('./edgeTrigger');
+      await new Promise((r) => setTimeout(r, 15));
+
+      expect(document.documentElement.getAttribute('data-arctic-edge-push')).toBe('left');
+      const root = capturedShadowRoots[0];
+      const rail = root.querySelector('aside.arctic-rail') as HTMLElement;
+      const expandBtn = root.querySelector('button.arctic-expand-btn') as HTMLButtonElement;
+
+      // 1. Opening: clicking Expand holds the 36px push while sidepanel.html boots (viewport still 1440px)
+      expandBtn.click();
+      await chrome.storage.session.set({ openSidePanelWindowIds: [10] });
+
+      expect(document.documentElement.getAttribute('data-arctic-edge-push')).toBe('left');
+      expect(document.getElementById('arctic-edge-trigger-host')).not.toBeNull();
+      expect(rail.getAttribute('data-opening')).toBe('true');
+
+      // First physical frame where Chrome's Side Panel enters viewport (1440 -> 1390 -> 1120)
+      mockViewportWidth = 1390;
+      window.dispatchEvent(new Event('resize'));
+
+      expect(document.documentElement.getAttribute('data-arctic-edge-push')).toBeNull();
+      expect(document.getElementById('arctic-edge-trigger-host')).toBeNull();
+
+      mockViewportWidth = 1120;
+      window.dispatchEvent(new Event('resize'));
+
+      // 2. Closing: receiving visibility close BEFORE Chrome's first close resize frame holds off mounting 36px push
+      await chrome.storage.session.set({ openSidePanelWindowIds: [] });
+      expect(document.documentElement.getAttribute('data-arctic-edge-push')).toBeNull();
+      expect(document.getElementById('arctic-edge-trigger-host')).toBeNull();
+
+      // First physical frame where Chrome's Side Panel begins shrinking (1120 -> 1170) mounts 36px push in lockstep
+      mockViewportWidth = 1170;
+      window.dispatchEvent(new Event('resize'));
+
+      expect(document.documentElement.getAttribute('data-arctic-edge-push')).toBe('left');
+      expect(document.getElementById('arctic-edge-trigger-host')).not.toBeNull();
+    } finally {
+      rectSpy.mockRestore();
+      Object.defineProperty(window, 'innerWidth', {
+        configurable: true,
+        value: origInnerWidth
+      });
+    }
+  });
 });

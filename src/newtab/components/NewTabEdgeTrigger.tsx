@@ -1,15 +1,18 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Folder, FolderOpen, ChevronRight, ChevronDown } from 'lucide-react';
 import type {
   ColorThemeId,
   EdgeFolderNode,
   EdgeQuickAccessItem,
   EdgeSpaceNode,
+  EdgeTodayTabItem,
   EdgeTriggerMode,
   ThemeMode
 } from '../../types';
 import { resolveEffectiveTheme } from '../../sidepanel/utils/theme';
 import { getFaviconUrl } from '../../sidepanel/utils/url';
+
+const MIN_THUMB_HEIGHT_PX = 24;
 
 interface NewTabEdgeTriggerProps {
   theme: ThemeMode;
@@ -43,6 +46,20 @@ function findFolderById(nodes: EdgeSpaceNode[], targetId: string): EdgeFolderNod
   return null;
 }
 
+function hasRealViewportLayout(): boolean {
+  if (
+    typeof window === 'undefined' ||
+    typeof document === 'undefined' ||
+    !document.documentElement
+  ) {
+    return false;
+  }
+  const vw = window.innerWidth || 0;
+  if (vw <= 0) return false;
+  const rect = document.documentElement.getBoundingClientRect();
+  return rect.width > 0 || rect.height > 0;
+}
+
 export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
   theme,
   windowIdRef
@@ -56,16 +73,98 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
   const [resolvedWindowId, setResolvedWindowId] = useState<number | null>(null);
   const [quickAccessItems, setQuickAccessItems] = useState<EdgeQuickAccessItem[]>([]);
   const [spaceItems, setSpaceItems] = useState<EdgeSpaceNode[]>([]);
+  const [todayTabItems, setTodayTabItems] = useState<EdgeTodayTabItem[]>([]);
   const [failedFavicons, setFailedFavicons] = useState<Record<string, boolean>>({});
   const [tooltip, setTooltip] = useState<{ text: string; top: number } | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; top: number } | null>(null);
   const [expandedSubfolders, setExpandedSubfolders] = useState<Record<string, boolean>>({});
   const [isOptimisticallyOpening, setIsOptimisticallyOpening] = useState(false);
+  const [isHoldingForOpen, setIsHoldingForOpen] = useState(false);
+  const [isDeferringForClose, setIsDeferringForClose] = useState(false);
+  const [scrollMetrics, setScrollMetrics] = useState({
+    isScrollable: false,
+    thumbHeight: 0,
+    thumbTop: 0,
+    canScrollUp: false,
+    canScrollDown: false
+  });
+  const [isScrolling, setIsScrolling] = useState(false);
+  const [isDraggingScrollbar, setIsDraggingScrollbar] = useState(false);
+  const [isTrackHovered, setIsTrackHovered] = useState(false);
+  const [isRailHovered, setIsRailHovered] = useState(false);
 
   const resolvedWindowIdRef = useRef<number | null>(null);
+  const modeRef = useRef<EdgeTriggerMode>('push');
+  const isEnabledRef = useRef(false);
+  const openWindowIdsRef = useRef<number[]>([]);
+  const openBaselineWidthRef = useRef(0);
+  const closeBaselineWidthRef = useRef(0);
+  const lastOpenWidthRef = useRef<number | null>(null);
+  const openHandoffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeHandoffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const scrollTrackRef = useRef<HTMLDivElement | null>(null);
+  const scrollThumbRef = useRef<HTMLDivElement | null>(null);
   const flyoutRef = useRef<HTMLDivElement | null>(null);
   const hoverCollapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollFadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollbarDragCleanupRef = useRef<(() => void) | null>(null);
+  const isDraggingScrollbarRef = useRef(false);
+  const isPointerInRailRef = useRef(false);
+  const lastActiveItemKeyRef = useRef<string | null>(null);
+
+  modeRef.current = mode;
+  isEnabledRef.current = isEnabled;
+  openWindowIdsRef.current = openWindowIds;
+
+  const cancelOpenHold = useCallback(() => {
+    if (openHandoffTimerRef.current) {
+      clearTimeout(openHandoffTimerRef.current);
+      openHandoffTimerRef.current = null;
+    }
+    setIsHoldingForOpen(false);
+  }, []);
+
+  const cancelCloseDefer = useCallback(() => {
+    if (closeHandoffTimerRef.current) {
+      clearTimeout(closeHandoffTimerRef.current);
+      closeHandoffTimerRef.current = null;
+    }
+    setIsDeferringForClose(false);
+  }, []);
+
+  const startOpenHoldIfNeeded = useCallback(() => {
+    if (modeRef.current !== 'push' || !isEnabledRef.current || !hasRealViewportLayout()) {
+      return;
+    }
+    if (openHandoffTimerRef.current) return;
+    openBaselineWidthRef.current = window.innerWidth;
+    setIsHoldingForOpen(true);
+    openHandoffTimerRef.current = setTimeout(() => {
+      openHandoffTimerRef.current = null;
+      setIsHoldingForOpen(false);
+    }, 280);
+  }, []);
+
+  const startCloseDeferIfNeeded = useCallback(() => {
+    if (modeRef.current !== 'push' || !isEnabledRef.current || !hasRealViewportLayout()) {
+      return;
+    }
+    const vw = window.innerWidth;
+    if (lastOpenWidthRef.current !== null && vw > lastOpenWidthRef.current + 8) {
+      lastOpenWidthRef.current = null;
+      return;
+    }
+    if (closeHandoffTimerRef.current) return;
+    closeBaselineWidthRef.current = vw;
+    setIsDeferringForClose(true);
+    closeHandoffTimerRef.current = setTimeout(() => {
+      closeHandoffTimerRef.current = null;
+      lastOpenWidthRef.current = null;
+      setIsDeferringForClose(false);
+    }, 80);
+  }, []);
 
   useEffect(() => {
     resolvedWindowIdRef.current = resolvedWindowId ?? windowIdRef.current;
@@ -90,9 +189,11 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
       (res) => {
         if (unmounted) return;
         if (typeof res?.edgeTriggerEnabled === 'boolean') {
+          isEnabledRef.current = res.edgeTriggerEnabled;
           setIsEnabled(res.edgeTriggerEnabled);
         }
         if (res?.edgeTriggerMode === 'push' || res?.edgeTriggerMode === 'hover') {
+          modeRef.current = res.edgeTriggerMode;
           setMode(res.edgeTriggerMode);
         }
         if (res?.sidebarDockSide === 'left' || res?.sidebarDockSide === 'right') {
@@ -104,6 +205,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
     chrome?.storage?.session?.get?.(['openSidePanelWindowIds'], (res) => {
       if (unmounted) return;
       if (Array.isArray(res?.openSidePanelWindowIds)) {
+        openWindowIdsRef.current = res.openSidePanelWindowIds as number[];
         setOpenWindowIds(res.openSidePanelWindowIds as number[]);
       }
       setIsInitialized(true);
@@ -118,12 +220,14 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
           setResolvedWindowId(resp.windowId);
         }
         if (Array.isArray(resp.openWindowIds)) {
+          openWindowIdsRef.current = resp.openWindowIds as number[];
           setOpenWindowIds(resp.openWindowIds as number[]);
         }
         if (resp.side === 'left' || resp.side === 'right') {
           setDockSide(resp.side);
         }
         if (resp.mode === 'push' || resp.mode === 'hover') {
+          modeRef.current = resp.mode;
           setMode(resp.mode);
         }
         if (Array.isArray(resp.quickAccessItems)) {
@@ -131,6 +235,9 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
         }
         if (Array.isArray(resp.spaceItems)) {
           setSpaceItems(resp.spaceItems as EdgeSpaceNode[]);
+        }
+        if (Array.isArray(resp.todayTabItems)) {
+          setTodayTabItems(resp.todayTabItems as EdgeTodayTabItem[]);
         }
         setIsInitialized(true);
       });
@@ -143,18 +250,46 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
       areaName: string
     ) => {
       if (areaName === 'session' && changes.openSidePanelWindowIds) {
-        const next = changes.openSidePanelWindowIds.newValue;
-        setOpenWindowIds(Array.isArray(next) ? (next as number[]) : []);
+        const nextIds = Array.isArray(changes.openSidePanelWindowIds.newValue)
+          ? (changes.openSidePanelWindowIds.newValue as number[])
+          : [];
+        const myWin = resolvedWindowIdRef.current ?? windowIdRef.current;
+        const wasOpen = typeof myWin === 'number' && openWindowIdsRef.current.includes(myWin);
+        const nowOpen = typeof myWin === 'number' && nextIds.includes(myWin);
+        if (!wasOpen && nowOpen) {
+          startOpenHoldIfNeeded();
+          cancelCloseDefer();
+          if (hasRealViewportLayout()) {
+            lastOpenWidthRef.current = window.innerWidth;
+          }
+        } else if (wasOpen && !nowOpen) {
+          cancelOpenHold();
+          startCloseDeferIfNeeded();
+        }
+        openWindowIdsRef.current = nextIds;
+        setOpenWindowIds(nextIds);
         setIsOptimisticallyOpening(false);
       } else if (areaName === 'local') {
         if (changes.edgeTriggerEnabled !== undefined) {
-          setIsEnabled(Boolean(changes.edgeTriggerEnabled.newValue));
+          const nextEnabled = Boolean(changes.edgeTriggerEnabled.newValue);
+          isEnabledRef.current = nextEnabled;
+          if (!nextEnabled) {
+            cancelOpenHold();
+            cancelCloseDefer();
+          }
+          setIsEnabled(nextEnabled);
         }
         if (
           changes.edgeTriggerMode?.newValue === 'push' ||
           changes.edgeTriggerMode?.newValue === 'hover'
         ) {
-          setMode(changes.edgeTriggerMode.newValue);
+          const nextMode = changes.edgeTriggerMode.newValue;
+          modeRef.current = nextMode;
+          if (nextMode !== 'push') {
+            cancelOpenHold();
+            cancelCloseDefer();
+          }
+          setMode(nextMode);
           setIsHoverExpanded(false);
         }
         if (
@@ -171,20 +306,45 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
       windowId?: number;
       isSidePanelOpen?: boolean;
       openWindowIds?: number[];
+      justCollapsed?: boolean;
       quickAccessItems?: EdgeQuickAccessItem[];
       spaceItems?: EdgeSpaceNode[];
+      todayTabItems?: EdgeTodayTabItem[];
     }) => {
       if (!message || typeof message !== 'object') return;
       if (message.type === 'ARCTIC_SIDEPANEL_VISIBILITY') {
-        const myWin = resolvedWindowIdRef.current;
+        const myWin = resolvedWindowIdRef.current ?? windowIdRef.current;
         if (typeof message.windowId === 'number' && myWin !== null && message.windowId !== myWin) {
           return;
         }
+        const effectiveWin = typeof myWin === 'number' ? myWin : message.windowId ?? null;
         if (typeof message.windowId === 'number' && myWin === null) {
           resolvedWindowIdRef.current = message.windowId;
           setResolvedWindowId(message.windowId);
         }
+        const wasOpen =
+          typeof effectiveWin === 'number' && openWindowIdsRef.current.includes(effectiveWin);
+        const nextIds = Array.isArray(message.openWindowIds)
+          ? message.openWindowIds
+          : openWindowIdsRef.current;
+        const nowOpen =
+          typeof message.isSidePanelOpen === 'boolean'
+            ? message.isSidePanelOpen
+            : typeof effectiveWin === 'number' && nextIds.includes(effectiveWin);
+
+        if (!wasOpen && nowOpen) {
+          startOpenHoldIfNeeded();
+          cancelCloseDefer();
+          if (hasRealViewportLayout()) {
+            lastOpenWidthRef.current = window.innerWidth;
+          }
+        } else if ((wasOpen || message.justCollapsed) && !nowOpen) {
+          cancelOpenHold();
+          startCloseDeferIfNeeded();
+        }
+
         if (Array.isArray(message.openWindowIds)) {
+          openWindowIdsRef.current = message.openWindowIds;
           setOpenWindowIds(message.openWindowIds);
         }
         if (!message.isSidePanelOpen) {
@@ -193,6 +353,9 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
           }
           if (Array.isArray(message.spaceItems)) {
             setSpaceItems(message.spaceItems);
+          }
+          if (Array.isArray(message.todayTabItems)) {
+            setTodayTabItems(message.todayTabItems);
           }
         }
         if (message.isSidePanelOpen === true) {
@@ -210,7 +373,13 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
         if (Array.isArray(message.spaceItems)) {
           setSpaceItems(message.spaceItems);
         }
+        if (Array.isArray(message.todayTabItems)) {
+          setTodayTabItems(message.todayTabItems);
+        }
       } else if (message.type === 'ARCTIC_REMOVE_EDGE_TRIGGER') {
+        isEnabledRef.current = false;
+        cancelOpenHold();
+        cancelCloseDefer();
         setIsEnabled(false);
         setOpenFolder(null);
       }
@@ -220,10 +389,18 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
     chrome?.runtime?.onMessage?.addListener(handleRuntimeMessage);
     return () => {
       unmounted = true;
+      if (openHandoffTimerRef.current) {
+        clearTimeout(openHandoffTimerRef.current);
+        openHandoffTimerRef.current = null;
+      }
+      if (closeHandoffTimerRef.current) {
+        clearTimeout(closeHandoffTimerRef.current);
+        closeHandoffTimerRef.current = null;
+      }
       chrome?.storage?.onChanged?.removeListener(handleStorageChange);
       chrome?.runtime?.onMessage?.removeListener(handleRuntimeMessage);
     };
-  }, [windowIdRef]);
+  }, [windowIdRef, cancelCloseDefer, cancelOpenHold, startCloseDeferIfNeeded, startOpenHoldIfNeeded]);
 
   // Dismiss folder flyout on outside click or Escape
   useEffect(() => {
@@ -256,8 +433,165 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
   const winId = resolvedWindowId ?? windowIdRef.current;
   const hasWinId = typeof winId === 'number';
   const isSidePanelOpen = hasWinId && openWindowIds.includes(winId);
-  const isVisible =
-    isInitialized && hasWinId && isEnabled && !isSidePanelOpen && !isOptimisticallyOpening;
+  const baseCanShow = isInitialized && hasWinId && isEnabled;
+  const rawShouldShow = baseCanShow && !isSidePanelOpen && !isOptimisticallyOpening;
+  const effectiveHoldOpen =
+    isHoldingForOpen && baseCanShow && mode === 'push' && (isSidePanelOpen || isOptimisticallyOpening);
+  const effectiveDeferClose = isDeferringForClose && rawShouldShow && mode === 'push';
+  const isVisible = (rawShouldShow && !effectiveDeferClose) || effectiveHoldOpen;
+
+  // Synchronize open/close layout push handoff with Chrome's physical Side Panel resize frames
+  useEffect(() => {
+    if (!effectiveHoldOpen && !effectiveDeferClose && !isSidePanelOpen) return;
+
+    if (isSidePanelOpen && hasRealViewportLayout()) {
+      if (lastOpenWidthRef.current === null || window.innerWidth < lastOpenWidthRef.current) {
+        lastOpenWidthRef.current = window.innerWidth;
+      }
+    }
+
+    const handleViewportResize = () => {
+      const vw = window.innerWidth;
+      if (effectiveHoldOpen && vw < openBaselineWidthRef.current - 2) {
+        lastOpenWidthRef.current = vw;
+        cancelOpenHold();
+        return;
+      }
+      if (effectiveDeferClose && vw > closeBaselineWidthRef.current + 2) {
+        lastOpenWidthRef.current = null;
+        cancelCloseDefer();
+        return;
+      }
+      if (isSidePanelOpen && hasRealViewportLayout()) {
+        if (lastOpenWidthRef.current === null || vw < lastOpenWidthRef.current) {
+          lastOpenWidthRef.current = vw;
+        }
+      }
+    };
+
+    window.addEventListener('resize', handleViewportResize, { passive: true });
+    return () => {
+      window.removeEventListener('resize', handleViewportResize);
+    };
+  }, [effectiveHoldOpen, effectiveDeferClose, isSidePanelOpen, cancelOpenHold, cancelCloseDefer]);
+
+  const updateScrollbarMetrics = useCallback(() => {
+    const el = listRef.current;
+    if (!el) {
+      setScrollMetrics((prev) =>
+        prev.isScrollable || prev.canScrollUp || prev.canScrollDown
+          ? { isScrollable: false, thumbHeight: 0, thumbTop: 0, canScrollUp: false, canScrollDown: false }
+          : prev
+      );
+      return;
+    }
+
+    const scrollHeight = el.scrollHeight || 0;
+    const clientHeight = el.clientHeight || 0;
+    const scrollTop = el.scrollTop || 0;
+    const maxScrollTop = scrollHeight - clientHeight;
+    const isScrollable = clientHeight > 0 && maxScrollTop > 1;
+
+    if (!isScrollable) {
+      setScrollMetrics((prev) =>
+        prev.isScrollable || prev.canScrollUp || prev.canScrollDown
+          ? { isScrollable: false, thumbHeight: 0, thumbTop: 0, canScrollUp: false, canScrollDown: false }
+          : prev
+      );
+      return;
+    }
+
+    const canScrollUp = scrollTop > 2;
+    const canScrollDown = scrollTop < maxScrollTop - 2;
+    const trackHeight = Math.max(MIN_THUMB_HEIGHT_PX, clientHeight - 6);
+    const rawThumbH = (clientHeight / scrollHeight) * trackHeight;
+    const thumbHeight = Math.max(
+      MIN_THUMB_HEIGHT_PX,
+      Math.min(trackHeight, Math.round(rawThumbH))
+    );
+    const maxThumbTop = Math.max(0, trackHeight - thumbHeight);
+    const ratio = Math.max(0, Math.min(1, scrollTop / Math.max(1, maxScrollTop)));
+    const thumbTop = Math.round(ratio * maxThumbTop * 10) / 10;
+
+    setScrollMetrics((prev) => {
+      if (
+        prev.isScrollable === isScrollable &&
+        prev.thumbHeight === thumbHeight &&
+        prev.thumbTop === thumbTop &&
+        prev.canScrollUp === canScrollUp &&
+        prev.canScrollDown === canScrollDown
+      ) {
+        return prev;
+      }
+      return { isScrollable, thumbHeight, thumbTop, canScrollUp, canScrollDown };
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isVisible) return;
+    updateScrollbarMetrics();
+    const el = listRef.current;
+    let ro: ResizeObserver | null = null;
+    if (el && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => updateScrollbarMetrics());
+      ro.observe(el);
+    }
+    window.addEventListener('resize', updateScrollbarMetrics);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', updateScrollbarMetrics);
+    };
+  }, [isVisible, quickAccessItems, spaceItems, todayTabItems, updateScrollbarMetrics]);
+
+  // Auto-scroll active item into view when active item changes
+  useEffect(() => {
+    if (!isVisible) {
+      lastActiveItemKeyRef.current = null;
+      return;
+    }
+
+    let activeKey: string | null = null;
+    for (const qa of quickAccessItems) {
+      if (qa.isActive) {
+        activeKey = `qa:${qa.id}`;
+        break;
+      }
+    }
+    if (!activeKey) {
+      for (const node of spaceItems) {
+        if (node.type === 'bookmark' && node.isActive) {
+          activeKey = `space:${node.id}`;
+          break;
+        }
+        if (node.type === 'folder' && node.hasActiveChild) {
+          activeKey = `folder:${node.id}`;
+          break;
+        }
+      }
+    }
+    if (!activeKey) {
+      for (const tab of todayTabItems) {
+        if (tab.isActive) {
+          activeKey = `today:${tab.tabId}`;
+          break;
+        }
+      }
+    }
+
+    if (activeKey && activeKey !== lastActiveItemKeyRef.current) {
+      lastActiveItemKeyRef.current = activeKey;
+      const activeBtn = listRef.current?.querySelector<HTMLElement>('button[data-active="true"]');
+      if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
+        try {
+          activeBtn.scrollIntoView({ block: 'nearest' });
+        } catch {
+          // ignore
+        }
+      }
+    } else if (!activeKey) {
+      lastActiveItemKeyRef.current = null;
+    }
+  }, [isVisible, quickAccessItems, spaceItems, todayTabItems]);
 
   // Shift New Tab root container in 'push' mode so the 36px stripe never overlaps content
   useEffect(() => {
@@ -270,25 +604,50 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
     };
   }, [isVisible, mode, dockSide]);
 
-  // Clear pending hover-collapse timer on unmount or when hidden
+  // Clear pending timers & active scrollbar drag listeners on unmount or when hidden
   useEffect(() => {
     if (!isVisible) {
       setIsHoverExpanded(false);
+      setIsRailHovered(false);
+      setIsTrackHovered(false);
+      isPointerInRailRef.current = false;
+      scrollbarDragCleanupRef.current?.();
     }
     return () => {
       if (hoverCollapseTimerRef.current) {
         clearTimeout(hoverCollapseTimerRef.current);
         hoverCollapseTimerRef.current = null;
       }
+      if (scrollFadeTimerRef.current) {
+        clearTimeout(scrollFadeTimerRef.current);
+        scrollFadeTimerRef.current = null;
+      }
+      scrollbarDragCleanupRef.current?.();
     };
   }, [isVisible]);
 
   // Track cursor while expanded in 'hover' mode so quick darts across the 5px sensor
   // always collapse cleanly on the first hover-out even if rail.mouseenter never fired
   useEffect(() => {
-    if (!isVisible || mode !== 'hover' || !isHoverExpanded || openFolder !== null) return;
+    if (
+      !isVisible ||
+      mode !== 'hover' ||
+      !isHoverExpanded ||
+      openFolder !== null ||
+      isDraggingScrollbar
+    ) {
+      return;
+    }
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingScrollbarRef.current) {
+        if (hoverCollapseTimerRef.current) {
+          clearTimeout(hoverCollapseTimerRef.current);
+          hoverCollapseTimerRef.current = null;
+        }
+        return;
+      }
+
       const inZone =
         dockSide === 'left'
           ? e.clientX <= 40
@@ -313,7 +672,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
     };
-  }, [isVisible, mode, isHoverExpanded, openFolder, dockSide]);
+  }, [isVisible, mode, isHoverExpanded, openFolder, isDraggingScrollbar, dockSide]);
 
   if (!isVisible) {
     return null;
@@ -321,7 +680,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
 
   const effectiveTheme = resolveEffectiveTheme(theme);
   const isLeft = dockSide === 'left';
-  const isExpanded = mode === 'push' || isHoverExpanded || openFolder !== null;
+  const isExpanded = mode === 'push' || isHoverExpanded || openFolder !== null || isDraggingScrollbar;
 
   const handleExpandHover = () => {
     if (hoverCollapseTimerRef.current) {
@@ -332,6 +691,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
   };
 
   const handleScheduleCollapseHover = () => {
+    if (isDraggingScrollbarRef.current) return;
     if (hoverCollapseTimerRef.current) {
       clearTimeout(hoverCollapseTimerRef.current);
     }
@@ -345,11 +705,13 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
   const handleOpenSidePanel = () => {
     setTooltip(null);
     setOpenFolder(null);
+    startOpenHoldIfNeeded();
     setIsOptimisticallyOpening(true);
     const targetWinId = windowIdRef.current ?? resolvedWindowId;
 
     if (typeof targetWinId === 'number' && chrome?.sidePanel?.open) {
       chrome.sidePanel.open({ windowId: targetWinId }).catch(() => {
+        cancelOpenHold();
         setIsOptimisticallyOpening(false);
       });
       return;
@@ -358,10 +720,12 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
     try {
       chrome?.runtime?.sendMessage?.({ type: 'OPEN_SIDE_PANEL_FROM_EDGE' }, (resp) => {
         if (!resp || resp.ok !== true) {
+          cancelOpenHold();
           setIsOptimisticallyOpening(false);
         }
       });
     } catch {
+      cancelOpenHold();
       setIsOptimisticallyOpening(false);
     }
   };
@@ -381,12 +745,145 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
     }
   };
 
+  const handleTodayTabClick = (tabId: number, forceReload = false) => {
+    setTooltip(null);
+    setOpenFolder(null);
+    try {
+      chrome?.runtime?.sendMessage?.({
+        type: 'ACTIVATE_TODAY_TAB_FROM_EDGE',
+        tabId,
+        windowId: winId ?? undefined,
+        forceReload
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleTodayTabClose = (tabId: number) => {
+    setTooltip(null);
+    setOpenFolder(null);
+    try {
+      chrome?.runtime?.sendMessage?.({
+        type: 'CLOSE_TODAY_TAB_FROM_EDGE',
+        tabId,
+        windowId: winId ?? undefined
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleListScroll = () => {
+    setTooltip(null);
+    updateScrollbarMetrics();
+    setIsScrolling(true);
+    if (scrollFadeTimerRef.current) {
+      clearTimeout(scrollFadeTimerRef.current);
+    }
+    scrollFadeTimerRef.current = setTimeout(() => {
+      scrollFadeTimerRef.current = null;
+      setIsScrolling(false);
+    }, 650);
+  };
+
+  const handleScrollbarPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !listRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setTooltip(null);
+
+    const listEl = listRef.current;
+    const scrollHeight = listEl.scrollHeight || 0;
+    const clientHeight = listEl.clientHeight || 0;
+    const maxScrollTop = scrollHeight - clientHeight;
+    if (clientHeight <= 0 || maxScrollTop <= 1) return;
+
+    const trackHeight = Math.max(MIN_THUMB_HEIGHT_PX, clientHeight - 6);
+    const thumbHeight = Math.max(
+      MIN_THUMB_HEIGHT_PX,
+      Math.min(trackHeight, Math.round((clientHeight / scrollHeight) * trackHeight))
+    );
+    const maxThumbTop = Math.max(1, trackHeight - thumbHeight);
+
+    if (e.target !== scrollThumbRef.current && scrollTrackRef.current) {
+      const trackRect = scrollTrackRef.current.getBoundingClientRect();
+      const trackTop = trackRect.height > 0 ? trackRect.top : 0;
+      const clickOffsetY = e.clientY - trackTop - thumbHeight / 2;
+      const targetRatio = Math.max(0, Math.min(1, clickOffsetY / maxThumbTop));
+      listEl.scrollTop = targetRatio * maxScrollTop;
+      updateScrollbarMetrics();
+    }
+
+    const startY = e.clientY;
+    const startScrollTop = listEl.scrollTop;
+
+    scrollbarDragCleanupRef.current?.();
+    isDraggingScrollbarRef.current = true;
+    setIsDraggingScrollbar(true);
+
+    try {
+      scrollTrackRef.current?.setPointerCapture?.(e.pointerId);
+    } catch {
+      // ignore
+    }
+
+    const handlePointerMove = (ev: PointerEvent) => {
+      if (!isDraggingScrollbarRef.current || !listRef.current) return;
+      const curEl = listRef.current;
+      const curScrollHeight = curEl.scrollHeight || 0;
+      const curClientHeight = curEl.clientHeight || 0;
+      const curMaxScrollTop = Math.max(1, curScrollHeight - curClientHeight);
+      const curTrackHeight = Math.max(MIN_THUMB_HEIGHT_PX, curClientHeight - 6);
+      const curThumbHeight = Math.max(
+        MIN_THUMB_HEIGHT_PX,
+        Math.min(curTrackHeight, Math.round((curClientHeight / curScrollHeight) * curTrackHeight))
+      );
+      const curMaxThumbTop = Math.max(1, curTrackHeight - curThumbHeight);
+      const deltaY = ev.clientY - startY;
+      curEl.scrollTop = Math.max(
+        0,
+        Math.min(curMaxScrollTop, startScrollTop + (deltaY / curMaxThumbTop) * curMaxScrollTop)
+      );
+      updateScrollbarMetrics();
+    };
+
+    const stopDrag = () => {
+      if (!isDraggingScrollbarRef.current) return;
+      isDraggingScrollbarRef.current = false;
+      scrollbarDragCleanupRef.current = null;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopDrag);
+      window.removeEventListener('pointercancel', stopDrag);
+      setIsDraggingScrollbar(false);
+      if (mode === 'hover' && !isPointerInRailRef.current && openFolder === null) {
+        handleScheduleCollapseHover();
+      }
+    };
+
+    scrollbarDragCleanupRef.current = () => {
+      isDraggingScrollbarRef.current = false;
+      scrollbarDragCleanupRef.current = null;
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', stopDrag);
+      window.removeEventListener('pointercancel', stopDrag);
+      setIsDraggingScrollbar(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', stopDrag);
+    window.addEventListener('pointercancel', stopDrag);
+  };
+
   const showTip = (el: HTMLElement, text: string) => {
     const rect = el.getBoundingClientRect();
     setTooltip({ text, top: rect.top + rect.height / 2 });
   };
 
-  const renderRailBookmarkBtn = (item: EdgeQuickAccessItem) => {
+  const renderRailBookmarkBtn = (
+    item: EdgeQuickAccessItem,
+    section: 'quick-access' | 'space'
+  ) => {
     const src = item.faviconDataUrl || getFaviconUrl(item.url, 48);
     const hasImg = Boolean(src) && !failedFavicons[item.id];
     let tipText = item.title || item.url;
@@ -400,6 +897,9 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
       <button
         key={item.id}
         type="button"
+        data-section={section}
+        data-bookmark-id={item.id}
+        data-active={item.isActive ? 'true' : 'false'}
         aria-label={item.title || item.url}
         onClick={() => handleBookmarkClick(item.id, false)}
         onDoubleClick={(e) => {
@@ -452,6 +952,9 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
       <button
         key={folder.id}
         type="button"
+        data-section="space"
+        data-folder-id={folder.id}
+        data-active={folder.hasActiveChild ? 'true' : 'false'}
         aria-label={folder.title}
         aria-expanded={isFlyoutOpen}
         onClick={(e) => {
@@ -493,6 +996,81 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
         )}
         {folder.hasOpenChild && !folder.hasActiveChild && (
           <span className="absolute bottom-[2px] left-1/2 -translate-x-1/2 w-[3.5px] h-[3.5px] rounded-full bg-zinc-400/85 pointer-events-none" />
+        )}
+      </button>
+    );
+  };
+
+  const renderRailTodayTabBtn = (item: EdgeTodayTabItem) => {
+    const faviconKey = `today:${item.tabId}`;
+    const src = item.faviconDataUrl || getFaviconUrl(item.url, 48);
+    const hasImg = Boolean(src) && !failedFavicons[faviconKey];
+    const baseLabel = item.title || item.url;
+    const tipText = item.isDiscarded ? `${baseLabel} · Sleeping` : baseLabel;
+    const dimContent = item.isDiscarded && !item.isActive;
+
+    return (
+      <button
+        key={faviconKey}
+        type="button"
+        data-section="today"
+        data-tab-id={item.tabId}
+        data-active={item.isActive ? 'true' : 'false'}
+        data-discarded={item.isDiscarded ? 'true' : 'false'}
+        aria-label={baseLabel}
+        onMouseDown={(e) => {
+          if (e.button === 1) e.preventDefault();
+        }}
+        onAuxClick={(e) => {
+          if (e.button === 1) {
+            e.preventDefault();
+            e.stopPropagation();
+            handleTodayTabClose(item.tabId);
+          }
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          handleTodayTabClick(item.tabId, false);
+        }}
+        onDoubleClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          handleTodayTabClick(item.tabId, true);
+        }}
+        onMouseEnter={(e) => showTip(e.currentTarget, tipText)}
+        onMouseLeave={() => setTooltip(null)}
+        className={`relative w-7 h-7 rounded-lg flex items-center justify-center shrink-0 transition-all active:scale-95 cursor-pointer ${
+          item.isActive
+            ? 'theme-active-card'
+            : 'bg-black/[0.04] dark:bg-white/[0.06] hover:bg-black/[0.09] dark:hover:bg-white/[0.13]'
+        }`}
+      >
+        {item.isActive && (
+          <span
+            style={{ [isLeft ? 'left' : 'right']: -4 }}
+            className="absolute top-1/2 -translate-y-1/2 w-[2.5px] h-3.5 rounded-full theme-active-indicator pointer-events-none"
+          />
+        )}
+        {hasImg ? (
+          <img
+            src={src}
+            alt=""
+            onError={() => setFailedFavicons((prev) => ({ ...prev, [faviconKey]: true }))}
+            className={`w-4 h-4 rounded-[4px] object-contain pointer-events-none ${
+              dimContent ? 'opacity-50' : ''
+            }`}
+          />
+        ) : (
+          <span
+            className={`w-[17px] h-[17px] rounded-[4px] text-[10px] font-bold flex items-center justify-center bg-black/5 dark:bg-white/10 text-zinc-700 dark:text-zinc-200 pointer-events-none ${
+              dimContent ? 'opacity-50' : ''
+            }`}
+          >
+            {getMonogram(item.title, item.url)}
+          </span>
+        )}
+        {item.isAudible && !item.isMuted && (
+          <span className="absolute top-[3px] right-[3px] w-[5px] h-[5px] rounded-full bg-emerald-400 pointer-events-none" />
         )}
       </button>
     );
@@ -593,6 +1171,25 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
 
   const hasQa = quickAccessItems.length > 0;
   const hasSpace = spaceItems.length > 0;
+  const hasToday = todayTabItems.length > 0;
+
+  const listMaskImage =
+    scrollMetrics.canScrollUp && scrollMetrics.canScrollDown
+      ? 'linear-gradient(to bottom, transparent 0px, #000 12px, #000 calc(100% - 14px), transparent 100%)'
+      : scrollMetrics.canScrollUp
+      ? 'linear-gradient(to bottom, transparent 0px, #000 12px, #000 100%)'
+      : scrollMetrics.canScrollDown
+      ? 'linear-gradient(to bottom, #000 0px, #000 calc(100% - 14px), transparent 100%)'
+      : undefined;
+
+  const isThumbActive = isTrackHovered || isDraggingScrollbar;
+  const trackOpacity = !scrollMetrics.isScrollable
+    ? 0
+    : isThumbActive
+    ? 0.96
+    : isRailHovered || isScrolling
+    ? 0.78
+    : 0.38;
 
   return (
     <>
@@ -619,8 +1216,16 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
         data-mode={mode}
         data-expanded={isExpanded ? 'true' : 'false'}
         aria-label="Arctic Quick Access Bar"
-        onMouseEnter={mode === 'hover' ? handleExpandHover : undefined}
-        onMouseLeave={mode === 'hover' ? handleScheduleCollapseHover : undefined}
+        onMouseEnter={() => {
+          isPointerInRailRef.current = true;
+          setIsRailHovered(true);
+          if (mode === 'hover') handleExpandHover();
+        }}
+        onMouseLeave={() => {
+          isPointerInRailRef.current = false;
+          setIsRailHovered(false);
+          if (mode === 'hover') handleScheduleCollapseHover();
+        }}
         onClick={() => {
           if (openFolder) setOpenFolder(null);
         }}
@@ -649,7 +1254,8 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
                 ? 'translateX(-100%)'
                 : 'translateX(100%)'
               : 'translateX(0)',
-          pointerEvents: mode === 'hover' && !isExpanded ? 'none' : 'auto',
+          pointerEvents:
+            effectiveHoldOpen || (mode === 'hover' && !isExpanded) ? 'none' : 'auto',
           transition: 'transform 150ms cubic-bezier(0.22, 1, 0.36, 1)',
           userSelect: 'none'
         }}
@@ -682,30 +1288,102 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
           </svg>
         </button>
 
-        {(hasQa || hasSpace) && (
+        {(hasQa || hasSpace || hasToday) && (
           <>
             <div
               style={{ backgroundColor: 'var(--theme-border-subtle)' }}
               className="w-[18px] h-px my-1.5 shrink-0"
             />
-            <div
-              onScroll={() => setTooltip(null)}
-              className="flex flex-col items-center gap-[5px] w-full flex-1 overflow-y-auto overflow-x-hidden pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            >
-              {quickAccessItems.map((item) => renderRailBookmarkBtn(item))}
+            <div className="relative flex flex-col flex-1 min-h-0 w-[calc(100%+8px)] -mx-1 overflow-hidden">
+              <div
+                ref={listRef}
+                data-testid="newtab-edge-scroll-list"
+                data-can-scroll-up={scrollMetrics.canScrollUp ? 'true' : 'false'}
+                data-can-scroll-down={scrollMetrics.canScrollDown ? 'true' : 'false'}
+                onScroll={handleListScroll}
+                style={{
+                  WebkitMaskImage: listMaskImage,
+                  maskImage: listMaskImage
+                }}
+                className="flex flex-col items-center gap-[5px] w-full flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-1 pt-[1px] pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                {quickAccessItems.map((item) => renderRailBookmarkBtn(item, 'quick-access'))}
 
-              {hasQa && hasSpace && (
+                {hasQa && hasSpace && (
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    style={{ backgroundColor: 'var(--theme-border-subtle)' }}
+                    className="w-[20px] h-px my-1 shrink-0"
+                  />
+                )}
+
+                {spaceItems.map((node) =>
+                  node.type === 'bookmark'
+                    ? renderRailBookmarkBtn(node, 'space')
+                    : renderRailFolderBtn(node)
+                )}
+
+                {(hasQa || hasSpace) && hasToday && (
+                  <div
+                    role="separator"
+                    aria-orientation="horizontal"
+                    style={{ backgroundColor: 'var(--theme-border-subtle)' }}
+                    className="w-[20px] h-px my-1 shrink-0"
+                  />
+                )}
+
+                {todayTabItems.map((tab) => renderRailTodayTabBtn(tab))}
+              </div>
+
+              <div
+                ref={scrollTrackRef}
+                data-testid="newtab-edge-scroll-track"
+                data-scrollable={scrollMetrics.isScrollable ? 'true' : 'false'}
+                data-scrolling={isScrolling ? 'true' : 'false'}
+                data-dragging={isDraggingScrollbar ? 'true' : 'false'}
+                aria-hidden="true"
+                onMouseEnter={() => setIsTrackHovered(true)}
+                onMouseLeave={() => setIsTrackHovered(false)}
+                onClick={(e) => e.stopPropagation()}
+                onPointerDown={handleScrollbarPointerDown}
+                style={{
+                  position: 'absolute',
+                  top: 2,
+                  bottom: 4,
+                  width: 6,
+                  [isLeft ? 'right' : 'left']: 0,
+                  justifyContent: isLeft ? 'flex-end' : 'flex-start',
+                  zIndex: 4,
+                  display: 'flex',
+                  padding: '0 1px',
+                  boxSizing: 'border-box',
+                  cursor: 'pointer',
+                  touchAction: 'none',
+                  opacity: trackOpacity,
+                  pointerEvents: scrollMetrics.isScrollable ? 'auto' : 'none',
+                  transition: 'opacity 150ms ease'
+                }}
+              >
                 <div
-                  role="separator"
-                  aria-orientation="horizontal"
-                  style={{ backgroundColor: 'var(--theme-border-subtle)' }}
-                  className="w-[20px] h-px my-1 shrink-0"
+                  ref={scrollThumbRef}
+                  data-testid="newtab-edge-scroll-thumb"
+                  style={{
+                    width: isThumbActive ? 4 : 2.5,
+                    height: scrollMetrics.thumbHeight,
+                    minHeight: scrollMetrics.isScrollable ? MIN_THUMB_HEIGHT_PX : 0,
+                    borderRadius: 99,
+                    background: isThumbActive
+                      ? 'var(--theme-indicator)'
+                      : effectiveTheme === 'dark'
+                      ? 'rgba(255, 255, 255, 0.42)'
+                      : 'rgba(63, 63, 70, 0.48)',
+                    transform: `translateY(${scrollMetrics.thumbTop}px)`,
+                    transition: 'width 120ms ease, background 120ms ease',
+                    willChange: 'transform, height'
+                  }}
                 />
-              )}
-
-              {spaceItems.map((node) =>
-                node.type === 'bookmark' ? renderRailBookmarkBtn(node) : renderRailFolderBtn(node)
-              )}
+              </div>
             </div>
           </>
         )}

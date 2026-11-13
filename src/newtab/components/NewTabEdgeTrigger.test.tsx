@@ -270,4 +270,167 @@ describe('NewTabEdgeTrigger component', () => {
     });
     expect(document.documentElement.style.paddingLeft).toBe('');
   });
+
+  it('renders Today Tabs with click, double-click, and middle-click close, and supports Option A overlay scrollbar drag without collapsing hover mode', async () => {
+    mockChrome.__setLocalStorage({
+      edgeTriggerEnabled: true,
+      edgeTriggerMode: 'hover',
+      sidebarDockSide: 'left'
+    });
+    mockChrome.__setSessionStorage({ openSidePanelWindowIds: [] });
+
+    mockChrome.runtime.onMessage.addListener(
+      (
+        msg: unknown,
+        _sender: chrome.runtime.MessageSender,
+        sendResponse: (resp?: unknown) => void
+      ) => {
+        const m = msg as { type?: string };
+        if (m?.type === 'GET_EDGE_TRIGGER_STATE') {
+          sendResponse({
+            windowId: 10,
+            openWindowIds: [],
+            edgeTriggerEnabled: true,
+            side: 'left',
+            mode: 'hover',
+            quickAccessItems: [
+              {
+                id: 'qa-gh',
+                title: 'GitHub',
+                url: 'https://github.com',
+                faviconDataUrl: '',
+                isActive: false,
+                isOpen: false,
+                isNavigatedAway: false
+              }
+            ],
+            spaceItems: [],
+            todayTabItems: [
+              {
+                tabId: 501,
+                title: 'Arctic PR Review',
+                url: 'https://github.com/org/repo/pull/20',
+                faviconDataUrl: '',
+                isActive: true,
+                isDiscarded: false,
+                isAudible: true,
+                isMuted: false
+              },
+              {
+                tabId: 502,
+                title: 'Design Notes',
+                url: 'https://notion.so/design',
+                faviconDataUrl: '',
+                isActive: false,
+                isDiscarded: true,
+                isAudible: false,
+                isMuted: false
+              }
+            ]
+          });
+        }
+      }
+    );
+
+    const winIdRef = { current: 10 } as React.MutableRefObject<number | null>;
+    render(<NewTabEdgeTrigger theme="dark" colorTheme="glacier-blue" windowIdRef={winIdRef} />);
+
+    const sensor = await screen.findByTestId('newtab-edge-hover-sensor');
+    await act(async () => {
+      fireEvent.mouseEnter(sensor);
+    });
+
+    const rail = screen.getByTestId('newtab-edge-trigger');
+    expect(rail).toHaveAttribute('data-expanded', 'true');
+
+    const prTabBtn = screen.getByLabelText('Arctic PR Review');
+    const notesTabBtn = screen.getByLabelText('Design Notes');
+    expect(prTabBtn).toHaveAttribute('data-section', 'today');
+    expect(notesTabBtn).toHaveAttribute('data-discarded', 'true');
+
+    // Click -> activates Today tab
+    mockChrome.runtime.sendMessage.mockClear();
+    await act(async () => {
+      fireEvent.click(notesTabBtn);
+    });
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'ACTIVATE_TODAY_TAB_FROM_EDGE',
+      tabId: 502,
+      windowId: 10,
+      forceReload: false
+    });
+
+    // Double-click -> activates & reloads Today tab
+    mockChrome.runtime.sendMessage.mockClear();
+    await act(async () => {
+      fireEvent.doubleClick(prTabBtn);
+    });
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'ACTIVATE_TODAY_TAB_FROM_EDGE',
+      tabId: 501,
+      windowId: 10,
+      forceReload: true
+    });
+
+    // Middle-click (auxClick button=1) -> closes Today tab
+    mockChrome.runtime.sendMessage.mockClear();
+    await act(async () => {
+      fireEvent(
+        notesTabBtn,
+        new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true })
+      );
+    });
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'CLOSE_TODAY_TAB_FROM_EDGE',
+      tabId: 502,
+      windowId: 10
+    });
+
+    // Mock vertical overflow on scroll list for Option A overlay scrollbar
+    const list = screen.getByTestId('newtab-edge-scroll-list');
+    const track = screen.getByTestId('newtab-edge-scroll-track');
+    const thumb = screen.getByTestId('newtab-edge-scroll-thumb');
+
+    let currentScrollTop = 0;
+    Object.defineProperty(list, 'scrollHeight', { configurable: true, get: () => 600 });
+    Object.defineProperty(list, 'clientHeight', { configurable: true, get: () => 200 });
+    Object.defineProperty(list, 'scrollTop', {
+      configurable: true,
+      get: () => currentScrollTop,
+      set: (val: number) => {
+        currentScrollTop = val;
+      }
+    });
+
+    await act(async () => {
+      fireEvent.scroll(list);
+    });
+    expect(track).toHaveAttribute('data-scrollable', 'true');
+    expect(list).toHaveAttribute('data-can-scroll-up', 'false');
+    expect(list).toHaveAttribute('data-can-scroll-down', 'true');
+
+    // Drag thumb and move cursor well past 40px hover zone -> scrollTop updates and rail stays expanded
+    await act(async () => {
+      fireEvent.pointerDown(thumb, { button: 0, clientX: 34, clientY: 20 });
+    });
+    expect(track).toHaveAttribute('data-dragging', 'true');
+
+    await act(async () => {
+      fireEvent.pointerMove(window, { clientX: 180, clientY: 95 });
+      fireEvent.mouseMove(window, { clientX: 180, clientY: 95 });
+      await new Promise((r) => setTimeout(r, 200));
+    });
+
+    expect(currentScrollTop).toBeGreaterThan(100);
+    expect(list).toHaveAttribute('data-can-scroll-up', 'true');
+    expect(rail).toHaveAttribute('data-expanded', 'true');
+
+    // Release pointer outside rail -> collapses after hover timeout
+    await act(async () => {
+      fireEvent.pointerUp(window, { clientX: 180, clientY: 95 });
+      await new Promise((r) => setTimeout(r, 200));
+    });
+    expect(track).toHaveAttribute('data-dragging', 'false');
+    expect(rail).toHaveAttribute('data-expanded', 'false');
+  });
 });

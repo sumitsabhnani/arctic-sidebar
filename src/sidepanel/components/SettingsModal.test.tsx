@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { SettingsModal } from './SettingsModal';
+import { mockChrome } from '../../test/setup';
 
 describe('SettingsModal component', () => {
   const defaultProps = {
@@ -39,13 +40,14 @@ describe('SettingsModal component', () => {
   });
 
   it('renders settings sections when isOpen is true', () => {
-    render(<SettingsModal {...defaultProps} />);
+    const { container } = render(<SettingsModal {...defaultProps} />);
     expect(screen.getByText('Settings & Appearance')).toBeInTheDocument();
     expect(screen.getByText('Theme & Appearance')).toBeInTheDocument();
     expect(screen.getByText('Quick Access Density')).toBeInTheDocument();
     expect(screen.getByText('Tabs Density')).toBeInTheDocument();
     expect(screen.getByText('Memory Saver Status Bar')).toBeInTheDocument();
     expect(screen.getByText('Folder Mapping')).toBeInTheDocument();
+    expect(container.querySelector('.max-h-\\[60vh\\]')).not.toBeNull();
   });
 
   it('allows toggling dark and light mode', () => {
@@ -158,5 +160,50 @@ describe('SettingsModal component', () => {
     const pushBtn = screen.getByRole('button', { name: 'Push Page (No overlap)' });
     fireEvent.click(pushBtn);
     expect(onChangeEdgeTriggerMode).toHaveBeenCalledWith('push');
+  });
+
+  it('displays live Sidebar Toggle Shortcut from chrome.commands, opens chrome://extensions/shortcuts, and updates on focus', async () => {
+    mockChrome.__setCommands([
+      { name: '_execute_action', description: 'Toggle Arctic Sidebar', shortcut: '' }
+    ]);
+
+    render(<SettingsModal {...defaultProps} />);
+
+    // Initially unset -> shows 'Not set' badge and 'Set Shortcut' button
+    const badge = await screen.findByTestId('sidebar-shortcut-badge');
+    expect(badge).toHaveTextContent('Not set');
+
+    const setShortcutBtn = screen.getByRole('button', { name: /Set Shortcut/i });
+    await act(async () => {
+      fireEvent.click(setShortcutBtn);
+      await new Promise((r) => setTimeout(r, 15));
+    });
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'chrome://extensions/shortcuts' });
+
+    // User sets custom shortcut in Chrome Shortcuts page and focuses back -> badge updates live
+    mockChrome.__setCommands([
+      { name: '_execute_action', description: 'Toggle Arctic Sidebar', shortcut: '⌘⇧E' }
+    ]);
+    await act(async () => {
+      fireEvent.focus(window);
+      await new Promise((r) => setTimeout(r, 15));
+    });
+
+    expect(screen.getByTestId('sidebar-shortcut-badge')).toHaveTextContent('⌘⇧E');
+    expect(screen.getByRole('button', { name: /Change Shortcut/i })).toBeInTheDocument();
+
+    // If chrome://extensions/shortcuts tab is already open in window, focuses it instead of opening a duplicate
+    mockChrome.__setTabs([
+      { id: 77, windowId: 10, url: 'chrome://extensions/shortcuts', active: false } as chrome.tabs.Tab
+    ]);
+    vi.mocked(chrome.tabs.create).mockClear();
+    vi.mocked(chrome.tabs.update).mockClear();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Change Shortcut/i }));
+      await new Promise((r) => setTimeout(r, 15));
+    });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(chrome.tabs.update).toHaveBeenCalledWith(77, { active: true });
   });
 });

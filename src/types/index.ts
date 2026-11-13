@@ -64,6 +64,7 @@ export interface LocalSettings {
   collapsedFolderIds?: Record<string, boolean>; // Stored in chrome.storage.local for permanence
   autoArchiveInterval?: 'never' | '12h' | '24h' | '7d';
   tabOpenedAt?: Record<number, number>;
+  tabSpaceByTabId?: Record<number, string>;
   persistedBindingsByBookmarkId?: Record<string, PersistedTabBinding>;
   theme?: ThemeMode;
   colorTheme?: ColorThemeId;
@@ -119,9 +120,21 @@ export interface EdgeFolderNode {
 
 export type EdgeSpaceNode = EdgeBookmarkNode | EdgeFolderNode;
 
+export interface EdgeTodayTabItem {
+  tabId: number;
+  title: string;
+  url: string;
+  faviconDataUrl: string;
+  isActive: boolean;
+  isDiscarded?: boolean;
+  isAudible?: boolean;
+  isMuted?: boolean;
+}
+
 export interface EdgeRailData {
   quickAccessItems: EdgeQuickAccessItem[];
   spaceItems: EdgeSpaceNode[];
+  todayTabItems: EdgeTodayTabItem[];
   spaceName: string;
 }
 

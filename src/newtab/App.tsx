@@ -644,6 +644,18 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
           showToast('Opened Arctic Settings');
         }
       },
+      {
+        id: 'cmd-customize-shortcut',
+        type: 'command',
+        title: 'Customize Sidebar Keyboard Shortcut',
+        description: 'Change the keyboard shortcut for toggling Arctic Sidebar',
+        commandCategory: 'Settings',
+        icon: <Command className="w-4 h-4 text-cyan-400" />,
+        action: async () => {
+          await chrome?.tabs?.create?.({ url: 'chrome://extensions/shortcuts' });
+          showToast('Opened Chrome Extension Shortcuts');
+        }
+      },
       // 2. Theme Toggle & System Theme
       {
         id: 'cmd-toggle-theme',
