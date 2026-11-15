@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { QuickAccessGrid } from './QuickAccessGrid';
-import type { TabBinding } from '../../types';
+import type { TabBinding, TabWithFaviconMeta } from '../../types';
+import { getFaviconCacheKey, upsertCachedFaviconEntries } from '../utils/faviconCache';
 
 describe('QuickAccessGrid component', () => {
   const mockBookmarks: chrome.bookmarks.BookmarkTreeNode[] = [
@@ -152,5 +153,178 @@ describe('QuickAccessGrid component', () => {
     expect(faviconImg?.getAttribute('src')).toContain(
       encodeURIComponent('https://docs.google.com/document/')
     );
+  });
+
+  it('falls back to persisted cached favicon on slow/failed boundTab.favIconUrl instead of showing Globe, and skips blocked chrome:// icon URLs', async () => {
+    const bmUrl = 'https://dashboard.acme.com';
+    const cachedDataUrl = 'data:image/png;base64,PERSISTED_ACME_ICON';
+    await act(async () => {
+      await upsertCachedFaviconEntries({
+        [getFaviconCacheKey(bmUrl)]: {
+          dataUrl: cachedDataUrl,
+          pageUrl: bmUrl,
+          updatedAt: Date.now()
+        }
+      });
+    });
+
+    const bookmarks: chrome.bookmarks.BookmarkTreeNode[] = [
+      { id: 'qa-acme', title: 'Acme', url: bmUrl, index: 0 }
+    ];
+    const bindings: Record<string, TabBinding> = {
+      'qa-acme': {
+        bookmarkId: 'qa-acme',
+        tabId: 301,
+        windowId: 1,
+        originalUrl: bmUrl,
+        currentUrl: bmUrl,
+        currentTitle: 'Acme',
+        isNavigatedAway: false
+      }
+    };
+
+    // 1. Blocked chrome:// error icon scheme is skipped immediately in favor of persisted dataUrl
+    const { container, rerender } = render(
+      <QuickAccessGrid
+        {...defaultProps}
+        bookmarks={bookmarks}
+        bindingsByBookmarkId={bindings}
+        tabsByTabId={{
+          301: {
+            id: 301,
+            url: bmUrl,
+            title: 'Acme',
+            status: 'complete',
+            favIconUrl: 'chrome://theme/IDR_ERROR_NETWORK_GENERIC'
+          } as chrome.tabs.Tab
+        }}
+      />
+    );
+
+    let img = container.querySelector('img');
+    expect(img).toBeInTheDocument();
+    expect(img?.getAttribute('src')).toBe(cachedDataUrl);
+    expect(container.querySelector('svg.lucide-globe')).not.toBeInTheDocument();
+
+    // 2. Live https favIconUrl times out / fails onError -> steps to persisted cachedDataUrl instead of Globe
+    rerender(
+      <QuickAccessGrid
+        {...defaultProps}
+        bookmarks={bookmarks}
+        bindingsByBookmarkId={bindings}
+        tabsByTabId={{
+          301: {
+            id: 301,
+            url: bmUrl,
+            title: 'Acme',
+            status: 'complete',
+            favIconUrl: 'https://dashboard.acme.com/favicon.ico'
+          } as chrome.tabs.Tab
+        }}
+      />
+    );
+
+    img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toBe('https://dashboard.acme.com/favicon.ico');
+
+    fireEvent.error(img!);
+
+    img = container.querySelector('img');
+    expect(img).toBeInTheDocument();
+    expect(img?.getAttribute('src')).toBe(cachedDataUrl);
+    expect(container.querySelector('svg.lucide-globe')).not.toBeInTheDocument();
+  });
+
+  it('recovers Quick Access favicon on reload even when favIconUrl has the exact same URL string that failed earlier', () => {
+    const bmUrl = 'https://slow-app.example.com';
+    const liveIconUrl = 'https://slow-app.example.com/favicon.png';
+    const bookmarks: chrome.bookmarks.BookmarkTreeNode[] = [
+      { id: 'qa-slow', title: 'Slow App', url: bmUrl, index: 0 }
+    ];
+    const bindings: Record<string, TabBinding> = {
+      'qa-slow': {
+        bookmarkId: 'qa-slow',
+        tabId: 401,
+        windowId: 1,
+        originalUrl: bmUrl,
+        currentUrl: bmUrl,
+        currentTitle: 'Slow App',
+        isNavigatedAway: false
+      }
+    };
+
+    const { container, rerender } = render(
+      <QuickAccessGrid
+        {...defaultProps}
+        bookmarks={bookmarks}
+        bindingsByBookmarkId={bindings}
+        tabsByTabId={{
+          401: {
+            id: 401,
+            url: bmUrl,
+            title: 'Slow App',
+            status: 'complete',
+            favIconUrl: liveIconUrl,
+            _faviconRev: 1
+          } as TabWithFaviconMeta
+        }}
+      />
+    );
+
+    // Initial slow reopen: both liveIconUrl and /_favicon/ fail -> renders Globe
+    let img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toBe(liveIconUrl);
+    fireEvent.error(img!);
+
+    img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toContain('/_favicon/');
+    fireEvent.error(img!);
+
+    expect(container.querySelector('img')).not.toBeInTheDocument();
+    expect(container.querySelector('svg.lucide-globe')).toBeInTheDocument();
+
+    // User reloads the tab: status transitions loading -> complete with bumped _faviconRev and the SAME liveIconUrl
+    rerender(
+      <QuickAccessGrid
+        {...defaultProps}
+        bookmarks={bookmarks}
+        bindingsByBookmarkId={bindings}
+        tabsByTabId={{
+          401: {
+            id: 401,
+            url: bmUrl,
+            title: 'Slow App',
+            status: 'loading',
+            favIconUrl: liveIconUrl,
+            _faviconRev: 2
+          } as TabWithFaviconMeta
+        }}
+      />
+    );
+    expect(container.querySelector('svg.lucide-rotate-cw.animate-spin')).toBeInTheDocument();
+
+    rerender(
+      <QuickAccessGrid
+        {...defaultProps}
+        bookmarks={bookmarks}
+        bindingsByBookmarkId={bindings}
+        tabsByTabId={{
+          401: {
+            id: 401,
+            url: bmUrl,
+            title: 'Slow App',
+            status: 'complete',
+            favIconUrl: liveIconUrl,
+            _faviconRev: 3
+          } as TabWithFaviconMeta
+        }}
+      />
+    );
+
+    // Icon recovers instead of staying permanently stuck on Globe!
+    const recoveredImg = container.querySelector('img');
+    expect(recoveredImg).toBeInTheDocument();
+    expect(recoveredImg?.getAttribute('src')).toBe(liveIconUrl);
+    expect(container.querySelector('svg.lucide-globe')).not.toBeInTheDocument();
   });
 });

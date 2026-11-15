@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { NewTabEdgeTrigger } from './NewTabEdgeTrigger';
 import { mockChrome } from '../../test/setup';
@@ -432,5 +432,100 @@ describe('NewTabEdgeTrigger component', () => {
     });
     expect(track).toHaveAttribute('data-dragging', 'false');
     expect(rail).toHaveAttribute('data-expanded', 'false');
+  });
+
+  it('falls back from a failed faviconDataUrl to /_favicon/ and recovers when ARCTIC_EDGE_ITEMS_UPDATED delivers a fresh faviconDataUrl', async () => {
+    mockChrome.__setLocalStorage({
+      edgeTriggerEnabled: true,
+      edgeTriggerMode: 'push',
+      sidebarDockSide: 'left'
+    });
+    mockChrome.__setSessionStorage({ openSidePanelWindowIds: [] });
+
+    let runtimeMessageListener: ((msg: unknown) => void) | null = null;
+    const origAddListener = mockChrome.runtime.onMessage.addListener;
+    mockChrome.runtime.onMessage.addListener = vi.fn((fn: any) => {
+      runtimeMessageListener = fn;
+      return origAddListener(fn);
+    }) as any;
+
+    try {
+      mockChrome.runtime.onMessage.addListener(
+        (
+          msg: unknown,
+          _sender: chrome.runtime.MessageSender,
+          sendResponse: (resp?: unknown) => void
+        ) => {
+          const m = msg as { type?: string };
+          if (m?.type === 'GET_EDGE_TRIGGER_STATE') {
+            sendResponse({
+              windowId: 10,
+              openWindowIds: [],
+              edgeTriggerEnabled: true,
+              side: 'left',
+              mode: 'push',
+              quickAccessItems: [
+                {
+                  id: 'qa-app',
+                  title: 'Acme Portal',
+                  url: 'https://portal.acme.com',
+                  faviconDataUrl: 'data:image/png;base64,CORRUPT_INITIAL',
+                  isActive: false,
+                  isOpen: true,
+                  isNavigatedAway: false
+                }
+              ],
+              spaceItems: [],
+              todayTabItems: []
+            });
+          }
+        }
+      );
+
+      const winIdRef = { current: 10 } as React.MutableRefObject<number | null>;
+      render(<NewTabEdgeTrigger theme="dark" colorTheme="glacier-blue" windowIdRef={winIdRef} />);
+
+      const btn = await screen.findByLabelText('Acme Portal');
+      let img = btn.querySelector('img');
+      expect(img?.getAttribute('src')).toBe('data:image/png;base64,CORRUPT_INITIAL');
+
+      // 1. Initial dataUrl fails -> steps to /_favicon/ fallback instead of locking onto monogram
+      fireEvent.error(img!);
+      img = btn.querySelector('img');
+      expect(img).toBeInTheDocument();
+      expect(img?.getAttribute('src')).toContain('/_favicon/');
+
+      // 2. /_favicon/ also fails -> shows monogram 'A'
+      fireEvent.error(img!);
+      expect(btn.querySelector('img')).not.toBeInTheDocument();
+      expect(btn.textContent).toContain('A');
+
+      // 3. Reload finishes in background -> ARCTIC_EDGE_ITEMS_UPDATED delivers verified dataUrl -> recovers!
+      await act(async () => {
+        runtimeMessageListener?.({
+          type: 'ARCTIC_EDGE_ITEMS_UPDATED',
+          windowId: 10,
+          quickAccessItems: [
+            {
+              id: 'qa-app',
+              title: 'Acme Portal',
+              url: 'https://portal.acme.com',
+              faviconDataUrl: 'data:image/png;base64,RECOVERED_REAL_ICON',
+              isActive: true,
+              isOpen: true,
+              isNavigatedAway: false
+            }
+          ],
+          spaceItems: [],
+          todayTabItems: []
+        });
+      });
+
+      img = btn.querySelector('img');
+      expect(img).toBeInTheDocument();
+      expect(img?.getAttribute('src')).toBe('data:image/png;base64,RECOVERED_REAL_ICON');
+    } finally {
+      mockChrome.runtime.onMessage.addListener = origAddListener;
+    }
   });
 });

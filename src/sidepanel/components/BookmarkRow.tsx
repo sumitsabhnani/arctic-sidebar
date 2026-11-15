@@ -20,8 +20,8 @@ import {
   Bell,
   PinOff
 } from 'lucide-react';
-import type { TabBinding, SpaceItem, TabReminder } from '../../types';
-import { getFaviconUrl } from '../utils/url';
+import type { TabBinding, SpaceItem, TabReminder, TabWithFaviconMeta } from '../../types';
+import { useResolvedFavicon } from '../utils/faviconCache';
 import {
   attachMultiDragPreview,
   endDragSession,
@@ -130,7 +130,6 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onSaveRename,
   onCancelRename
 }) => {
-  const [faviconError, setFaviconError] = useState(false);
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
@@ -165,7 +164,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     tooltip += '\n(Sleeping to save memory - click to wake)';
   }
 
-  const faviconSrc = boundTab?.favIconUrl || (bookmark.url ? getFaviconUrl(bookmark.url, 32) : '');
+  const { faviconSrc, handleFaviconError, handleFaviconLoad } = useResolvedFavicon({
+    pageUrl: bookmark.url,
+    tab: boundTab as TabWithFaviconMeta | undefined,
+    size: 32
+  });
 
   const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
 
@@ -626,12 +629,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           <div className="relative w-4 h-4 flex items-center justify-center pointer-events-none">
             {isBoundTabLoading ? (
               <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text flex-shrink-0" />
-            ) : !faviconError && faviconSrc ? (
+            ) : faviconSrc ? (
               <img
                 src={faviconSrc}
                 alt=""
                 draggable={false}
-                onError={() => setFaviconError(true)}
+                onError={handleFaviconError}
+                onLoad={handleFaviconLoad}
                 className={`w-4 h-4 object-contain rounded-sm transition-opacity duration-150 ${
                   isNavAway && isHoveringFavicon ? 'opacity-0' : 'opacity-100'
                 } ${isDiscarded ? 'opacity-60 grayscale' : ''}`}

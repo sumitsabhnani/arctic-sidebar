@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { OpenTabRow } from './OpenTabRow';
+import type { TabWithFaviconMeta } from '../../types';
 
 function createBaseProps(overrides: Partial<React.ComponentProps<typeof OpenTabRow>> = {}) {
   const tab: chrome.tabs.Tab = {
@@ -223,5 +224,51 @@ describe('OpenTabRow Component', () => {
       }
     });
     expect(onMoveOpenTabs).toHaveBeenCalledWith([10], 4);
+  });
+
+  it('recovers OpenTabRow favicon on reload after transient load error with identical favIconUrl', () => {
+    const iconUrl = 'https://github.githubassets.com/favicons/favicon.svg';
+    const props = createBaseProps({
+      tab: {
+        id: 42,
+        index: 0,
+        windowId: 10,
+        url: 'https://github.com/facebook/react',
+        title: 'React',
+        status: 'complete',
+        favIconUrl: iconUrl,
+        _faviconRev: 1
+      } as TabWithFaviconMeta
+    });
+
+    const { container, rerender } = render(<OpenTabRow {...props} />);
+    let img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toBe(iconUrl);
+
+    // Transient failure of both live icon and /_favicon/
+    fireEvent.error(img!);
+    img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toContain('/_favicon/');
+    fireEvent.error(img!);
+    expect(container.querySelector('svg.lucide-globe')).toBeInTheDocument();
+
+    // Reload finishes with bumped _faviconRev -> recovers iconUrl
+    rerender(
+      <OpenTabRow
+        {...props}
+        tab={
+          {
+            ...props.tab,
+            status: 'complete',
+            favIconUrl: iconUrl,
+            _faviconRev: 2
+          } as TabWithFaviconMeta
+        }
+      />
+    );
+
+    img = container.querySelector('img');
+    expect(img).toBeInTheDocument();
+    expect(img?.getAttribute('src')).toBe(iconUrl);
   });
 });

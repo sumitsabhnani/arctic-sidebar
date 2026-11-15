@@ -1433,5 +1433,136 @@ describe('Background service worker reminder lifecycle', () => {
       expect(chrome.tabs.create).toHaveBeenCalledWith({ windowId: 10, active: true });
       expect(chrome.tabs.remove).toHaveBeenCalledWith(902);
     });
+
+    it('never poisons Quick Access favicons with Chrome default grey globe during slow loads and recovers verified icons on reload/redirect', async () => {
+      const origFetch = globalThis.fetch;
+      const defaultGlobeBytes = [137, 80, 78, 71, 7, 7, 7, 7];
+      const realPortalBytes = [137, 80, 78, 71, 42, 43, 44, 45];
+      let pageHealthy = false;
+
+      const makePngResp = (bytes: number[]) =>
+        ({
+          ok: true,
+          status: 200,
+          headers: {
+            get: (h: string) => (h.toLowerCase() === 'content-type' ? 'image/png' : null)
+          },
+          arrayBuffer: () => Promise.resolve(new Uint8Array(bytes).buffer)
+        }) as unknown as Response;
+
+      globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+        const u = String(input);
+        if (u.includes(encodeURIComponent('https://arctic-favicon-probe.invalid/'))) {
+          return makePngResp(defaultGlobeBytes);
+        }
+        if (
+          pageHealthy &&
+          u.includes(encodeURIComponent('https://app.acme.com/dashboard'))
+        ) {
+          return makePngResp(realPortalBytes);
+        }
+        return makePngResp(defaultGlobeBytes);
+      });
+
+      try {
+        mockChrome.__setBookmarksTree([
+          {
+            id: '0',
+            title: 'Root',
+            children: [
+              {
+                id: '2',
+                title: 'Other Bookmarks',
+                children: [
+                  {
+                    id: 'space-home',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: 'qa-folder',
+                        title: 'Quick Access',
+                        children: [{ id: 'bm-acme', title: 'Acme', url: 'https://acme.com' }]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]);
+        mockChrome.__setLocalStorage({
+          quickAccessFolderId: 'qa-folder',
+          workspaceFolderId: 'space-home',
+          activeSpaceId: 'home',
+          spaces: [
+            {
+              id: 'home',
+              name: 'Home',
+              folderId: 'space-home',
+              quickAccessFolderId: 'qa-folder'
+            }
+          ]
+        });
+        mockChrome.__setSessionStorage({
+          bindingsByBookmarkId: {
+            'bm-acme': {
+              bookmarkId: 'bm-acme',
+              tabId: 950,
+              windowId: 10,
+              originalUrl: 'https://acme.com',
+              currentUrl: 'https://app.acme.com/dashboard',
+              currentTitle: 'Acme',
+              isNavigatedAway: true
+            }
+          },
+          bookmarkIdByTabId: { 950: 'bm-acme' }
+        });
+        mockChrome.__setTabs([
+          {
+            id: 950,
+            windowId: 10,
+            url: 'https://app.acme.com/dashboard',
+            title: 'Acme',
+            active: true,
+            status: 'loading'
+          } as chrome.tabs.Tab
+        ]);
+
+        // 1. During slow load, /_favicon/ returns Chrome's default grey globe -> filtered out (''), NOT cached
+        const slowData = await getEdgeRailDataForWindow(10);
+        expect(slowData.quickAccessItems[0].faviconDataUrl).toBe('');
+
+        // 2. Reload completes on redirected app.acme.com/dashboard -> resolves & persists real icon
+        pageHealthy = true;
+        mockChrome.__setTabs([
+          {
+            id: 950,
+            windowId: 10,
+            url: 'https://app.acme.com/dashboard',
+            title: 'Acme Dashboard',
+            favIconUrl: 'https://app.acme.com/favicon.ico',
+            active: true,
+            status: 'complete'
+          } as chrome.tabs.Tab
+        ]);
+
+        const healthyData = await getEdgeRailDataForWindow(10);
+        const capturedDataUrl = healthyData.quickAccessItems[0].faviconDataUrl;
+        expect(capturedDataUrl).toMatch(/^data:image\/png;base64,/);
+
+        // 3. Later slow reopen fails transiently (/_favicon/ returns default globe again & tab closed) -> preserved cached icon is still served!
+        pageHealthy = false;
+        mockChrome.__setTabs([]);
+        mockChrome.__setSessionStorage({
+          bindingsByBookmarkId: {},
+          bookmarkIdByTabId: {}
+        });
+
+        const reopenedSlowData = await getEdgeRailDataForWindow(10);
+        expect(reopenedSlowData.quickAccessItems[0].faviconDataUrl).toBe(capturedDataUrl);
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    });
   });
 });

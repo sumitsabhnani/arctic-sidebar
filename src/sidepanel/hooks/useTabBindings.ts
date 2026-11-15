@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { TabBinding, LocalSettings } from '../../types';
+import type { TabBinding, LocalSettings, TabWithFaviconMeta } from '../../types';
 import { getEffectiveTabUrl, isUrlNavigatedAway } from '../utils/url';
+import { captureVerifiedTabFavicon } from '../utils/faviconCache';
 import { markRecentlyMoved } from '../utils/dnd';
 import {
   clearAllPersistedBindings,
@@ -123,6 +124,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const isMountedRef = useRef<boolean>(true);
   const creatingManualTabCountRef = useRef<number>(0);
   const tabsAwaitingRestoreUrlRef = useRef<Set<number>>(new Set());
+  const faviconRevByTabIdRef = useRef<Record<number, number>>({});
 
   /**
    * Refresh all tabs in the current window
@@ -133,9 +135,16 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       if (currentWin.id) {
         currentWindowIdRef.current = currentWin.id;
         const tabs = await chrome.tabs.query({ windowId: currentWin.id });
-        const tabsWithCustom = tabs.map((t) => {
-          if (typeof t.id === 'number' && customTabTitlesRef.current[t.id]) {
-            return { ...t, title: customTabTitlesRef.current[t.id] };
+        const tabsWithCustom: TabWithFaviconMeta[] = tabs.map((t) => {
+          if (typeof t.id !== 'number') return t;
+          const customTitle = customTabTitlesRef.current[t.id];
+          const favRev = faviconRevByTabIdRef.current[t.id];
+          if (customTitle || favRev) {
+            return {
+              ...t,
+              ...(customTitle ? { title: customTitle } : {}),
+              ...(favRev ? { _faviconRev: favRev } : {})
+            };
           }
           return t;
         });
@@ -354,6 +363,11 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       if (tabsAwaitingRestoreUrlRef.current.has(removedTabId)) {
         tabsAwaitingRestoreUrlRef.current.delete(removedTabId);
         tabsAwaitingRestoreUrlRef.current.add(addedTabId);
+      }
+
+      if (faviconRevByTabIdRef.current[removedTabId] !== undefined) {
+        faviconRevByTabIdRef.current[addedTabId] = faviconRevByTabIdRef.current[removedTabId];
+        delete faviconRevByTabIdRef.current[removedTabId];
       }
 
       setActiveTabId((prev) => (prev === removedTabId ? addedTabId : prev));
@@ -579,6 +593,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     // Listen to tab removal
     const handleRemoved = (tabId: number, removeInfo?: chrome.tabs.TabRemoveInfo) => {
       tabsAwaitingRestoreUrlRef.current.delete(tabId);
+      delete faviconRevByTabIdRef.current[tabId];
       refreshWindowTabs();
 
       if (!removeInfo?.isWindowClosing) {
@@ -637,15 +652,55 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       changeInfo,
       tab
     ) => {
+      const shouldBumpFaviconRev =
+        changeInfo.favIconUrl !== undefined ||
+        changeInfo.status === 'loading' ||
+        changeInfo.status === 'complete' ||
+        changeInfo.url !== undefined;
+      if (shouldBumpFaviconRev) {
+        faviconRevByTabIdRef.current[tabId] = (faviconRevByTabIdRef.current[tabId] || 0) + 1;
+      }
+      const nextFavRev = faviconRevByTabIdRef.current[tabId];
+
+      const candidateFavIconUrl =
+        changeInfo.favIconUrl !== undefined ? changeInfo.favIconUrl : tab.favIconUrl;
+      if (
+        candidateFavIconUrl &&
+        (changeInfo.favIconUrl !== undefined || changeInfo.status === 'complete')
+      ) {
+        const boundBmId = bookmarkIdByTabIdRef.current[tabId];
+        const boundOriginalUrl = boundBmId
+          ? bindingsByBookmarkIdRef.current[boundBmId]?.originalUrl
+          : undefined;
+        void captureVerifiedTabFavicon(
+          {
+            ...tab,
+            ...(changeInfo.url ? { url: changeInfo.url } : {}),
+            favIconUrl: candidateFavIconUrl
+          },
+          boundOriginalUrl
+        );
+      }
+
       // Update in-place to avoid expensive query on every micro status event
       setWindowTabs((prev) =>
         prev.map((t) => {
           if (t.id !== tabId) return t;
-          const merged = {
+          const resolvedFavIconUrl =
+            changeInfo.favIconUrl !== undefined
+              ? changeInfo.favIconUrl
+              : 'favIconUrl' in tab
+              ? tab.favIconUrl
+              : changeInfo.status === 'complete' || Boolean(changeInfo.url)
+              ? undefined
+              : t.favIconUrl;
+          const merged: TabWithFaviconMeta = {
             ...t,
             ...tab,
             ...changeInfo,
-            pendingUrl: changeInfo.url ? undefined : tab.pendingUrl
+            favIconUrl: resolvedFavIconUrl,
+            pendingUrl: changeInfo.url ? undefined : tab.pendingUrl,
+            ...(nextFavRev ? { _faviconRev: nextFavRev } : {})
           };
           const rawCandidateTitle = changeInfo.title || tab.title || t.title;
           const cleanTitle =
@@ -1131,6 +1186,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         const tabUrl = getEffectiveTabUrl(tab);
         if (typeof tab.id !== 'number' || !tabUrl) continue;
         unpinnedTabIdsRef.current.delete(tab.id);
+        void captureVerifiedTabFavicon(tab, tabUrl);
 
         const existingBookmarkId = nextByTab[tab.id];
         if (existingBookmarkId) {
@@ -1285,8 +1341,14 @@ export function useTabBindings(activeSpaceId: string = 'home') {
    */
   const reloadTab = useCallback(async (tabId: number, bypassCache: boolean = false) => {
     try {
+      const nextFavRev = (faviconRevByTabIdRef.current[tabId] || 0) + 1;
+      faviconRevByTabIdRef.current[tabId] = nextFavRev;
       setWindowTabs((prev) =>
-        prev.map((t) => (t.id === tabId ? { ...t, status: 'loading' } : t))
+        prev.map((t) =>
+          t.id === tabId
+            ? ({ ...t, status: 'loading', _faviconRev: nextFavRev } as TabWithFaviconMeta)
+            : t
+        )
       );
       await chrome.tabs.reload(tabId, { bypassCache });
     } catch (err) {
@@ -1825,9 +1887,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               }
               await chrome.tabs.reload(existingBinding.tabId);
             }
+            const nextFavRev = (faviconRevByTabIdRef.current[existingBinding.tabId] || 0) + 1;
+            faviconRevByTabIdRef.current[existingBinding.tabId] = nextFavRev;
             setWindowTabs((prev) =>
               prev.map((t) =>
-                t.id === existingBinding.tabId ? { ...t, status: 'loading' } : t
+                t.id === existingBinding.tabId
+                  ? ({ ...t, status: 'loading', _faviconRev: nextFavRev } as TabWithFaviconMeta)
+                  : t
               )
             );
 

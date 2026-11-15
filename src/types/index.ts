@@ -56,6 +56,17 @@ export interface SiteSearchEngine {
 
 export type EdgeTriggerMode = 'push' | 'hover';
 
+export interface CachedFaviconEntry {
+  dataUrl?: string;
+  iconUrl?: string;
+  pageUrl?: string;
+  updatedAt: number;
+}
+
+export type TabWithFaviconMeta = chrome.tabs.Tab & {
+  _faviconRev?: number;
+};
+
 export interface LocalSettings {
   quickAccessFolderId?: string;
   workspaceFolderId?: string;
@@ -66,6 +77,7 @@ export interface LocalSettings {
   tabOpenedAt?: Record<number, number>;
   tabSpaceByTabId?: Record<number, string>;
   persistedBindingsByBookmarkId?: Record<string, PersistedTabBinding>;
+  cachedFaviconsByKey?: Record<string, CachedFaviconEntry>;
   theme?: ThemeMode;
   colorTheme?: ColorThemeId;
   quickAccessDensity?: 'relaxed' | 'compact';
