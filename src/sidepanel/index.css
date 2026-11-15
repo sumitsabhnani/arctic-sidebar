@@ -480,19 +480,118 @@ html:not(.dark) body {
   box-shadow: 0 0 8px var(--theme-indicator) !important;
 }
 
-.theme-drag-over-top {
-  border-top: 2px solid var(--theme-accent) !important;
-  background-color: var(--theme-accent-bg) !important;
+.theme-drag-over-top,
+.theme-drag-over-bottom {
+  position: relative;
 }
 
-.theme-drag-over-bottom {
-  border-bottom: 2px solid var(--theme-accent) !important;
-  background-color: var(--theme-accent-bg) !important;
+.theme-drag-over-top::before,
+.theme-drag-over-bottom::before {
+  content: "";
+  position: absolute;
+  left: calc(var(--drop-indent, 10px) + 5px);
+  right: 8px;
+  height: 2px;
+  border-radius: 9999px;
+  background-color: var(--theme-accent);
+  box-shadow: var(--theme-accent-glow);
+  pointer-events: none;
+  z-index: 30;
+  animation: arctic-drop-line-in 0.12s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  transform-origin: left center;
+}
+
+.theme-drag-over-top::after,
+.theme-drag-over-bottom::after {
+  content: "";
+  position: absolute;
+  left: var(--drop-indent, 10px);
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  border: 1.75px solid var(--theme-accent);
+  background-color: var(--theme-header-bg, #18181b);
+  box-shadow: var(--theme-accent-glow);
+  pointer-events: none;
+  z-index: 31;
+}
+
+.theme-drag-over-top::before {
+  top: -1px;
+}
+
+.theme-drag-over-top::after {
+  top: -3px;
+}
+
+.theme-drag-over-bottom::before {
+  bottom: -1px;
+}
+
+.theme-drag-over-bottom::after {
+  bottom: -3px;
+}
+
+.theme-drag-over-left,
+.theme-drag-over-right {
+  position: relative;
+}
+
+.theme-drag-over-left::before,
+.theme-drag-over-right::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 2.5px;
+  border-radius: 9999px;
+  background-color: var(--theme-accent);
+  box-shadow: var(--theme-accent-glow);
+  pointer-events: none;
+  z-index: 30;
+}
+
+.theme-drag-over-left::before {
+  left: -3px;
+}
+
+.theme-drag-over-right::before {
+  right: -3px;
 }
 
 .theme-drag-over-inside {
-  outline: 1px solid var(--theme-accent) !important;
   background-color: var(--theme-accent-bg) !important;
+  box-shadow: inset 0 0 0 1.5px var(--theme-accent), var(--theme-accent-glow) !important;
+}
+
+@keyframes arctic-drop-line-in {
+  from {
+    opacity: 0.4;
+    transform: scaleX(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes arctic-drop-settle {
+  0% {
+    background-color: var(--theme-accent-bg);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.arctic-drop-settle {
+  animation: arctic-drop-settle 0.34s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+body[data-dragging="true"] [data-tooltip]::before {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  display: none !important;
 }
 
 /* -------------------------------------------------------------

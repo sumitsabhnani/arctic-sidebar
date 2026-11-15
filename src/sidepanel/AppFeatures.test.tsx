@@ -897,4 +897,296 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     expect(screen.queryByText('Pinned Dashboard')).not.toBeInTheDocument();
     expect(screen.queryByText('No unpinned tabs open.')).not.toBeInTheDocument();
   });
+
+  it('allows dropping a Today tab as the last root item in Active Space when the last item is a collapsed or expanded folder', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: '111', title: 'Google', url: 'https://google.com' }]
+                      },
+                      { id: 'bm-first', title: 'First Root Link', url: 'https://first.example.com' },
+                      {
+                        id: 'folder-last',
+                        title: 'Trailing Folder',
+                        children: [
+                          {
+                            id: 'bm-inside',
+                            title: 'Inside Folder Link',
+                            url: 'https://inside.example.com'
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({
+      hasDismissedLeftSideTip: true,
+      collapsedFolderIds: { 'folder-last': false }
+    });
+    mockChrome.__setSyncStorage({});
+    mockChrome.__setTabs([
+      {
+        id: 301,
+        windowId: 1,
+        index: 0,
+        url: 'https://linear.app/issues',
+        title: 'Linear Triage',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 302,
+        windowId: 1,
+        index: 1,
+        url: 'https://figma.com/file/xyz',
+        title: 'Figma Mockups',
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+
+    render(<App />);
+
+    expect(await screen.findByText('Trailing Folder')).toBeInTheDocument();
+    expect(await screen.findByText('Inside Folder Link')).toBeInTheDocument();
+    expect(await screen.findByText('Linear Triage')).toBeInTheDocument();
+
+    // 1. Even with Trailing Folder EXPANDED, dropping on workspace-tail-dropzone pins Linear Triage at ROOT end (outside Trailing Folder!)
+    const tailDropzone = screen.getByTestId('workspace-tail-dropzone');
+    await act(async () => {
+      fireEvent.drop(tailDropzone, {
+        dataTransfer: {
+          getData: (type: string) =>
+            type === 'application/json'
+              ? JSON.stringify({
+                  type: 'openTab',
+                  tabId: 301,
+                  tabIds: [301],
+                  url: 'https://linear.app/issues',
+                  title: 'Linear Triage'
+                })
+              : ''
+        }
+      });
+    });
+
+    let tree = mockChrome.__getBookmarksTree();
+    let home = tree[0].children
+      ?.find((c) => c.id === '2')
+      ?.children?.find((c) => c.id === '10')
+      ?.children?.find((c) => c.id === '12');
+    let trailingFolder = home?.children?.find((c) => c.id === 'folder-last');
+
+    expect(home?.children?.map((c) => c.title)).toEqual([
+      'Quick Access',
+      'First Root Link',
+      'Trailing Folder',
+      'Linear Triage'
+    ]);
+    expect(trailingFolder?.children?.map((c) => c.title)).toEqual(['Inside Folder Link']);
+
+    // 2. Collapse Trailing Folder and move Linear Triage inside or drop Figma Mockups on bottom edge of collapsed folder
+    // First remove Linear Triage so Trailing Folder is once again the last item, and collapse Trailing Folder
+    fireEvent.click(screen.getByText('Trailing Folder'));
+    const folderRow = screen.getByText('Trailing Folder').closest('[role="button"]') as HTMLElement;
+    vi.spyOn(folderRow, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    await act(async () => {
+      fireEvent.dragOver(folderRow, { clientY: 32, dataTransfer: { dropEffect: 'move' } });
+      fireEvent.drop(folderRow, {
+        clientY: 32,
+        dataTransfer: {
+          getData: (type: string) =>
+            type === 'application/json'
+              ? JSON.stringify({
+                  type: 'openTab',
+                  tabId: 302,
+                  tabIds: [302],
+                  url: 'https://figma.com/file/xyz',
+                  title: 'Figma Mockups'
+                })
+              : ''
+        }
+      });
+    });
+
+    tree = mockChrome.__getBookmarksTree();
+    home = tree[0].children
+      ?.find((c) => c.id === '2')
+      ?.children?.find((c) => c.id === '10')
+      ?.children?.find((c) => c.id === '12');
+    trailingFolder = home?.children?.find((c) => c.id === 'folder-last');
+
+    expect(home?.children?.map((c) => c.title)).toEqual([
+      'Quick Access',
+      'First Root Link',
+      'Trailing Folder',
+      'Figma Mockups',
+      'Linear Triage'
+    ]);
+    expect(trailingFolder?.children?.map((c) => c.title)).toEqual(['Inside Folder Link']);
+  });
+
+  it('reorders folders cleanly within Active Space onto BookmarkRow and FolderNode edges', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: '111', title: 'Google', url: 'https://google.com' }]
+                      },
+                      { id: 'folder-alpha', title: 'Alpha Folder', children: [] },
+                      { id: 'bm-beta', title: 'Beta Bookmark', url: 'https://beta.example.com' },
+                      { id: 'folder-gamma', title: 'Gamma Folder', children: [] }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+
+    render(<App />);
+
+    expect(await screen.findByText('Alpha Folder')).toBeInTheDocument();
+    const betaRow = (await screen.findByText('Beta Bookmark')).closest('[role="button"]') as HTMLElement;
+    vi.spyOn(betaRow, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    // 1. Drag Alpha Folder onto the bottom half of Beta Bookmark -> [Beta Bookmark, Alpha Folder, Gamma Folder]
+    await act(async () => {
+      fireEvent.dragOver(betaRow, { clientY: 30, dataTransfer: { dropEffect: 'move' } });
+      fireEvent.drop(betaRow, {
+        clientY: 30,
+        dataTransfer: {
+          getData: (type: string) =>
+            type === 'application/json'
+              ? JSON.stringify({
+                  type: 'folder',
+                  id: 'folder-alpha',
+                  parentId: '12',
+                  index: 1
+                })
+              : ''
+        }
+      });
+    });
+
+    let tree = mockChrome.__getBookmarksTree();
+    let home = tree[0].children
+      ?.find((c) => c.id === '2')
+      ?.children?.find((c) => c.id === '10')
+      ?.children?.find((c) => c.id === '12');
+
+    expect(home?.children?.map((c) => c.title)).toEqual([
+      'Quick Access',
+      'Beta Bookmark',
+      'Alpha Folder',
+      'Gamma Folder'
+    ]);
+
+    // 2. Drag Alpha Folder onto bottom edge of collapsed Gamma Folder -> moves to very last slot!
+    const gammaRow = screen.getByText('Gamma Folder').closest('[role="button"]') as HTMLElement;
+    vi.spyOn(gammaRow, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    await act(async () => {
+      fireEvent.dragOver(gammaRow, { clientY: 32, dataTransfer: { dropEffect: 'move' } });
+      fireEvent.drop(gammaRow, {
+        clientY: 32,
+        dataTransfer: {
+          getData: (type: string) =>
+            type === 'application/json'
+              ? JSON.stringify({
+                  type: 'folder',
+                  id: 'folder-alpha',
+                  parentId: '12',
+                  index: 2
+                })
+              : ''
+        }
+      });
+    });
+
+    tree = mockChrome.__getBookmarksTree();
+    home = tree[0].children
+      ?.find((c) => c.id === '2')
+      ?.children?.find((c) => c.id === '10')
+      ?.children?.find((c) => c.id === '12');
+
+    expect(home?.children?.map((c) => c.title)).toEqual([
+      'Quick Access',
+      'Beta Bookmark',
+      'Gamma Folder',
+      'Alpha Folder'
+    ]);
+  });
 });

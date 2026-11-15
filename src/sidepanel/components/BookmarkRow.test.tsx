@@ -156,4 +156,87 @@ describe('BookmarkRow component', () => {
     fireEvent.doubleClick(faviconBtn);
     expect(onFaviconDoubleClick).toHaveBeenCalledWith(mockBookmark, expect.any(Object));
   });
+
+  it('supports reordering a folder above or below a BookmarkRow via drag and drop', () => {
+    const onDropItemToFolder = vi.fn();
+    render(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={{ ...mockBookmark, parentId: 'space-root', index: 3 }}
+        onDropItemToFolder={onDropItemToFolder}
+      />
+    );
+
+    const row = screen.getByText('Google Docs').closest('[role="button"]') as HTMLElement;
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    // Drop folder on bottom half -> index 4
+    fireEvent.dragOver(row, { clientY: 28, dataTransfer: { dropEffect: 'move' } });
+    fireEvent.drop(row, {
+      clientY: 28,
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json'
+            ? JSON.stringify({ type: 'folder', id: 'folder-a', parentId: 'space-root', index: 1 })
+            : ''
+      }
+    });
+
+    expect(onDropItemToFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'folder', id: 'folder-a' }),
+      'space-root',
+      4
+    );
+  });
+
+  it('blocks dropping an ancestor folder onto a BookmarkRow inside that folder', () => {
+    const onDropItemToFolder = vi.fn();
+    const treeRoots: chrome.bookmarks.BookmarkTreeNode[] = [
+      {
+        id: 'folder-anc',
+        title: 'Ancestor',
+        children: [
+          {
+            id: 'b-101',
+            parentId: 'folder-anc',
+            index: 0,
+            title: 'Google Docs',
+            url: 'https://docs.google.com'
+          }
+        ]
+      }
+    ];
+
+    render(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={treeRoots[0].children![0]}
+        treeRoots={treeRoots}
+        onDropItemToFolder={onDropItemToFolder}
+      />
+    );
+
+    const row = screen.getByText('Google Docs').closest('[role="button"]')!;
+    fireEvent.drop(row, {
+      clientY: 4,
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json'
+            ? JSON.stringify({ type: 'folder', id: 'folder-anc', parentId: 'space-root' })
+            : ''
+      }
+    });
+
+    expect(onDropItemToFolder).not.toHaveBeenCalled();
+  });
 });

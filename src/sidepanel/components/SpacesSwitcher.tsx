@@ -16,6 +16,7 @@ import {
   Settings
 } from 'lucide-react';
 import type { SpaceItem } from '../../types';
+import { endDragSession, parseDragPayload } from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
 interface SpacesSwitcherProps {
@@ -266,17 +267,17 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
                   e.dataTransfer.dropEffect = 'move';
                   setDragOverSpaceId(space.id);
                 }}
-                onDragLeave={() => setDragOverSpaceId(null)}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setDragOverSpaceId(null);
+                }}
                 onDrop={(e) => {
                   e.preventDefault();
                   setDragOverSpaceId(null);
-                  try {
-                    const dataStr = e.dataTransfer.getData('application/json');
-                    if (!dataStr) return;
-                    const data = JSON.parse(dataStr);
-                    onDropItemToSpace?.(data, space.folderId);
-                  } catch {
-                    // ignore
+                  endDragSession();
+                  const data = parseDragPayload(e);
+                  if (data) {
+                    onDropItemToSpace?.(data as { type: string; [key: string]: unknown }, space.folderId);
                   }
                 }}
                 className={`group relative flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs transition-all duration-150 flex-1 min-w-0 ${

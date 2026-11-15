@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TabBinding, LocalSettings } from '../../types';
 import { getEffectiveTabUrl, isUrlNavigatedAway } from '../utils/url';
+import { markRecentlyMoved } from '../utils/dnd';
 import {
   clearAllPersistedBindings,
   findMatchingUnboundTabForBookmark,
@@ -104,6 +105,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const unpinnedBookmarkIdsRef = useRef<Set<string>>(new Set());
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [windowTabs, setWindowTabs] = useState<chrome.tabs.Tab[]>([]);
+  const windowTabsRef = useRef<chrome.tabs.Tab[]>([]);
+  windowTabsRef.current = windowTabs;
   const [isInitialTabsLoaded, setIsInitialTabsLoaded] = useState<boolean>(false);
   const [tabSpaceByTabId, setTabSpaceByTabId] = useState<Record<number, string>>({});
   const [customTabTitles, setCustomTabTitles] = useState<Record<number, string>>({});
@@ -1071,8 +1074,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
    * If a tab is already bound to a bookmark (e.g. in another space), moves that bookmark instead of duplicating it.
    */
   const pinMultipleTabs = useCallback(
-    async (tabs: chrome.tabs.Tab[], targetFolderId: string, targetIndex?: number) => {
-      if (!tabs.length || !targetFolderId) return;
+    async (
+      tabs: chrome.tabs.Tab[],
+      targetFolderId: string,
+      targetIndex?: number,
+      onBeforeCommit?: (nodes: chrome.bookmarks.BookmarkTreeNode[]) => void
+    ): Promise<chrome.bookmarks.BookmarkTreeNode[]> => {
+      if (!tabs.length || !targetFolderId) return [];
 
       let storedBindings: Record<string, TabBinding> = {};
       let storedByTab: Record<number, string> = {};
@@ -1103,6 +1111,21 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
       }
 
+      let childCount: number | null = null;
+      const existingChildIds = new Set<string>();
+      if (typeof targetIndex === 'number' && chrome?.bookmarks?.getChildren) {
+        try {
+          const children = await chrome.bookmarks.getChildren(targetFolderId);
+          childCount = children.length;
+          for (const c of children) {
+            existingChildIds.add(c.id);
+          }
+        } catch {
+          childCount = null;
+        }
+      }
+
+      const createdOrMovedNodes: chrome.bookmarks.BookmarkTreeNode[] = [];
       let curIndex = targetIndex;
       for (const tab of tabs) {
         const tabUrl = getEffectiveTabUrl(tab);
@@ -1112,10 +1135,19 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         const existingBookmarkId = nextByTab[tab.id];
         if (existingBookmarkId) {
           try {
-            await chrome.bookmarks.move(existingBookmarkId, {
+            const shouldPassIndex =
+              typeof curIndex === 'number' && (childCount === null || curIndex < childCount);
+            const movedNode = await chrome.bookmarks.move(existingBookmarkId, {
               parentId: targetFolderId,
-              ...(typeof curIndex === 'number' ? { index: curIndex } : {})
+              ...(shouldPassIndex ? { index: Math.max(0, curIndex!) } : {})
             });
+            if (movedNode) {
+              createdOrMovedNodes.push(movedNode);
+            }
+            if (!existingChildIds.has(existingBookmarkId) && childCount !== null) {
+              childCount += 1;
+              existingChildIds.add(existingBookmarkId);
+            }
             if (typeof curIndex === 'number') curIndex += 1;
             continue;
           } catch {
@@ -1125,12 +1157,19 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
 
         const title = tab.title || tabUrl || 'Pinned Tab';
+        const shouldPassIndex =
+          typeof curIndex === 'number' && (childCount === null || curIndex < childCount);
         const newBookmark = await chrome.bookmarks.create({
           parentId: targetFolderId,
           title,
           url: tabUrl,
-          ...(typeof curIndex === 'number' ? { index: curIndex } : {})
+          ...(shouldPassIndex ? { index: Math.max(0, curIndex!) } : {})
         });
+        createdOrMovedNodes.push(newBookmark);
+        if (childCount !== null) {
+          childCount += 1;
+          existingChildIds.add(newBookmark.id);
+        }
         if (typeof curIndex === 'number') curIndex += 1;
 
         const newBinding: TabBinding = {
@@ -1147,8 +1186,12 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         nextByTab[tab.id] = newBookmark.id;
       }
 
+      if (onBeforeCommit && createdOrMovedNodes.length > 0) {
+        onBeforeCommit(createdOrMovedNodes);
+      }
       await persistSession(nextBindings, nextByTab);
       await refreshWindowTabs();
+      return createdOrMovedNodes;
     },
     [persistSession, refreshWindowTabs]
   );
@@ -1157,8 +1200,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
    * Pin an unpinned tab to a bookmark folder (Quick Access or Home/Space)
    */
   const pinTab = useCallback(
-    async (tab: chrome.tabs.Tab, targetFolderId: string, targetIndex?: number) => {
-      await pinMultipleTabs([tab], targetFolderId, targetIndex);
+    async (
+      tab: chrome.tabs.Tab,
+      targetFolderId: string,
+      targetIndex?: number,
+      onBeforeCommit?: (nodes: chrome.bookmarks.BookmarkTreeNode[]) => void
+    ) => {
+      return pinMultipleTabs([tab], targetFolderId, targetIndex, onBeforeCommit);
     },
     [pinMultipleTabs]
   );
@@ -1269,18 +1317,79 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   }, [activeTabId]);
 
   /**
-   * Move / reorder open tab within window
+   * Move / reorder one or more open tabs within window using pre-removal visual slot index
    */
-  const moveOpenTab = useCallback(
-    async (tabId: number, targetIndex: number) => {
+  const moveOpenTabs = useCallback(
+    async (tabIds: number[], targetSlotIndex: number) => {
+      if (!tabIds.length) return;
+      const currentTabs = windowTabsRef.current;
+
+      if (currentTabs.length === 0) {
+        try {
+          for (let i = 0; i < tabIds.length; i++) {
+            await chrome.tabs.move(tabIds[i], { index: Math.max(0, targetSlotIndex + i) });
+          }
+          await refreshWindowTabs();
+        } catch (err) {
+          console.warn('[Arctic] Could not move tabs:', err);
+        }
+        return;
+      }
+
+      const idSet = new Set(tabIds);
+      const orderedIds = currentTabs
+        .map((t) => t.id)
+        .filter((id): id is number => typeof id === 'number' && idSet.has(id));
+      const targetIds = orderedIds.length > 0 ? orderedIds : tabIds;
+
+      const workingTabs = [...currentTabs];
+      const movesToExecute: Array<{ tabId: number; postRemovalIndex: number }> = [];
+      let curSlot = targetSlotIndex;
+
+      for (const tabId of targetIds) {
+        const oldIdx = workingTabs.findIndex((t) => t.id === tabId);
+        if (oldIdx === -1) continue;
+
+        const clampedSlot = Math.max(0, Math.min(curSlot, workingTabs.length));
+        if (clampedSlot === oldIdx || clampedSlot === oldIdx + 1) {
+          curSlot = oldIdx + 1;
+          continue;
+        }
+
+        const postRemovalIndex = oldIdx < clampedSlot ? clampedSlot - 1 : clampedSlot;
+        const [movedTab] = workingTabs.splice(oldIdx, 1);
+        workingTabs.splice(postRemovalIndex, 0, movedTab);
+        movesToExecute.push({ tabId, postRemovalIndex });
+        curSlot = oldIdx < clampedSlot ? clampedSlot : clampedSlot + 1;
+      }
+
+      if (movesToExecute.length === 0) return;
+
+      const reindexedTabs = workingTabs.map((t, idx) => ({ ...t, index: idx }));
+      setWindowTabs(reindexedTabs);
+      markRecentlyMoved(movesToExecute.map((m) => `tab-${m.tabId}`));
+
       try {
-        await chrome.tabs.move(tabId, { index: targetIndex });
+        for (const step of movesToExecute) {
+          await chrome.tabs.move(step.tabId, { index: step.postRemovalIndex });
+        }
         await refreshWindowTabs();
       } catch (err) {
         console.warn('[Arctic] Could not move tab:', err);
+        await refreshWindowTabs();
       }
     },
     [refreshWindowTabs]
+  );
+
+  /**
+   * Move / reorder single open tab within window
+   */
+  const moveOpenTab = useCallback(
+    async (tabId: number, targetIndex: number) => {
+      await moveOpenTabs([tabId], targetIndex);
+    },
+    [moveOpenTabs]
   );
 
   /**
@@ -1836,6 +1945,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     discardAllBackgroundTabs,
     discardedTabsByTabId,
     moveOpenTab,
+    moveOpenTabs,
     renameOpenTab,
     toggleMuteTab,
     autoArchiveInterval,

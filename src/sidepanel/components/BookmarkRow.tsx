@@ -22,6 +22,15 @@ import {
 } from 'lucide-react';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
 import { getFaviconUrl } from '../utils/url';
+import {
+  attachMultiDragPreview,
+  endDragSession,
+  isFolderSelfOrDescendant,
+  parseDragPayload,
+  startDragSession,
+  useActiveDrag,
+  useRecentlyMovedIds
+} from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
 function formatSubdomain(rawUrl?: string): string {
@@ -70,6 +79,7 @@ interface BookmarkRowProps {
   onSelectBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onDeleteMultipleBookmarks?: (ids: string[]) => void;
   onMoveMultipleBookmarksToSpace?: (ids: string[], targetSpaceFolderId: string) => void;
+  treeRoots?: chrome.bookmarks.BookmarkTreeNode[];
   isEditing?: boolean;
   editTitle?: string;
   onStartRename?: () => void;
@@ -112,6 +122,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onSelectBookmark,
   onDeleteMultipleBookmarks,
   onMoveMultipleBookmarksToSpace,
+  treeRoots,
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
   onStartRename,
@@ -123,6 +134,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
+  const activeDrag = useActiveDrag();
+  const recentlyMovedIds = useRecentlyMovedIds();
+  const isPartOfActiveDrag =
+    isDragging ||
+    Boolean(activeDrag?.type === 'bookmark' && activeDrag.ids?.includes(bookmark.id));
+  const isRecentlyMoved = recentlyMovedIds.has(bookmark.id);
   const [localIsEditing, setLocalIsEditing] = useState(false);
   const [localEditTitle, setLocalEditTitle] = useState(bookmark.title || '');
   const [isCopied, setIsCopied] = useState(false);
@@ -345,26 +362,45 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     const idsToDrag = isMulti
       ? Array.from(new Set([...Array.from(selectedBookmarkIds!), bookmark.id]))
       : [bookmark.id];
-    e.dataTransfer.setData(
-      'application/json',
-      JSON.stringify({
-        type: 'bookmark',
-        id: bookmark.id,
-        ids: idsToDrag,
-        title: bookmark.title,
-        url: bookmark.url,
-        parentId: bookmark.parentId,
-        index: bookmark.index
-      })
-    );
+    const payload = {
+      type: 'bookmark' as const,
+      id: bookmark.id,
+      ids: idsToDrag,
+      title: bookmark.title,
+      url: bookmark.url,
+      parentId: bookmark.parentId,
+      index: bookmark.index
+    };
+    e.dataTransfer.setData('application/json', JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copyMove';
+    startDragSession(payload);
+    attachMultiDragPreview(e, idsToDrag.length, 'tab');
   };
 
   const handleDragEnd = () => {
     setIsDragging(false);
+    setDropPosition(null);
+    endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (
+      activeDrag?.type === 'bookmark' &&
+      (!activeDrag.ids || activeDrag.ids.length <= 1) &&
+      activeDrag.id === bookmark.id
+    ) {
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+    if (
+      activeDrag?.type === 'folder' &&
+      treeRoots &&
+      isFolderSelfOrDescendant(treeRoots, activeDrag.id, bookmark.parentId)
+    ) {
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
@@ -386,33 +422,41 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     const rect = e.currentTarget.getBoundingClientRect();
     const pos = dropPosition || (e.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom');
     setDropPosition(null);
+    endDragSession();
 
-    try {
-      const dataStr = e.dataTransfer.getData('application/json');
-      if (!dataStr) return;
-      const data = JSON.parse(dataStr);
+    const data = parseDragPayload(e);
+    if (!data) return;
 
-      if (data.id === bookmark.id && (!Array.isArray(data.ids) || data.ids.length <= 1)) return;
+    if (data.id === bookmark.id && (!Array.isArray(data.ids) || data.ids.length <= 1)) return;
 
-      const targetParentId = bookmark.parentId;
-      if (!targetParentId) return;
+    const targetParentId = bookmark.parentId;
+    if (!targetParentId) return;
 
-      let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : 0;
-      if (pos === 'bottom') {
-        targetIndex += 1;
+    if (
+      data.type === 'folder' &&
+      treeRoots &&
+      isFolderSelfOrDescendant(treeRoots, String(data.id), targetParentId)
+    ) {
+      return;
+    }
+
+    let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : 0;
+    if (pos === 'bottom') {
+      targetIndex += 1;
+    }
+
+    if (
+      data.type === 'bookmark' ||
+      data.type === 'folder' ||
+      data.type === 'quickAccess'
+    ) {
+      if (onDropItemToFolder) {
+        onDropItemToFolder(data as { type: string; [key: string]: unknown }, targetParentId, targetIndex);
+      } else if (onMoveBookmarkToIndex && typeof data.id === 'string') {
+        onMoveBookmarkToIndex(data.id, targetParentId, targetIndex);
       }
-
-      if (data.type === 'bookmark') {
-        if (onDropItemToFolder) {
-          onDropItemToFolder(data, targetParentId, targetIndex);
-        } else if (onMoveBookmarkToIndex && data.id) {
-          onMoveBookmarkToIndex(data.id, targetParentId, targetIndex);
-        }
-      } else if (data.type === 'openTab' && onDropItemToFolder) {
-        onDropItemToFolder(data, targetParentId, targetIndex);
-      }
-    } catch {
-      // ignore
+    } else if (data.type === 'openTab' && onDropItemToFolder) {
+      onDropItemToFolder(data as { type: string; [key: string]: unknown }, targetParentId, targetIndex);
     }
   };
 
@@ -490,6 +534,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     <div
       role="button"
       tabIndex={0}
+      data-flip-id={`bm-${bookmark.id}`}
       data-bookmark-id={bookmark.id}
       data-bound-tab-id={binding?.tabId}
       title={tooltip}
@@ -525,12 +570,17 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           onRowClick(bookmark);
         }
       }}
-      style={{ paddingLeft: `${12 + depth * 14}px` }}
+      style={
+        {
+          paddingLeft: `${12 + depth * 14}px`,
+          '--drop-indent': `${12 + depth * 14}px`
+        } as React.CSSProperties
+      }
       className={`group relative flex items-center justify-between ${
         densityMode === 'relaxed' ? 'min-h-[38px] py-1.5' : 'h-[34px]'
-      } pr-2.5 my-0 cursor-pointer select-none transition-all duration-150 outline-none ${
-        isDragging ? 'opacity-40 scale-98' : ''
-      } ${
+      } pr-2.5 my-0 cursor-pointer select-none transition-[background-color,color,opacity] duration-150 outline-none ${
+        isPartOfActiveDrag ? 'opacity-40' : ''
+      } ${isRecentlyMoved ? 'arctic-drop-settle' : ''} ${
         dropPosition === 'top'
           ? 'theme-drag-over-top'
           : dropPosition === 'bottom'

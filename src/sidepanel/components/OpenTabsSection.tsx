@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Trash2, ChevronDown, X, Plus } from 'lucide-react';
 import { OpenTabRow } from './OpenTabRow';
 import { scrollElementIntoContainerView } from '../utils/scrollIntoView';
+import { useFlipAnimation } from '../hooks/useFlipAnimation';
 import type { SpaceItem, TabReminder } from '../../types';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -31,6 +32,7 @@ interface OpenTabsSectionProps {
   onRenameTab?: (tabId: number, title: string) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
+  onMoveOpenTabs?: (tabIds: number[], targetSlotIndex: number) => void;
   getReminderForTab?: (tabId: number, url?: string) => TabReminder | undefined;
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
   densityMode?: 'relaxed' | 'compact';
@@ -75,6 +77,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   onRenameTab,
   onOpenContextMenu,
   onMoveOpenTab,
+  onMoveOpenTabs,
   getReminderForTab,
   onOpenReminderPopover,
   densityMode = 'compact',
@@ -97,6 +100,12 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   const [localEditingTitle, setLocalEditingTitle] = useState<string>('');
   const [isClearMenuOpen, setIsClearMenuOpen] = useState(false);
   const sectionRef = React.useRef<HTMLDivElement>(null);
+  const listRef = React.useRef<HTMLDivElement>(null);
+  const openTabsOrderSignature = React.useMemo(
+    () => unpinnedTabs.map((t) => String(t.id ?? '')).join(','),
+    [unpinnedTabs]
+  );
+  useFlipAnimation(listRef, openTabsOrderSignature, activeSpaceId);
   const prevTabIdsRef = React.useRef<Set<number> | null>(null);
   const prevSpaceIdRef = React.useRef<string | undefined>(activeSpaceId);
   const prevActiveTabIdRef = React.useRef<number | null | undefined>(undefined);
@@ -540,7 +549,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
 
       {/* Unpinned Tabs List */}
       {!isCollapsed && (
-        <div className="flex flex-col -mx-1 animate-in fade-in duration-100">
+        <div ref={listRef} className="flex flex-col -mx-1 animate-in fade-in duration-100">
           {unpinnedTabs.length === 0 ? (
             <div className="px-3 py-3 text-center text-zinc-500 rounded-lg border border-dashed border-black/5 dark:border-white/5 bg-black/[0.01] dark:bg-white/[0.01]">
               <p className="text-[11px] text-zinc-400 dark:text-zinc-500">No unpinned tabs open.</p>
@@ -574,6 +583,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   onRenameTab={onRenameTab}
                   onOpenContextMenu={onOpenContextMenu}
                   onMoveOpenTab={onMoveOpenTab}
+                  onMoveOpenTabs={onMoveOpenTabs}
                   reminder={typeof tab.id === 'number' ? getReminderForTab?.(tab.id, tab.url) : undefined}
                   onOpenReminderPopover={onOpenReminderPopover}
                   densityMode={densityMode}

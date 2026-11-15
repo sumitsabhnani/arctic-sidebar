@@ -19,6 +19,14 @@ import {
 } from 'lucide-react';
 import type { SpaceItem, TabReminder } from '../../types';
 import { getFaviconUrl } from '../utils/url';
+import {
+  attachMultiDragPreview,
+  endDragSession,
+  parseDragPayload,
+  startDragSession,
+  useActiveDrag,
+  useRecentlyMovedIds
+} from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
 function formatSubdomain(rawUrl?: string): string {
@@ -50,6 +58,7 @@ interface OpenTabRowProps {
   onRenameTab?: (tabId: number, title: string) => void;
   onOpenContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
   onMoveOpenTab?: (tabId: number, targetIndex: number) => void;
+  onMoveOpenTabs?: (tabIds: number[], targetSlotIndex: number) => void;
   reminder?: TabReminder;
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
   isSelected?: boolean;
@@ -86,6 +95,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onRenameTab,
   onOpenContextMenu,
   onMoveOpenTab,
+  onMoveOpenTabs,
   reminder,
   onOpenReminderPopover,
   isSelected = false,
@@ -107,6 +117,17 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const [faviconError, setFaviconError] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
+  const activeDrag = useActiveDrag();
+  const recentlyMovedIds = useRecentlyMovedIds();
+  const isPartOfActiveDrag =
+    isDragging ||
+    Boolean(
+      typeof tab.id === 'number' &&
+        activeDrag?.type === 'openTab' &&
+        activeDrag.tabIds?.includes(tab.id)
+    );
+  const isRecentlyMoved =
+    typeof tab.id === 'number' && recentlyMovedIds.has(`tab-${tab.id}`);
   const [localIsEditing, setLocalIsEditing] = useState(false);
   const [localEditTitle, setLocalEditTitle] = useState(tab.title || '');
   const [isCopied, setIsCopied] = useState(false);
@@ -309,25 +330,40 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     } else if (selectedTabIds && selectedTabIds.size > 0 && (e.metaKey || e.ctrlKey)) {
       tabIdsToDrag = Array.from(new Set([...Array.from(selectedTabIds), tabId]));
     }
-    e.dataTransfer.setData(
-      'application/json',
-      JSON.stringify({
-        type: 'openTab',
-        tabId,
-        tabIds: tabIdsToDrag,
-        url: tab.url,
-        title: tab.title,
-        index: tab.index
-      })
-    );
+    const payload = {
+      type: 'openTab' as const,
+      tabId,
+      tabIds: tabIdsToDrag,
+      url: tab.url,
+      title: tab.title,
+      index: tab.index
+    };
+    e.dataTransfer.setData('application/json', JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copyMove';
+    startDragSession(payload);
+    attachMultiDragPreview(e, tabIdsToDrag.length, 'tab');
   };
 
   const handleDragEnd = () => {
     setIsDragging(false);
+    setDropPosition(null);
+    endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (activeDrag && activeDrag.type !== 'openTab') {
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+    if (
+      activeDrag?.type === 'openTab' &&
+      (!activeDrag.tabIds || activeDrag.tabIds.length <= 1) &&
+      activeDrag.tabId === tabId
+    ) {
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
@@ -342,36 +378,45 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos =
+      dropPosition || (e.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom');
+    setDropPosition(null);
+    endDragSession();
+
+    const data = parseDragPayload(e);
+    if (!data || data.type !== 'openTab') return;
+
     e.preventDefault();
     e.stopPropagation();
-    const pos =
-      dropPosition ||
-      (e.clientY - e.currentTarget.getBoundingClientRect().top <
-      e.currentTarget.getBoundingClientRect().height / 2
-        ? 'top'
-        : 'bottom');
-    setDropPosition(null);
 
-    try {
-      const dataStr = e.dataTransfer.getData('application/json');
-      if (!dataStr) return;
-      const data = JSON.parse(dataStr);
+    const targetSlotIndex = tab.index + (pos === 'bottom' ? 1 : 0);
+    const idsToMove: number[] =
+      Array.isArray(data.tabIds) && data.tabIds.length > 0
+        ? (data.tabIds as number[])
+        : typeof data.tabId === 'number'
+        ? [data.tabId]
+        : [];
 
-      if (data.type === 'openTab' && onMoveOpenTab) {
-        let targetIndex = tab.index;
-        if (pos === 'bottom') {
-          targetIndex += 1;
-        }
-        if (Array.isArray(data.tabIds) && data.tabIds.length > 0) {
-          for (let i = 0; i < data.tabIds.length; i++) {
-            onMoveOpenTab(data.tabIds[i], targetIndex + i);
-          }
-        } else if (typeof data.tabId === 'number' && data.tabId !== tabId) {
-          onMoveOpenTab(data.tabId, targetIndex);
+    if (idsToMove.length === 0 || (idsToMove.length === 1 && idsToMove[0] === tabId)) {
+      return;
+    }
+
+    if (onMoveOpenTabs) {
+      onMoveOpenTabs(idsToMove, targetSlotIndex);
+    } else if (onMoveOpenTab) {
+      if (idsToMove.length === 1) {
+        const draggedIdx = typeof data.index === 'number' ? data.index : -1;
+        const effectiveIndex =
+          draggedIdx !== -1 && draggedIdx < targetSlotIndex
+            ? Math.max(0, targetSlotIndex - 1)
+            : targetSlotIndex;
+        onMoveOpenTab(idsToMove[0], effectiveIndex);
+      } else {
+        for (let i = 0; i < idsToMove.length; i++) {
+          onMoveOpenTab(idsToMove[i], targetSlotIndex + i);
         }
       }
-    } catch {
-      // ignore
     }
   };
 
@@ -449,7 +494,9 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     <div
       role="button"
       tabIndex={0}
+      data-flip-id={typeof tabId === 'number' ? `tab-${tabId}` : undefined}
       data-tab-id={tabId}
+      style={{ '--drop-indent': '10px' } as React.CSSProperties}
       draggable={Boolean(tab.url && !isNewTab)}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
@@ -483,11 +530,11 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       }}
       className={`group relative flex items-center justify-between ${
         densityMode === 'relaxed'
-          ? 'min-h-[46px] py-1.5 px-2.5 my-1 rounded-xl border transition-all duration-150'
-          : 'h-[34px] px-2.5 my-[1px] rounded-lg'
+          ? 'min-h-[46px] py-1.5 px-2.5 my-1 rounded-xl border transition-[background-color,border-color,color,opacity] duration-150'
+          : 'h-[34px] px-2.5 my-[1px] rounded-lg transition-[background-color,color,opacity] duration-150'
       } cursor-pointer select-none outline-none ${
-        isDragging ? 'opacity-40 scale-98' : ''
-      } ${
+        isPartOfActiveDrag ? 'opacity-40' : ''
+      } ${isRecentlyMoved ? 'arctic-drop-settle' : ''} ${
         dropPosition === 'top'
           ? 'theme-drag-over-top'
           : dropPosition === 'bottom'
