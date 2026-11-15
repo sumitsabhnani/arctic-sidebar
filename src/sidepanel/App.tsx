@@ -16,6 +16,7 @@ import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode, EdgeTriggerMode } from '../types';
 import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
 import { isScratchpadUrl } from './utils/url';
+import { captureVerifiedTabFavicon, hydrateFaviconCache } from './utils/faviconCache';
 import { scrollElementIntoContainerView } from './utils/scrollIntoView';
 import { upsertPersistedBindings } from './utils/reconcileBindings';
 import { useFlipAnimation } from './hooks/useFlipAnimation';
@@ -187,6 +188,7 @@ export const App: React.FC = () => {
   });
 
   useEffect(() => {
+    void hydrateFaviconCache();
     chrome.storage.local.get(
       [
         'theme',
@@ -1125,6 +1127,7 @@ export const App: React.FC = () => {
             title,
             url: currentTab.url
           });
+          void captureVerifiedTabFavicon(currentTab, currentTab.url);
 
           // Bind tab immediately if present
           if (typeof currentTab.id === 'number') {
@@ -1165,6 +1168,8 @@ export const App: React.FC = () => {
           await updateBookmarkUrl(bookmarkId, currentTab.url);
           // 2. Immediately update the tab binding's originalUrl and clear isNavigatedAway
           await updateBookmarkBindingUrl(bookmarkId, currentTab.url);
+          // 3. Persist verified favicon for the updated bookmark URL
+          void captureVerifiedTabFavicon(currentTab, currentTab.url);
         }
       } catch (err) {
         console.warn('[Arctic] Could not replace bookmark url:', err);

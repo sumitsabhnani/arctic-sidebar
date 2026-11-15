@@ -14,8 +14,8 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react';
-import type { TabBinding } from '../../types';
-import { getFaviconUrl } from '../utils/url';
+import type { TabBinding, TabWithFaviconMeta } from '../../types';
+import { useResolvedFavicon } from '../utils/faviconCache';
 import { useFlipAnimation } from '../hooks/useFlipAnimation';
 import {
   endDragSession,
@@ -192,7 +192,6 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   onReloadTab,
   onDuplicateTab
 }) => {
-  const [faviconError, setFaviconError] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'left' | 'right' | null>(null);
@@ -210,7 +209,11 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const shortTitle = getShortTitle(bookmark.title, bookmark.url);
 
   const titleText = bookmark.title || bookmark.url || 'Favorite';
-  const faviconSrc = boundTab?.favIconUrl || (bookmark.url ? getFaviconUrl(bookmark.url, 48) : '');
+  const { faviconSrc, handleFaviconError, handleFaviconLoad } = useResolvedFavicon({
+    pageUrl: bookmark.url,
+    tab: boundTab as TabWithFaviconMeta | undefined,
+    size: 48
+  });
 
   let tooltip = `${titleText} (Double-click to reload original page)`;
   if (isActive && isNavAway) {
@@ -488,11 +491,12 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
           <RotateCcw className="w-4 h-4 text-amber-500 dark:text-amber-300 animate-spin-reverse stroke-[2.5]" />
         ) : isBoundTabLoading ? (
           <RotateCw className="w-4 h-4 animate-spin theme-accent-text" />
-        ) : !faviconError && faviconSrc ? (
+        ) : faviconSrc ? (
           <img
             src={faviconSrc}
             alt=""
-            onError={() => setFaviconError(true)}
+            onError={handleFaviconError}
+            onLoad={handleFaviconLoad}
             className="w-5 h-5 object-contain rounded-[4px] drop-shadow-sm transition-transform group-hover:scale-105"
           />
         ) : (

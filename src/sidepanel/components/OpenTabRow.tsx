@@ -17,8 +17,8 @@ import {
   Bell,
   Pin
 } from 'lucide-react';
-import type { SpaceItem, TabReminder } from '../../types';
-import { getFaviconUrl } from '../utils/url';
+import type { SpaceItem, TabReminder, TabWithFaviconMeta } from '../../types';
+import { useResolvedFavicon } from '../utils/faviconCache';
 import {
   attachMultiDragPreview,
   endDragSession,
@@ -114,7 +114,6 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onSaveRename,
   onCancelRename
 }) => {
-  const [faviconError, setFaviconError] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
   const activeDrag = useActiveDrag();
@@ -144,7 +143,11 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     tab.url.includes('/newtab.html') ||
     tab.url.includes('/command.html');
   const titleText = tab.title || (isNewTab ? 'New Tab' : tab.url || 'Untitled Tab');
-  const faviconSrc = tab.favIconUrl || (tab.url ? getFaviconUrl(tab.url, 32) : '');
+  const { faviconSrc, handleFaviconError, handleFaviconLoad } = useResolvedFavicon({
+    pageUrl: tab.url,
+    tab: tab as TabWithFaviconMeta,
+    size: 32
+  });
 
   const isAudible = Boolean(tab.audible);
   const isMuted = Boolean(tab.mutedInfo?.muted);
@@ -573,12 +576,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           <div className="relative w-4 h-4 flex items-center justify-center pointer-events-none">
             {isLoading ? (
               <RotateCw className="w-3.5 h-3.5 animate-spin theme-accent-text" />
-            ) : !faviconError && faviconSrc ? (
+            ) : faviconSrc ? (
               <img
                 src={faviconSrc}
                 alt=""
                 draggable={false}
-                onError={() => setFaviconError(true)}
+                onError={handleFaviconError}
+                onLoad={handleFaviconLoad}
                 className={`w-4 h-4 object-contain rounded-sm transition-opacity ${
                   isDiscarded ? 'opacity-60 grayscale' : 'opacity-100'
                 }`}

@@ -1,6 +1,7 @@
 import { beforeEach, vi } from 'vitest';
 import '@testing-library/jest-dom';
 import { createMockChrome } from './mockChrome';
+import { resetFaviconCacheForTests } from '../sidepanel/utils/faviconCache';
 
 export const mockChrome = createMockChrome();
 
@@ -22,6 +23,7 @@ if (typeof window !== 'undefined' && typeof window.DragEvent === 'undefined') {
 
 beforeEach(() => {
   mockChrome.__resetAll();
+  resetFaviconCacheForTests();
   globalThis.fetch = vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ['', []]

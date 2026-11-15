@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { BookmarkRow } from './BookmarkRow';
-import type { TabBinding } from '../../types';
+import type { TabBinding, TabWithFaviconMeta } from '../../types';
 
 describe('BookmarkRow component', () => {
   const mockBookmark: chrome.bookmarks.BookmarkTreeNode = {
@@ -238,5 +238,54 @@ describe('BookmarkRow component', () => {
     });
 
     expect(onDropItemToFolder).not.toHaveBeenCalled();
+  });
+
+  it('falls back to /_favicon/ when boundTab.favIconUrl fails and retries live favIconUrl after reload', () => {
+    const liveIcon = 'https://docs.google.com/favicon.ico';
+    const { container, rerender } = render(
+      <BookmarkRow
+        {...defaultProps}
+        boundTab={
+          {
+            id: 501,
+            url: 'https://docs.google.com',
+            status: 'complete',
+            favIconUrl: liveIcon,
+            _faviconRev: 1
+          } as TabWithFaviconMeta
+        }
+      />
+    );
+
+    // 1. Live icon fails transiently -> steps to /_favicon/ fallback instead of permanent Globe
+    let img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toBe(liveIcon);
+    fireEvent.error(img!);
+
+    img = container.querySelector('img');
+    expect(img).toBeInTheDocument();
+    expect(img?.getAttribute('src')).toContain('/_favicon/');
+    fireEvent.error(img!);
+    expect(container.querySelector('svg.lucide-globe')).toBeInTheDocument();
+
+    // 2. Reload completes with bumped _faviconRev -> retries liveIcon cleanly
+    rerender(
+      <BookmarkRow
+        {...defaultProps}
+        boundTab={
+          {
+            id: 501,
+            url: 'https://docs.google.com',
+            status: 'complete',
+            favIconUrl: liveIcon,
+            _faviconRev: 2
+          } as TabWithFaviconMeta
+        }
+      />
+    );
+
+    img = container.querySelector('img');
+    expect(img).toBeInTheDocument();
+    expect(img?.getAttribute('src')).toBe(liveIcon);
   });
 });

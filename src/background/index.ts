@@ -35,6 +35,17 @@ import {
 } from '../sidepanel/utils/reminderStorage';
 import { reconcileScratchpadStorageAndBookmark } from '../sidepanel/hooks/useScratchpad';
 import { closeInactiveArcticCommandTabs } from '../sidepanel/hooks/useTabBindings';
+import {
+  MAX_FAVICON_DATA_URL_LENGTH,
+  captureVerifiedTabFavicon,
+  fetchRealChromeFaviconDataUrl,
+  getCachedFaviconEntry,
+  getFaviconCacheKey,
+  hydrateFaviconCache,
+  isSameSiteForFavicon,
+  normalizeFaviconPageUrl,
+  upsertCachedFaviconEntries
+} from '../sidepanel/utils/faviconCache';
 
 let sessionLock: Promise<void> = Promise.resolve();
 
@@ -430,6 +441,11 @@ export async function handleTabUpdated(
   await withSessionLock(async () => {
     const session = await getSessionState();
     const bookmarkId = session.bookmarkIdByTabId[tabId];
+    const tabForFaviconCapture: chrome.tabs.Tab = {
+      ...tab,
+      ...(changeInfo.url ? { url: changeInfo.url } : {}),
+      ...(changeInfo.favIconUrl ? { favIconUrl: changeInfo.favIconUrl } : {})
+    };
 
     if (!bookmarkId) {
       if (
@@ -439,6 +455,15 @@ export async function handleTabUpdated(
         Boolean(changeInfo.url || getEffectiveTabUrl(tab))
       ) {
         scheduleBackgroundReconcile();
+      }
+      if (changeInfo.favIconUrl || changeInfo.status === 'complete') {
+        void captureVerifiedTabFavicon(tabForFaviconCapture, undefined, { size: 32 }).then(
+          (dataUrl) => {
+            if (dataUrl) {
+              scheduleEdgeItemsBroadcast(tab.windowId);
+            }
+          }
+        );
       }
       scheduleEdgeItemsBroadcast(tab.windowId);
       return;
@@ -460,6 +485,16 @@ export async function handleTabUpdated(
     if (nextTitle && nextTitle !== binding.currentTitle) {
       binding.currentTitle = nextTitle;
       hasChanged = true;
+    }
+
+    if (changeInfo.favIconUrl || changeInfo.status === 'complete') {
+      void captureVerifiedTabFavicon(tabForFaviconCapture, binding.originalUrl, {
+        size: 32
+      }).then((dataUrl) => {
+        if (dataUrl) {
+          scheduleEdgeItemsBroadcast(tab.windowId);
+        }
+      });
     }
 
     if (hasChanged) {
@@ -740,89 +775,109 @@ const sidePanelPorts = new Map<chrome.runtime.Port, number>();
 const closingGuardUntilByWindow = new Map<number, number>();
 const openingGuardUntilByWindow = new Map<number, number>();
 const recentlyCollapsedAtByWindow = new Map<number, number>();
-const faviconDataCache = new Map<string, string>();
 let visibilityLock: Promise<void> = Promise.resolve();
 let scriptSyncLock: Promise<void> = Promise.resolve();
 let edgeBroadcastTimer: ReturnType<typeof setTimeout> | null = null;
 const pendingEdgeBroadcastWinIds = new Set<number | 'ALL'>();
 
-function normalizeShortcutFaviconUrl(pageUrl: string): string {
-  try {
-    const host = new URL(pageUrl).hostname.toLowerCase().replace(/^www\./, '');
-    if (host === 'docs.new' || host === 'document.new') {
-      return 'https://docs.google.com/document/';
-    }
-    if (host === 'sheets.new' || host === 'spreadsheet.new') {
-      return 'https://docs.google.com/spreadsheets/';
-    }
-    if (host === 'slides.new' || host === 'presentation.new') {
-      return 'https://docs.google.com/presentation/';
-    }
-    if (host === 'notion.new') {
-      return 'https://www.notion.so/';
-    }
-    if (host === 'gist.new') {
-      return 'https://gist.github.com/';
-    }
-  } catch {
-    // ignore
-  }
-  return pageUrl;
-}
-
-function getCachedFaviconDataUrl(pageUrl: string, boundTabFavIconUrl?: string): string {
+function getCachedFaviconDataUrl(pageUrl: string, boundTab?: chrome.tabs.Tab): string {
   if (!pageUrl) return '';
-  const resolvedUrl = normalizeShortcutFaviconUrl(pageUrl);
-  const cached = faviconDataCache.get(resolvedUrl);
-  if (cached) return cached;
-  if (boundTabFavIconUrl && boundTabFavIconUrl.startsWith('data:image/')) {
-    if (faviconDataCache.size >= 300) {
-      const oldestKey = faviconDataCache.keys().next().value;
-      if (oldestKey) faviconDataCache.delete(oldestKey);
+  const cachedForPage = getCachedFaviconEntry(pageUrl);
+  if (cachedForPage?.dataUrl) {
+    return cachedForPage.dataUrl;
+  }
+
+  const effectiveTabUrl = boundTab ? getEffectiveTabUrl(boundTab) || boundTab.url || '' : '';
+  const tabMatchesSite =
+    Boolean(effectiveTabUrl) && isSameSiteForFavicon(effectiveTabUrl, pageUrl);
+
+  if (tabMatchesSite) {
+    const cachedForTab = getCachedFaviconEntry(effectiveTabUrl);
+    if (cachedForTab?.dataUrl) {
+      return cachedForTab.dataUrl;
     }
-    faviconDataCache.set(resolvedUrl, boundTabFavIconUrl);
+  }
+
+  const boundTabFavIconUrl = boundTab?.favIconUrl;
+  if (
+    boundTabFavIconUrl &&
+    boundTabFavIconUrl.startsWith('data:image/') &&
+    boundTabFavIconUrl.length <= MAX_FAVICON_DATA_URL_LENGTH &&
+    (!effectiveTabUrl || tabMatchesSite)
+  ) {
+    const pageKey = getFaviconCacheKey(pageUrl);
+    if (pageKey) {
+      void upsertCachedFaviconEntries({
+        [pageKey]: {
+          dataUrl: boundTabFavIconUrl,
+          iconUrl: boundTabFavIconUrl,
+          pageUrl: normalizeFaviconPageUrl(pageUrl),
+          updatedAt: Date.now()
+        }
+      });
+    }
     return boundTabFavIconUrl;
   }
+
   return '';
 }
 
 async function resolveFaviconDataUrl(
   pageUrl: string,
-  boundTabFavIconUrl?: string
+  boundTab?: chrome.tabs.Tab
 ): Promise<string> {
   if (!pageUrl) return '';
-  const warm = getCachedFaviconDataUrl(pageUrl, boundTabFavIconUrl);
+  await hydrateFaviconCache();
+
+  const warm = getCachedFaviconDataUrl(pageUrl, boundTab);
   if (warm) return warm;
 
-  if (typeof fetch !== 'function' || !chrome.runtime?.id) {
-    return '';
+  const effectiveTabUrl = boundTab ? getEffectiveTabUrl(boundTab) || boundTab.url || '' : '';
+  const tabMatchesSite =
+    Boolean(effectiveTabUrl) && isSameSiteForFavicon(effectiveTabUrl, pageUrl);
+
+  const candidatePageUrls: string[] = [];
+  if (tabMatchesSite && effectiveTabUrl) {
+    candidatePageUrls.push(effectiveTabUrl);
+  }
+  candidatePageUrls.push(pageUrl);
+
+  const seenNormalized = new Set<string>();
+  for (const candidate of candidatePageUrls) {
+    const normalized = normalizeFaviconPageUrl(candidate);
+    if (!normalized || seenNormalized.has(normalized)) continue;
+    seenNormalized.add(normalized);
+
+    const dataUrl = await fetchRealChromeFaviconDataUrl(normalized, 32);
+    if (dataUrl) {
+      const now = Date.now();
+      const updates: Record<string, { dataUrl: string; pageUrl: string; updatedAt: number }> = {};
+      const pageKey = getFaviconCacheKey(pageUrl);
+      if (pageKey) {
+        updates[pageKey] = {
+          dataUrl,
+          pageUrl: normalizeFaviconPageUrl(pageUrl),
+          updatedAt: now
+        };
+      }
+      if (tabMatchesSite && effectiveTabUrl) {
+        const tabKey = getFaviconCacheKey(effectiveTabUrl);
+        if (tabKey && tabKey !== pageKey) {
+          updates[tabKey] = {
+            dataUrl,
+            pageUrl: normalizeFaviconPageUrl(effectiveTabUrl),
+            updatedAt: now
+          };
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        void upsertCachedFaviconEntries(updates);
+      }
+      return dataUrl;
+    }
   }
 
-  const resolvedUrl = normalizeShortcutFaviconUrl(pageUrl);
-  try {
-    const endpoint = `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(
-      resolvedUrl
-    )}&size=32`;
-    const resp = await fetch(endpoint);
-    if (!resp || !resp.ok) return '';
-    const buf = await resp.arrayBuffer();
-    if (!buf || buf.byteLength === 0) return '';
-    const bytes = new Uint8Array(buf);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const mime = resp.headers?.get?.('content-type') || 'image/png';
-    const dataUrl = `data:${mime};base64,${btoa(binary)}`;
-    if (faviconDataCache.size >= 300) {
-      const oldestKey = faviconDataCache.keys().next().value;
-      if (oldestKey) faviconDataCache.delete(oldestKey);
-    }
-    faviconDataCache.set(resolvedUrl, dataUrl);
-    return dataUrl;
-  } catch {
-    return '';
-  }
+  return '';
 }
 
 function isExcludedInternalBookmarkNode(node: chrome.bookmarks.BookmarkTreeNode): boolean {
@@ -1019,7 +1074,8 @@ export async function getEdgeRailDataForWindow(
       chrome.storage?.session?.get
         ? chrome.storage.session.get(['customTabTitles']).catch(() => ({}))
         : Promise.resolve({}),
-      chrome.tabs?.query ? chrome.tabs.query({}).catch(() => []) : Promise.resolve([])
+      chrome.tabs?.query ? chrome.tabs.query({}).catch(() => []) : Promise.resolve([]),
+      hydrateFaviconCache()
     ]);
 
     const customTabTitles =
@@ -1070,8 +1126,8 @@ export async function getEdgeRailDataForWindow(
       );
       const isNavigatedAway = Boolean(isOpen && binding?.isNavigatedAway);
       const faviconDataUrl = eagerFavicon
-        ? await resolveFaviconDataUrl(url, boundTab?.favIconUrl)
-        : getCachedFaviconDataUrl(url, boundTab?.favIconUrl);
+        ? await resolveFaviconDataUrl(url, boundTab)
+        : getCachedFaviconDataUrl(url, boundTab);
 
       return {
         id: bm.id,
@@ -1136,7 +1192,7 @@ export async function getEdgeRailDataForWindow(
       const effectiveUrl = getEffectiveTabUrl(tab) || tab.url || '';
       const title = customTabTitles[tabId] || tab.title || effectiveUrl || 'Untitled Tab';
       const isActive = Boolean(activeTabInWindow && activeTabInWindow.id === tabId);
-      const faviconDataUrl = await resolveFaviconDataUrl(effectiveUrl, tab.favIconUrl);
+      const faviconDataUrl = await resolveFaviconDataUrl(effectiveUrl, tab);
 
       return {
         tabId,

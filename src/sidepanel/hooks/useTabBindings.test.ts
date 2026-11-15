@@ -1327,4 +1327,73 @@ describe('useTabBindings hook', () => {
     });
     expect(mockChrome.__getLocalStorage().persistedBindingsByBookmarkId).toBeUndefined();
   });
+
+  it('increments _faviconRev across reloads and clears stale favIconUrl when Chrome omits favIconUrl on complete', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 55,
+        windowId: 10,
+        url: 'https://portal.example.com',
+        title: 'Portal',
+        favIconUrl: 'https://portal.example.com/favicon.ico',
+        status: 'complete',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-portal': {
+          bookmarkId: 'bm-portal',
+          tabId: 55,
+          windowId: 10,
+          originalUrl: 'https://portal.example.com',
+          currentUrl: 'https://portal.example.com',
+          currentTitle: 'Portal',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 55: 'bm-portal' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // 1. reloadTab bumps _faviconRev
+    await act(async () => {
+      await result.current.reloadTab(55);
+    });
+    const revAfterReloadCall = (result.current.tabsByTabId[55] as { _faviconRev?: number })
+      ._faviconRev;
+    expect(revAfterReloadCall).toBeGreaterThanOrEqual(1);
+
+    // 2. Slow/error reload completes WITHOUT favIconUrl on tab -> stale favIconUrl is cleared instead of leaked
+    await act(async () => {
+      await mockChrome.__triggerTabUpdated(
+        55,
+        { status: 'complete' },
+        { favIconUrl: undefined }
+      );
+    });
+    expect(result.current.tabsByTabId[55].favIconUrl).toBeUndefined();
+    const revAfterErrorComplete = (result.current.tabsByTabId[55] as { _faviconRev?: number })
+      ._faviconRev!;
+    expect(revAfterErrorComplete).toBeGreaterThan(revAfterReloadCall!);
+
+    // 3. Subsequent healthy reload emits the original favIconUrl -> restores favIconUrl and bumps _faviconRev
+    await act(async () => {
+      await mockChrome.__triggerTabUpdated(
+        55,
+        { status: 'complete', favIconUrl: 'https://portal.example.com/favicon.ico' },
+        { favIconUrl: 'https://portal.example.com/favicon.ico' }
+      );
+    });
+    expect(result.current.tabsByTabId[55].favIconUrl).toBe(
+      'https://portal.example.com/favicon.ico'
+    );
+    expect(
+      (result.current.tabsByTabId[55] as { _faviconRev?: number })._faviconRev
+    ).toBeGreaterThan(revAfterErrorComplete);
+  });
 });

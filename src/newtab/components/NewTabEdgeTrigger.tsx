@@ -10,6 +10,7 @@ import type {
   ThemeMode
 } from '../../types';
 import { resolveEffectiveTheme } from '../../sidepanel/utils/theme';
+import { normalizeFaviconPageUrl } from '../../sidepanel/utils/faviconCache';
 import { getFaviconUrl } from '../../sidepanel/utils/url';
 
 const MIN_THUMB_HEIGHT_PX = 24;
@@ -74,7 +75,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
   const [quickAccessItems, setQuickAccessItems] = useState<EdgeQuickAccessItem[]>([]);
   const [spaceItems, setSpaceItems] = useState<EdgeSpaceNode[]>([]);
   const [todayTabItems, setTodayTabItems] = useState<EdgeTodayTabItem[]>([]);
-  const [failedFavicons, setFailedFavicons] = useState<Record<string, boolean>>({});
+  const [failedFaviconSrcs, setFailedFaviconSrcs] = useState<Record<string, string[]>>({});
   const [tooltip, setTooltip] = useState<{ text: string; top: number } | null>(null);
   const [openFolder, setOpenFolder] = useState<{ id: string; top: number } | null>(null);
   const [expandedSubfolders, setExpandedSubfolders] = useState<Record<string, boolean>>({});
@@ -880,12 +881,36 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
     setTooltip({ text, top: rect.top + rect.height / 2 });
   };
 
+  const resolveEdgeItemFaviconSrc = (
+    itemKey: string,
+    faviconDataUrl: string | undefined,
+    pageUrl: string
+  ): string => {
+    const normalizedPageUrl = normalizeFaviconPageUrl(pageUrl);
+    const fallbackEndpoint = normalizedPageUrl ? getFaviconUrl(normalizedPageUrl, 48) : '';
+    const candidates = [faviconDataUrl || '', fallbackEndpoint].filter(Boolean);
+    const failedForKey = failedFaviconSrcs[itemKey];
+    if (!failedForKey || failedForKey.length === 0) {
+      return candidates[0] || '';
+    }
+    return candidates.find((candidate) => !failedForKey.includes(candidate)) || '';
+  };
+
+  const markEdgeFaviconSrcFailed = (itemKey: string, failedSrc: string) => {
+    if (!failedSrc) return;
+    setFailedFaviconSrcs((prev) => {
+      const existing = prev[itemKey] || [];
+      if (existing.includes(failedSrc)) return prev;
+      return { ...prev, [itemKey]: [...existing, failedSrc] };
+    });
+  };
+
   const renderRailBookmarkBtn = (
     item: EdgeQuickAccessItem,
     section: 'quick-access' | 'space'
   ) => {
-    const src = item.faviconDataUrl || getFaviconUrl(item.url, 48);
-    const hasImg = Boolean(src) && !failedFavicons[item.id];
+    const src = resolveEdgeItemFaviconSrc(item.id, item.faviconDataUrl, item.url);
+    const hasImg = Boolean(src);
     let tipText = item.title || item.url;
     if (item.isActive && item.isNavigatedAway) {
       tipText = `${tipText} · Click to reset`;
@@ -926,7 +951,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
           <img
             src={src}
             alt=""
-            onError={() => setFailedFavicons((prev) => ({ ...prev, [item.id]: true }))}
+            onError={() => markEdgeFaviconSrcFailed(item.id, src)}
             className="w-4 h-4 rounded-[4px] object-contain pointer-events-none"
           />
         ) : (
@@ -1003,8 +1028,8 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
 
   const renderRailTodayTabBtn = (item: EdgeTodayTabItem) => {
     const faviconKey = `today:${item.tabId}`;
-    const src = item.faviconDataUrl || getFaviconUrl(item.url, 48);
-    const hasImg = Boolean(src) && !failedFavicons[faviconKey];
+    const src = resolveEdgeItemFaviconSrc(faviconKey, item.faviconDataUrl, item.url);
+    const hasImg = Boolean(src);
     const baseLabel = item.title || item.url;
     const tipText = item.isDiscarded ? `${baseLabel} · Sleeping` : baseLabel;
     const dimContent = item.isDiscarded && !item.isActive;
@@ -1055,7 +1080,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
           <img
             src={src}
             alt=""
-            onError={() => setFailedFavicons((prev) => ({ ...prev, [faviconKey]: true }))}
+            onError={() => markEdgeFaviconSrcFailed(faviconKey, src)}
             className={`w-4 h-4 rounded-[4px] object-contain pointer-events-none ${
               dimContent ? 'opacity-50' : ''
             }`}
@@ -1081,8 +1106,8 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
   const renderFlyoutNodes = (nodes: EdgeSpaceNode[], depth = 0): React.ReactNode => {
     return nodes.map((node) => {
       if (node.type === 'bookmark') {
-        const src = node.faviconDataUrl || getFaviconUrl(node.url, 48);
-        const hasImg = Boolean(src) && !failedFavicons[node.id];
+        const src = resolveEdgeItemFaviconSrc(node.id, node.faviconDataUrl, node.url);
+        const hasImg = Boolean(src);
         const label =
           node.isNavigatedAway && node.currentTitle && node.currentTitle !== node.title
             ? `${node.title} → ${node.currentTitle}`
@@ -1108,7 +1133,7 @@ export const NewTabEdgeTrigger: React.FC<NewTabEdgeTriggerProps> = ({
               <img
                 src={src}
                 alt=""
-                onError={() => setFailedFavicons((prev) => ({ ...prev, [node.id]: true }))}
+                onError={() => markEdgeFaviconSrcFailed(node.id, src)}
                 className="w-4 h-4 rounded-[4px] object-contain shrink-0 pointer-events-none"
               />
             ) : (
