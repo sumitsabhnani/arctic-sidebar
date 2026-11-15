@@ -127,6 +127,35 @@ export function createMockChrome() {
     return null;
   }
 
+  function findParentAndIndex(
+    nodes: MockBookmarkNode[],
+    id: string
+  ): { parent: MockBookmarkNode; index: number } | null {
+    for (const n of nodes) {
+      if (n.children) {
+        const idx = n.children.findIndex((c) => c.id === id);
+        if (idx !== -1) {
+          return { parent: n, index: idx };
+        }
+        const found = findParentAndIndex(n.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function stampTreeIndices(nodes: MockBookmarkNode[], parentId?: string): void {
+    nodes.forEach((n, idx) => {
+      if (parentId !== undefined) {
+        n.parentId = parentId;
+        n.index = idx;
+      }
+      if (n.children) {
+        stampTreeIndices(n.children, n.id);
+      }
+    });
+  }
+
   function cloneTree<T>(val: T): T {
     return JSON.parse(JSON.stringify(val));
   }
@@ -336,13 +365,18 @@ export function createMockChrome() {
       }
     },
     bookmarks: {
-      getTree: vi.fn(async () => cloneTree(bookmarksTree)),
+      getTree: vi.fn(async () => {
+        stampTreeIndices(bookmarksTree);
+        return cloneTree(bookmarksTree);
+      }),
       getChildren: vi.fn(async (id: string) => {
+        stampTreeIndices(bookmarksTree);
         const node = findNode(bookmarksTree, id);
         if (!node) throw new Error(`Bookmark node ${id} not found`);
         return cloneTree(node.children || []) as chrome.bookmarks.BookmarkTreeNode[];
       }),
       getSubTree: vi.fn(async (id: string) => {
+        stampTreeIndices(bookmarksTree);
         const node = findNode(bookmarksTree, id);
         if (!node) throw new Error(`Bookmark node ${id} not found`);
         return [cloneTree(node)] as chrome.bookmarks.BookmarkTreeNode[];
@@ -367,6 +401,7 @@ export function createMockChrome() {
         } else {
           parent.children.push(newNode);
         }
+        stampTreeIndices(bookmarksTree);
 
         const res = cloneTree(newNode) as chrome.bookmarks.BookmarkTreeNode;
         for (const listener of bookmarkCreatedListeners) {
@@ -385,24 +420,49 @@ export function createMockChrome() {
         return cloneTree(node) as chrome.bookmarks.BookmarkTreeNode;
       }),
       move: vi.fn(async (id: string, destination: { parentId?: string; index?: number }) => {
-        const node = removeNodeRecursive(bookmarksTree, id);
-        if (!node) throw new Error(`Bookmark node ${id} not found`);
-        const targetParentId = destination.parentId || node.parentId || '2';
+        stampTreeIndices(bookmarksTree);
+        const existingLoc = findParentAndIndex(bookmarksTree, id);
+        const nodeRef = findNode(bookmarksTree, id);
+        if (!nodeRef) throw new Error(`Bookmark node ${id} not found`);
+
+        const oldParentId = existingLoc?.parent.id || nodeRef.parentId || '';
+        const oldIndex = existingLoc?.index ?? 0;
+        const targetParentId = destination.parentId || oldParentId || '2';
         const targetParent = findNode(bookmarksTree, targetParentId);
         if (!targetParent) throw new Error(`Target parent ${targetParentId} not found`);
         if (!targetParent.children) targetParent.children = [];
+
+        if (
+          oldParentId === targetParentId &&
+          typeof destination.index === 'number' &&
+          (destination.index === oldIndex || destination.index === oldIndex + 1)
+        ) {
+          return cloneTree(nodeRef) as chrome.bookmarks.BookmarkTreeNode;
+        }
+
+        const node = removeNodeRecursive(bookmarksTree, id)!;
         node.parentId = targetParentId;
+
+        let insertIndex: number;
         if (typeof destination.index === 'number') {
-          targetParent.children.splice(destination.index, 0, node);
+          const adjusted =
+            oldParentId === targetParentId && destination.index > oldIndex
+              ? destination.index - 1
+              : destination.index;
+          insertIndex = Math.max(0, Math.min(adjusted, targetParent.children.length));
+          targetParent.children.splice(insertIndex, 0, node);
         } else {
+          insertIndex = targetParent.children.length;
           targetParent.children.push(node);
         }
+        stampTreeIndices(bookmarksTree);
+
         for (const listener of bookmarkMovedListeners) {
           listener(id, {
             parentId: targetParentId,
-            index: destination.index ?? targetParent.children.length - 1,
-            oldParentId: node.parentId || '',
-            oldIndex: 0
+            index: insertIndex,
+            oldParentId,
+            oldIndex
           });
         }
         return cloneTree(node) as chrome.bookmarks.BookmarkTreeNode;
@@ -566,7 +626,11 @@ export function createMockChrome() {
         const idx = tabsState.findIndex((t) => t.id === tabId);
         if (idx !== -1) {
           const [tab] = tabsState.splice(idx, 1);
-          tabsState.splice(moveProperties.index, 0, tab);
+          const safeIdx = Math.max(0, Math.min(moveProperties.index, tabsState.length));
+          tabsState.splice(safeIdx, 0, tab);
+          tabsState.forEach((t, i) => {
+            t.index = i;
+          });
           for (const listener of tabMovedListeners) listener();
           return cloneTree(tab);
         }

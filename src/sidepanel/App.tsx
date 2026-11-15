@@ -18,6 +18,8 @@ import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './ut
 import { isScratchpadUrl } from './utils/url';
 import { scrollElementIntoContainerView } from './utils/scrollIntoView';
 import { upsertPersistedBindings } from './utils/reconcileBindings';
+import { useFlipAnimation } from './hooks/useFlipAnimation';
+import { endDragSession, parseDragPayload, useActiveDrag } from './utils/dnd';
 import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose } from 'lucide-react';
 
 const EDGE_TRIGGER_ORIGINS = ['http://*/*', 'https://*/*'];
@@ -67,6 +69,7 @@ export const App: React.FC = () => {
     updateBookmarkUrl,
     removeBookmarkOrFolder,
     moveBookmarks,
+    insertOptimisticBookmarks,
     loading
   } = useBookmarks();
 
@@ -104,6 +107,7 @@ export const App: React.FC = () => {
     discardAllBackgroundTabs,
     discardedTabsByTabId,
     moveOpenTab,
+    moveOpenTabs,
     renameOpenTab,
     toggleMuteTab,
     autoArchiveInterval,
@@ -1003,8 +1007,36 @@ export const App: React.FC = () => {
     }
   }, [editingTarget, unpinnedTabs]);
 
-  // Drag over workspace container
-  const [isWorkspaceDragOver, setIsWorkspaceDragOver] = useState(false);
+  // Drag over workspace root targets (Space header, empty card, and trailing root tail strip)
+  const [isWorkspaceHeaderDragOver, setIsWorkspaceHeaderDragOver] = useState(false);
+  const [isEmptyWorkspaceDragOver, setIsEmptyWorkspaceDragOver] = useState(false);
+  const [isWorkspaceTailDragOver, setIsWorkspaceTailDragOver] = useState(false);
+  const activeDrag = useActiveDrag();
+  const workspaceListRef = React.useRef<HTMLDivElement>(null);
+  const workspaceTreeRoots = useMemo(
+    () => (workspaceNode ? [workspaceNode] : []),
+    [workspaceNode]
+  );
+  const workspaceOrderSignature = useMemo(() => {
+    const parts: string[] = [];
+    const walk = (nodes: chrome.bookmarks.BookmarkTreeNode[]) => {
+      for (const n of nodes) {
+        if (n.url) {
+          parts.push(n.id);
+        } else {
+          const collapsed =
+            collapsedFolderIds[n.id] !== undefined ? Boolean(collapsedFolderIds[n.id]) : true;
+          parts.push(`${n.id}:${collapsed ? '0' : '1'}`);
+          if (!collapsed && n.children) {
+            walk(n.children);
+          }
+        }
+      }
+    };
+    walk(workspaceBookmarks);
+    return parts.join(',');
+  }, [workspaceBookmarks, collapsedFolderIds]);
+  useFlipAnimation(workspaceListRef, workspaceOrderSignature, activeSpaceId);
 
   // Global keyboard shortcuts:
   // - Ctrl+T / Cmd+T: New Tab
@@ -1408,12 +1440,18 @@ export const App: React.FC = () => {
         }
 
         if (tabsToPin.length > 0) {
-          await pinMultipleTabs(tabsToPin, targetFolderId, targetIndex);
+          await pinMultipleTabs(tabsToPin, targetFolderId, targetIndex, (createdNodes) => {
+            insertOptimisticBookmarks(createdNodes, targetFolderId, targetIndex);
+          });
         }
         setSelectedTabIds(new Set());
         setLastSelectedTabId(null);
         lastSelectedTabIdRef.current = null;
-      } else if (data.type === 'bookmark' || data.type === 'folder') {
+      } else if (
+        data.type === 'bookmark' ||
+        data.type === 'folder' ||
+        data.type === 'quickAccess'
+      ) {
         const rawIds: string[] =
           Array.isArray(data.ids) && data.ids.length > 0
             ? (data.ids as string[])
@@ -1438,7 +1476,16 @@ export const App: React.FC = () => {
         lastSelectedBookmarkIdRef.current = null;
       }
     },
-    [visibleUnpinnedTabs, tabsByTabId, unpinnedTabs, pinMultipleTabs, workspaceBookmarks, getVisibleBookmarkIds, moveBookmarks]
+    [
+      visibleUnpinnedTabs,
+      tabsByTabId,
+      unpinnedTabs,
+      pinMultipleTabs,
+      insertOptimisticBookmarks,
+      workspaceBookmarks,
+      getVisibleBookmarkIds,
+      moveBookmarks
+    ]
   );
 
   /**
@@ -1447,16 +1494,17 @@ export const App: React.FC = () => {
   const handleReorderQuickAccess = useCallback(
     async (draggedId: string, targetIndex: number) => {
       if (!activeFolderIds.quickAccessId) return;
-      try {
-        await chrome.bookmarks.move(draggedId, {
-          parentId: activeFolderIds.quickAccessId,
-          index: targetIndex
-        });
-      } catch (err) {
-        console.warn('[Arctic] Could not reorder quick access bookmark:', err);
-      }
+      await moveBookmarks([draggedId], activeFolderIds.quickAccessId, targetIndex);
     },
-    [activeFolderIds.quickAccessId]
+    [activeFolderIds.quickAccessId, moveBookmarks]
+  );
+
+  const handleDropItemToQuickAccess = useCallback(
+    (data: { type: string; [key: string]: unknown }, targetIndex?: number) => {
+      if (!activeFolderIds.quickAccessId) return;
+      void handleDropItemToFolder(data, activeFolderIds.quickAccessId, targetIndex);
+    },
+    [activeFolderIds.quickAccessId, handleDropItemToFolder]
   );
 
   /**
@@ -1733,6 +1781,7 @@ export const App: React.FC = () => {
             onRenameBookmark={renameBookmarkOrFolder}
             onRemoveBookmark={handleDeleteBookmark}
             onReorderQuickAccess={handleReorderQuickAccess}
+            onDropItemToQuickAccess={handleDropItemToQuickAccess}
             onReloadTab={reloadTab}
             onDuplicateTab={duplicateTab}
           />
@@ -1743,34 +1792,57 @@ export const App: React.FC = () => {
       <div
         ref={mainScrollRef}
         onClick={handleContainerClick}
+        onDragOverCapture={(e) => {
+          const el = mainScrollRef.current;
+          if (!el || el.scrollHeight <= el.clientHeight) return;
+          const rect = el.getBoundingClientRect();
+          if (rect.height <= 0) return;
+          const edgeThreshold = 36;
+          const distTop = e.clientY - rect.top;
+          const distBottom = rect.bottom - e.clientY;
+          if (distTop >= 0 && distTop < edgeThreshold) {
+            const speed = Math.ceil(((edgeThreshold - distTop) / edgeThreshold) * 10);
+            el.scrollTop = Math.max(0, el.scrollTop - speed);
+          } else if (distBottom >= 0 && distBottom < edgeThreshold) {
+            const speed = Math.ceil(((edgeThreshold - distBottom) / edgeThreshold) * 10);
+            el.scrollTop = Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + speed);
+          }
+        }}
         className="flex-1 overflow-y-auto overflow-x-hidden px-2.5 pt-3 pb-7 space-y-4"
       >
         {/* Section 2: Active Space / Home Vertical Tabs Tree (Permanent Bookmarks & Folders) */}
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
-            setIsWorkspaceDragOver(true);
-          }}
-          onDragLeave={() => setIsWorkspaceDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsWorkspaceDragOver(false);
-            if (activeFolderIds.workspaceId) {
-              try {
-                const data = JSON.parse(e.dataTransfer.getData('application/json'));
-                handleDropItemToFolder(data, activeFolderIds.workspaceId);
-              } catch {
-                // ignore
+        <div className="flex flex-col space-y-1.5 rounded-xl">
+          {/* Prominent Space / Home Title Header (also acts as root-level drop target) */}
+          <div
+            data-testid="workspace-header-dropzone"
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              e.dataTransfer.dropEffect = 'move';
+              if (!isWorkspaceHeaderDragOver) setIsWorkspaceHeaderDragOver(true);
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+              setIsWorkspaceHeaderDragOver(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsWorkspaceHeaderDragOver(false);
+              endDragSession();
+              if (!activeFolderIds.workspaceId) return;
+              const data = parseDragPayload(e);
+              if (data) {
+                void handleDropItemToFolder(
+                  data as { type: string; [key: string]: unknown },
+                  activeFolderIds.workspaceId
+                );
               }
-            }
-          }}
-          className={`flex flex-col space-y-1.5 rounded-xl transition-colors ${
-            isWorkspaceDragOver ? 'theme-drag-over-inside' : ''
-          }`}
-        >
-          {/* Prominent Space / Home Title Header (larger than tabs/folders, no left icon, no dropdown arrow) */}
-          <div className="flex items-center justify-between px-2 pt-1.5 pb-1">
+            }}
+            className={`flex items-center justify-between px-2 pt-1.5 pb-1 rounded-lg transition-colors ${
+              isWorkspaceHeaderDragOver ? 'theme-drag-over-inside' : ''
+            }`}
+          >
             {isRenamingWorkspace ? (
               <form
                 onSubmit={(e) => {
@@ -1835,7 +1907,12 @@ export const App: React.FC = () => {
           </div>
 
           {/* Render Vertical Tree in Grouped Card (5a) */}
-          <div className="flex flex-col rounded-2xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 backdrop-blur-sm divide-y divide-black/5 dark:divide-white/5 overflow-hidden shadow-xs animate-in fade-in duration-100">
+          <div
+            ref={workspaceListRef}
+            className={`flex flex-col rounded-2xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 backdrop-blur-sm divide-y divide-black/5 dark:divide-white/5 overflow-hidden py-0.5 shadow-xs animate-in fade-in duration-100 transition-shadow ${
+              isEmptyWorkspaceDragOver ? 'theme-drag-over-inside' : ''
+            }`}
+          >
             {/* Inline New Folder Input Row */}
             {isCreatingRootFolder && (
               <form
@@ -1884,7 +1961,34 @@ export const App: React.FC = () => {
                 <span className="text-xs">Loading tabs...</span>
               </div>
             ) : workspaceBookmarks.length === 0 && !isCreatingRootFolder ? (
-              <div className="px-3 py-6 text-center text-zinc-500">
+              <div
+                data-testid="workspace-empty-dropzone"
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (!isEmptyWorkspaceDragOver) setIsEmptyWorkspaceDragOver(true);
+                }}
+                onDragLeave={(e) => {
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                  setIsEmptyWorkspaceDragOver(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsEmptyWorkspaceDragOver(false);
+                  endDragSession();
+                  if (!activeFolderIds.workspaceId) return;
+                  const data = parseDragPayload(e);
+                  if (data) {
+                    void handleDropItemToFolder(
+                      data as { type: string; [key: string]: unknown },
+                      activeFolderIds.workspaceId
+                    );
+                  }
+                }}
+                className="px-3 py-6 text-center text-zinc-500"
+              >
                 <p className="text-xs">
                   {`No tabs or folders in ${spaceDisplayTitle} yet.`}
                 </p>
@@ -1948,6 +2052,7 @@ export const App: React.FC = () => {
                       onSelectBookmark={handleSelectBookmark}
                       onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
                       onMoveMultipleBookmarksToSpace={handleMoveMultipleBookmarksToSpace}
+                      treeRoots={workspaceTreeRoots}
                     />
                   );
                 }
@@ -2002,11 +2107,58 @@ export const App: React.FC = () => {
                     onSelectBookmark={handleSelectBookmark}
                     onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
                     onMoveMultipleBookmarksToSpace={handleMoveMultipleBookmarksToSpace}
+                    treeRoots={workspaceTreeRoots}
                   />
                 );
               })
             )}
           </div>
+
+          {/* Root Tail Drop Zone: lets users drop tabs/folders at the very end of Active Space outside any trailing collapsed or expanded folder */}
+          {workspaceBookmarks.length > 0 && (
+            <div
+              data-testid="workspace-tail-dropzone"
+              onDragOver={(e) => {
+                const lastRootItem = workspaceBookmarks[workspaceBookmarks.length - 1];
+                if (
+                  activeDrag &&
+                  activeDrag.type !== 'openTab' &&
+                  (!activeDrag.ids || activeDrag.ids.length <= 1) &&
+                  activeDrag.parentId === activeFolderIds.workspaceId &&
+                  lastRootItem?.id === activeDrag.id
+                ) {
+                  if (isWorkspaceTailDragOver) setIsWorkspaceTailDragOver(false);
+                  return;
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                if (!isWorkspaceTailDragOver) setIsWorkspaceTailDragOver(true);
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setIsWorkspaceTailDragOver(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsWorkspaceTailDragOver(false);
+                endDragSession();
+                if (!activeFolderIds.workspaceId) return;
+                const data = parseDragPayload(e);
+                if (data) {
+                  void handleDropItemToFolder(
+                    data as { type: string; [key: string]: unknown },
+                    activeFolderIds.workspaceId
+                  );
+                }
+              }}
+              style={{ '--drop-indent': '12px' } as React.CSSProperties}
+              className={`relative h-4 -mt-1 -mb-3 z-20 rounded-b-xl ${
+                isWorkspaceTailDragOver ? 'theme-drag-over-top' : ''
+              }`}
+            />
+          )}
         </div>
 
         {/* Section 3: Today's Tabs / Open Tabs (Ephemeral Unpinned Tabs) */}
@@ -2042,6 +2194,7 @@ export const App: React.FC = () => {
           onRenameTab={renameOpenTab}
           onOpenContextMenu={handleOpenContextMenu}
           onMoveOpenTab={moveOpenTab}
+          onMoveOpenTabs={moveOpenTabs}
           getReminderForTab={getReminderForTab}
           onOpenReminderPopover={(target, rect) =>
             setActiveReminderTarget({ target, anchorRect: rect })

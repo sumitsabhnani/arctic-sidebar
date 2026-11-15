@@ -7,6 +7,14 @@ import {
 } from '../../types';
 import { isScratchpadUrl } from '../utils/url';
 import { removePersistedBindings } from '../utils/reconcileBindings';
+import {
+  findNodeInTrees,
+  isFolderSelfOrDescendant,
+  markRecentlyMoved,
+  optimisticallyInsertIntoTree,
+  optimisticallyMoveInTree,
+  stampBookmarkTreeIndices
+} from '../utils/dnd';
 
 function inferSpaceIcon(name: string): string {
   const lower = name.trim().toLowerCase();
@@ -54,6 +62,12 @@ export function useBookmarks() {
   const pendingReloadRef = useRef<boolean>(false);
   const bookmarkDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const storageDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const treesSnapshotRef = useRef<chrome.bookmarks.BookmarkTreeNode[]>([]);
+  treesSnapshotRef.current = [
+    ...(quickAccessNode ? [quickAccessNode] : []),
+    ...(workspaceNode ? [workspaceNode] : []),
+    ...allSpaceBookmarkNodes
+  ];
 
   const persistSpaces = async (newSpaces: SpaceItem[], newActiveSpaceId?: string) => {
     const payload: Record<string, unknown> = { spaces: newSpaces };
@@ -795,6 +809,9 @@ export function useBookmarks() {
           }
         }
       }
+      if (resolvedQaNode) {
+        resolvedQaNode = stampBookmarkTreeIndices(resolvedQaNode);
+      }
       setQuickAccessNode(resolvedQaNode);
 
       // Load active Space / Home sub-tree (reuse already fetched node when matching default)
@@ -810,6 +827,9 @@ export function useBookmarks() {
           resolvedWsNode = defaultIds.homeSubtree;
         }
       }
+      if (resolvedWsNode) {
+        resolvedWsNode = stampBookmarkTreeIndices(resolvedWsNode);
+      }
       setWorkspaceNode(resolvedWsNode);
 
       // Assemble bookmark subtrees across ALL Spaces (active space first, then all other spaces)
@@ -818,7 +838,7 @@ export function useBookmarks() {
       const pushSpaceNode = (n?: chrome.bookmarks.BookmarkTreeNode | null) => {
         if (n && !seenNodeIds.has(n.id)) {
           seenNodeIds.add(n.id);
-          combinedSpaceNodes.push(n);
+          combinedSpaceNodes.push(stampBookmarkTreeIndices(n));
         }
       };
 
@@ -1286,31 +1306,93 @@ export function useBookmarks() {
     [loadBookmarks]
   );
 
+  // Optimistically insert newly created/pinned bookmark nodes before background reload completes
+  const insertOptimisticBookmarks = useCallback(
+    (
+      newNodes: chrome.bookmarks.BookmarkTreeNode[],
+      targetParentId: string,
+      targetIndex?: number
+    ) => {
+      if (!newNodes.length || !targetParentId) return;
+      setWorkspaceNode((prev) =>
+        prev ? optimisticallyInsertIntoTree(prev, newNodes, targetParentId, targetIndex) : prev
+      );
+      setQuickAccessNode((prev) =>
+        prev ? optimisticallyInsertIntoTree(prev, newNodes, targetParentId, targetIndex) : prev
+      );
+      setAllSpaceBookmarkNodes((prev) =>
+        prev.map((root) => optimisticallyInsertIntoTree(root, newNodes, targetParentId, targetIndex))
+      );
+      markRecentlyMoved(newNodes.map((n) => n.id));
+    },
+    []
+  );
+
   // Move one or more bookmarks/folders to a target folder (with optional index) and refresh
   const moveBookmarks = useCallback(
     async (ids: string[], targetParentId: string, targetIndex?: number) => {
       if (!ids.length || !targetParentId) return;
+
+      const currentTrees = treesSnapshotRef.current;
+      const validIds = ids.filter(
+        (id) =>
+          Boolean(id) &&
+          id !== targetParentId &&
+          !isFolderSelfOrDescendant(currentTrees, id, targetParentId)
+      );
+      if (validIds.length === 0) return;
+
+      // Apply synchronous optimistic update so UI reflects drop with zero IPC snap-back
+      const movingNodes = validIds
+        .map((id) => findNodeInTrees(currentTrees, id))
+        .filter((n): n is chrome.bookmarks.BookmarkTreeNode => n !== null);
+
+      if (movingNodes.length > 0) {
+        setWorkspaceNode((prev) =>
+          prev ? optimisticallyMoveInTree(prev, movingNodes, targetParentId, targetIndex) : prev
+        );
+        setQuickAccessNode((prev) =>
+          prev ? optimisticallyMoveInTree(prev, movingNodes, targetParentId, targetIndex) : prev
+        );
+        setAllSpaceBookmarkNodes((prev) =>
+          prev.map((root) => optimisticallyMoveInTree(root, movingNodes, targetParentId, targetIndex))
+        );
+        markRecentlyMoved(validIds);
+      }
+
       isInternalMutationRef.current = true;
       try {
         let curIndex = targetIndex;
-        for (const id of ids) {
-          if (id === targetParentId) continue;
+        for (const id of validIds) {
           try {
             if (typeof curIndex === 'number') {
               const children = await chrome.bookmarks.getChildren(targetParentId);
-              const isAlreadyChild = children.some((c) => c.id === id);
-              const maxIndex = isAlreadyChild ? Math.max(0, children.length - 1) : children.length;
-              const safeIndex = Math.min(Math.max(0, curIndex), maxIndex);
-              await chrome.bookmarks.move(id, {
-                parentId: targetParentId,
-                index: safeIndex
-              });
-              curIndex = safeIndex + 1;
+              const oldIndex = children.findIndex((c) => c.id === id);
+              const clampedSlot = Math.max(0, Math.min(curIndex, children.length));
+
+              if (oldIndex !== -1 && (clampedSlot === oldIndex || clampedSlot === oldIndex + 1)) {
+                curIndex = oldIndex + 1;
+                continue;
+              }
+
+              if (clampedSlot >= children.length) {
+                await chrome.bookmarks.move(id, { parentId: targetParentId });
+                curIndex = oldIndex !== -1 ? children.length : children.length + 1;
+              } else {
+                await chrome.bookmarks.move(id, {
+                  parentId: targetParentId,
+                  index: clampedSlot
+                });
+                curIndex = oldIndex !== -1 && oldIndex < clampedSlot ? clampedSlot : clampedSlot + 1;
+              }
             } else {
               await chrome.bookmarks.move(id, { parentId: targetParentId });
             }
           } catch (moveErr) {
-            console.warn('[Arctic] Error moving individual bookmark with index, retrying without index:', moveErr);
+            console.warn(
+              '[Arctic] Error moving individual bookmark with index, retrying without index:',
+              moveErr
+            );
             await chrome.bookmarks.move(id, { parentId: targetParentId });
           }
         }
@@ -1406,6 +1488,7 @@ export function useBookmarks() {
     deleteSpace,
     moveNodeToSpace,
     moveBookmarks,
+    insertOptimisticBookmarks,
     activeFolderIds,
     setQuickAccessFolderId,
     setWorkspaceFolderId,

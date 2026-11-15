@@ -18,6 +18,15 @@ import {
 } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding, SpaceItem, TabReminder } from '../../types';
+import {
+  endDragSession,
+  getFolderDropZone,
+  isFolderSelfOrDescendant,
+  parseDragPayload,
+  startDragSession,
+  useActiveDrag,
+  useRecentlyMovedIds
+} from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
 function getDescendantBookmarkIds(folder: chrome.bookmarks.BookmarkTreeNode): string[] {
@@ -72,6 +81,7 @@ interface FolderNodeProps {
   onSelectBookmark?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
   onDeleteMultipleBookmarks?: (ids: string[]) => void;
   onMoveMultipleBookmarksToSpace?: (ids: string[], targetSpaceFolderId: string) => void;
+  treeRoots?: chrome.bookmarks.BookmarkTreeNode[];
   densityMode?: 'relaxed' | 'compact';
   editingTarget?: { type: 'openTab' | 'bookmark' | 'folder'; id: string | number; initialTitle?: string; title: string } | null;
   onStartRename?: (type: 'openTab' | 'bookmark' | 'folder', id: string | number, currentTitle: string) => void;
@@ -118,6 +128,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onSelectBookmark,
   onDeleteMultipleBookmarks,
   onMoveMultipleBookmarksToSpace,
+  treeRoots,
   densityMode = 'compact',
   editingTarget,
   onStartRename,
@@ -144,8 +155,19 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
     ? (editingTarget && editingTarget.type === 'folder' && editingTarget.id === node.id ? editingTarget.title : (node.title || ''))
     : localRenameTitle;
 
-  // Drop target state
+  // Drop target & drag source state
   const [dropState, setDropState] = useState<'inside' | 'top' | 'bottom' | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const activeDrag = useActiveDrag();
+  const recentlyMovedIds = useRecentlyMovedIds();
+  const effectiveRoots = useMemo(() => treeRoots || [node], [treeRoots, node]);
+  const isSelfOrAncestorBeingDragged =
+    isDragging ||
+    Boolean(
+      activeDrag?.type === 'folder' &&
+        isFolderSelfOrDescendant(effectiveRoots, activeDrag.id, node.id)
+    );
+  const isRecentlyMoved = recentlyMovedIds.has(node.id);
 
   // Find all open/running tab IDs under this folder and its subfolders
   const runningTabIdsUnderFolder = useMemo(() => {
@@ -217,33 +239,42 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
   const handleDragStart = (e: React.DragEvent) => {
     e.stopPropagation();
-    e.dataTransfer.setData(
-      'application/json',
-      JSON.stringify({
-        type: 'folder',
-        id: node.id,
-        parentId: node.parentId,
-        title: node.title,
-        index: node.index
-      })
-    );
+    setIsDragging(true);
+    const payload = {
+      type: 'folder' as const,
+      id: node.id,
+      parentId: node.parentId,
+      title: node.title,
+      index: node.index
+    };
+    e.dataTransfer.setData('application/json', JSON.stringify(payload));
     e.dataTransfer.effectAllowed = 'copyMove';
+    startDragSession(payload);
+  };
+
+  const handleDragEnd = () => {
+    setIsDragging(false);
+    setDropState(null);
+    endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (
+      activeDrag?.type === 'folder' &&
+      isFolderSelfOrDescendant(effectiveRoots, activeDrag.id, node.id)
+    ) {
+      if (dropState !== null) setDropState(null);
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
 
     const rect = e.currentTarget.getBoundingClientRect();
     const relY = e.clientY - rect.top;
-    if (relY < 4) {
-      setDropState('top');
-    } else if (relY > rect.height - 4) {
-      setDropState('bottom');
-    } else {
-      setDropState('inside');
-    }
+    const zone = getFolderDropZone(relY, rect.height, isCollapsed);
+    setDropState(zone);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -258,39 +289,48 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const currentDrop = dropState || 'inside';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const effectiveDrop =
+      dropState ?? getFolderDropZone(e.clientY - rect.top, rect.height, isCollapsed);
     setDropState(null);
+    endDragSession();
 
-    try {
-      const dataStr = e.dataTransfer.getData('application/json');
-      if (!dataStr) return;
-      const data = JSON.parse(dataStr);
+    const data = parseDragPayload(e);
+    if (!data) return;
+    if (data.id === node.id) return;
 
-      if (data.id === node.id) return;
-
-      // Dropping bookmarks or open tabs onto a folder row always places them inside the folder
-      if (data.type === 'openTab' || data.type === 'bookmark') {
-        if (onDropItemToFolder) {
-          onDropItemToFolder(data, node.id);
+    if (data.type === 'folder') {
+      const draggedFolderId = String(data.id || '');
+      if (effectiveDrop === 'inside') {
+        if (isFolderSelfOrDescendant(effectiveRoots, draggedFolderId, node.id)) {
+          return;
         }
+      } else if (isFolderSelfOrDescendant(effectiveRoots, draggedFolderId, node.parentId)) {
         return;
       }
+    }
 
-      if (currentDrop === 'inside' && onDropItemToFolder) {
-        onDropItemToFolder(data, node.id);
-      } else if ((currentDrop === 'top' || currentDrop === 'bottom') && node.parentId) {
-        let targetIndex = typeof node.index === 'number' ? node.index : 0;
-        if (currentDrop === 'bottom') {
-          targetIndex += 1;
-        }
-        if (onDropItemToFolder) {
-          onDropItemToFolder(data, node.parentId, targetIndex);
-        } else if (onMoveBookmarkToIndex && data.id) {
-          onMoveBookmarkToIndex(data.id, node.parentId, targetIndex);
-        }
+    if (effectiveDrop === 'inside') {
+      if (onDropItemToFolder) {
+        onDropItemToFolder(data as { type: string; [key: string]: unknown }, node.id);
       }
-    } catch (err) {
-      console.warn('[Arctic] Could not parse dropped data:', err);
+      return;
+    }
+
+    if ((effectiveDrop === 'top' || effectiveDrop === 'bottom') && node.parentId) {
+      let targetIndex = typeof node.index === 'number' ? node.index : 0;
+      if (effectiveDrop === 'bottom') {
+        targetIndex += 1;
+      }
+      if (onDropItemToFolder) {
+        onDropItemToFolder(
+          data as { type: string; [key: string]: unknown },
+          node.parentId,
+          targetIndex
+        );
+      } else if (onMoveBookmarkToIndex && typeof data.id === 'string') {
+        onMoveBookmarkToIndex(data.id, node.parentId, targetIndex);
+      }
     }
   };
 
@@ -460,8 +500,11 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
         <div
           role="button"
           tabIndex={0}
+          data-flip-id={`bm-${node.id}`}
+          data-folder-id={node.id}
           draggable={true}
           onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
@@ -482,8 +525,15 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               onToggleCollapse(node.id);
             }
           }}
-          style={{ paddingLeft: `${12 + depth * 14}px` }}
-          className={`group flex items-center justify-between h-[34px] pr-2 rounded-lg cursor-pointer transition-colors duration-150 outline-none ${
+          style={
+            {
+              paddingLeft: `${12 + depth * 14}px`,
+              '--drop-indent': `${12 + depth * 14}px`
+            } as React.CSSProperties
+          }
+          className={`group relative flex items-center justify-between h-[34px] pr-2 rounded-lg cursor-pointer transition-[background-color,color,opacity,box-shadow] duration-150 outline-none ${
+            isDragging ? 'opacity-40' : ''
+          } ${isRecentlyMoved ? 'arctic-drop-settle' : ''} ${
             dropState === 'top'
               ? 'theme-drag-over-top'
               : dropState === 'bottom'
@@ -506,7 +556,9 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             }}
           >
             <div className="relative w-4 h-4 flex items-center justify-center flex-shrink-0">
-              {isCollapsed ? (
+              {dropState === 'inside' ? (
+                <FolderOpen className="w-[18px] h-[18px] text-amber-500 dark:text-amber-400 scale-110 transition-transform duration-150 flex-shrink-0" />
+              ) : isCollapsed ? (
                 <>
                   <Folder className="w-[18px] h-[18px] text-zinc-400 dark:text-zinc-500 group-hover:hidden transition-colors flex-shrink-0" />
                   <FolderOpen className="w-[18px] h-[18px] text-amber-500 dark:text-amber-400 hidden group-hover:block transition-colors flex-shrink-0" />
@@ -542,7 +594,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
       {/* Expanded Children Container */}
       {!isCollapsed && (
-        <div className="flex flex-col">
+        <div className={`flex flex-col ${isSelfOrAncestorBeingDragged ? 'opacity-40 pointer-events-none' : ''}`}>
           {/* Inline Subfolder Input Row if active */}
           {isCreatingSubfolder && (
             <form
@@ -584,6 +636,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           {children.length === 0 && !isCreatingSubfolder ? (
             <div
               onDragOver={(e) => {
+                if (
+                  activeDrag?.type === 'folder' &&
+                  isFolderSelfOrDescendant(effectiveRoots, activeDrag.id, node.id)
+                ) {
+                  return;
+                }
                 e.preventDefault();
                 e.stopPropagation();
                 e.dataTransfer.dropEffect = 'move';
@@ -594,15 +652,16 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                 e.preventDefault();
                 e.stopPropagation();
                 setDropState(null);
-                try {
-                  const dataStr = e.dataTransfer.getData('application/json');
-                  if (!dataStr) return;
-                  const data = JSON.parse(dataStr);
-                  if (data.id === node.id) return;
-                  onDropItemToFolder?.(data, node.id);
-                } catch {
-                  // ignore
+                endDragSession();
+                const data = parseDragPayload(e);
+                if (!data || data.id === node.id) return;
+                if (
+                  data.type === 'folder' &&
+                  isFolderSelfOrDescendant(effectiveRoots, String(data.id), node.id)
+                ) {
+                  return;
                 }
+                onDropItemToFolder?.(data as { type: string; [key: string]: unknown }, node.id);
               }}
               style={{ paddingLeft: `${24 + depth * 14}px` }}
               className="py-1 text-[11px] text-zinc-400 dark:text-zinc-600 italic select-none"
@@ -653,6 +712,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onSelectBookmark={onSelectBookmark}
                     onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
                     onMoveMultipleBookmarksToSpace={onMoveMultipleBookmarksToSpace}
+                    treeRoots={effectiveRoots}
                     densityMode={densityMode}
                     editingTarget={editingTarget}
                     onStartRename={onStartRename}
@@ -705,6 +765,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onSelectBookmark={onSelectBookmark}
                   onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
                   onMoveMultipleBookmarksToSpace={onMoveMultipleBookmarksToSpace}
+                  treeRoots={effectiveRoots}
                   isEditing={isEditing}
                   editTitle={isEditing && editingTarget ? editingTarget.title : (child.title || '')}
                   onStartRename={() => onStartRename?.('bookmark', child.id, child.title || '')}

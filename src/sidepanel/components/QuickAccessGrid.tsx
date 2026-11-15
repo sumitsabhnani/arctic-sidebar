@@ -16,6 +16,14 @@ import {
 } from 'lucide-react';
 import type { TabBinding } from '../../types';
 import { getFaviconUrl } from '../utils/url';
+import { useFlipAnimation } from '../hooks/useFlipAnimation';
+import {
+  endDragSession,
+  parseDragPayload,
+  startDragSession,
+  useActiveDrag,
+  useRecentlyMovedIds
+} from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
 interface QuickAccessGridProps {
@@ -34,6 +42,10 @@ interface QuickAccessGridProps {
   onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
   onReorderQuickAccess?: (draggedId: string, targetIndex: number) => void;
+  onDropItemToQuickAccess?: (
+    data: { type: string; [key: string]: unknown },
+    targetIndex?: number
+  ) => void;
   onReloadTab?: (tabId: number) => void;
   onDuplicateTab?: (tabId: number) => void;
 }
@@ -80,10 +92,17 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   onRenameBookmark,
   onRemoveBookmark,
   onReorderQuickAccess,
+  onDropItemToQuickAccess,
   onReloadTab,
   onDuplicateTab
 }) => {
   const items = bookmarks.filter((b) => Boolean(b.url));
+  const gridRef = React.useRef<HTMLDivElement>(null);
+  const gridOrderSignature = React.useMemo(
+    () => items.map((b) => b.id).join(','),
+    [items]
+  );
+  useFlipAnimation(gridRef, gridOrderSignature);
 
   if (items.length === 0) {
     return (
@@ -97,7 +116,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   }
 
   return (
-    <div className="grid grid-cols-4 gap-1.5 w-full">
+    <div ref={gridRef} className="grid grid-cols-4 gap-1.5 w-full">
       {items.map((bookmark) => {
         const binding = bindingsByBookmarkId[bookmark.id];
         const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
@@ -119,6 +138,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
             onRenameBookmark={onRenameBookmark}
             onRemoveBookmark={onRemoveBookmark}
             onReorderQuickAccess={onReorderQuickAccess}
+            onDropItemToQuickAccess={onDropItemToQuickAccess}
             onReloadTab={onReloadTab}
             onDuplicateTab={onDuplicateTab}
           />
@@ -144,6 +164,10 @@ interface QuickAccessTileProps {
   onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
   onReorderQuickAccess?: (draggedId: string, targetIndex: number) => void;
+  onDropItemToQuickAccess?: (
+    data: { type: string; [key: string]: unknown },
+    targetIndex?: number
+  ) => void;
   onReloadTab?: (tabId: number) => void;
   onDuplicateTab?: (tabId: number) => void;
 }
@@ -164,6 +188,7 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   onRenameBookmark,
   onRemoveBookmark,
   onReorderQuickAccess,
+  onDropItemToQuickAccess,
   onReloadTab,
   onDuplicateTab
 }) => {
@@ -171,6 +196,9 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'left' | 'right' | null>(null);
+  const activeDrag = useActiveDrag();
+  const recentlyMovedIds = useRecentlyMovedIds();
+  const isRecentlyMoved = recentlyMovedIds.has(bookmark.id);
 
   const isActive = Boolean(binding && binding.tabId === activeTabId);
   const isRunningInBackground = Boolean(binding && binding.tabId !== activeTabId);
@@ -308,23 +336,37 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
 
   const handleDragStart = (e: React.DragEvent) => {
     setIsDragging(true);
-    e.dataTransfer.setData(
-      'application/json',
-      JSON.stringify({
-        type: 'quickAccess',
-        id: bookmark.id,
-        index: bookmark.index
-      })
-    );
-    e.dataTransfer.effectAllowed = 'move';
+    const payload = {
+      type: 'quickAccess' as const,
+      id: bookmark.id,
+      title: bookmark.title,
+      url: bookmark.url,
+      parentId: bookmark.parentId,
+      index: bookmark.index
+    };
+    e.dataTransfer.setData('application/json', JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copyMove';
+    startDragSession(payload);
   };
 
   const handleDragEnd = () => {
     setIsDragging(false);
     setDropPosition(null);
+    endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    if (activeDrag?.type === 'folder') {
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
+    if (
+      activeDrag?.id === bookmark.id &&
+      (!activeDrag.ids || activeDrag.ids.length <= 1)
+    ) {
+      if (dropPosition !== null) setDropPosition(null);
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
@@ -333,35 +375,49 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
     setDropPosition(isLeft ? 'left' : 'right');
   };
 
-  const handleDragLeave = () => {
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
     setDropPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos =
+      dropPosition || (e.clientX - rect.left < rect.width / 2 ? 'left' : 'right');
+    setDropPosition(null);
+    endDragSession();
+
+    const data = parseDragPayload(e);
+    if (!data || data.type === 'folder') return;
+    if (data.id === bookmark.id && (!Array.isArray(data.ids) || data.ids.length <= 1)) {
+      return;
+    }
+
     e.preventDefault();
     e.stopPropagation();
-    const pos = dropPosition;
-    setDropPosition(null);
 
-    try {
-      const dataStr = e.dataTransfer.getData('application/json');
-      if (!dataStr) return;
-      const data = JSON.parse(dataStr);
-      if (data.id === bookmark.id) return;
+    let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : 0;
+    if (pos === 'right') {
+      targetIndex += 1;
+    }
 
-      let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : 0;
-      if (pos === 'right') {
-        targetIndex += 1;
-      }
-      onReorderQuickAccess?.(data.id, targetIndex);
-    } catch {
-      // ignore
+    if (data.type === 'quickAccess' && typeof data.id === 'string' && onReorderQuickAccess) {
+      onReorderQuickAccess(data.id, targetIndex);
+    } else if (
+      (data.type === 'openTab' || data.type === 'bookmark' || data.type === 'quickAccess') &&
+      onDropItemToQuickAccess
+    ) {
+      onDropItemToQuickAccess(
+        data as { type: string; [key: string]: unknown },
+        targetIndex
+      );
     }
   };
 
   return (
     <button
       type="button"
+      data-flip-id={`qa-${bookmark.id}`}
       title={tooltip}
       draggable={true}
       onDragStart={handleDragStart}
@@ -380,14 +436,12 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       onContextMenu={handleContextMenu}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`group relative flex flex-col items-center justify-center rounded-xl transition-all duration-150 select-none outline-none cursor-pointer ${
+      className={`group relative flex flex-col items-center justify-center rounded-xl transition-[background-color,border-color,color,opacity,box-shadow] duration-150 select-none outline-none cursor-pointer ${
         isRelaxed ? 'min-h-[58px] py-2 px-1.5 gap-1.5' : 'h-12'
-      } ${
-        isDragging ? 'opacity-30 scale-95' : ''
-      } ${
-        dropPosition === 'left' ? 'border-l-2 theme-accent-border theme-accent-tint' : ''
-      } ${
-        dropPosition === 'right' ? 'border-r-2 theme-accent-border theme-accent-tint' : ''
+      } ${isDragging ? 'opacity-35' : ''} ${
+        isRecentlyMoved ? 'arctic-drop-settle' : ''
+      } ${dropPosition === 'left' ? 'theme-drag-over-left' : ''} ${
+        dropPosition === 'right' ? 'theme-drag-over-right' : ''
       } ${
         isActive
           ? 'theme-active-card text-zinc-900 dark:text-white font-medium shadow-xs'

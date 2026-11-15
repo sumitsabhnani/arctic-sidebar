@@ -173,4 +173,55 @@ describe('OpenTabRow Component', () => {
     closeMultiItem?.action?.();
     expect(onCloseMultipleTabs).toHaveBeenCalledWith([42, 43]);
   });
+
+  it('passes visual slot index to onMoveOpenTabs and ignores non-openTab drops', () => {
+    const onMoveOpenTabs = vi.fn();
+    const props = createBaseProps({
+      tab: {
+        id: 42,
+        index: 3,
+        windowId: 10,
+        url: 'https://github.com/facebook/react',
+        title: 'React'
+      } as chrome.tabs.Tab,
+      onMoveOpenTabs
+    });
+
+    render(<OpenTabRow {...props} />);
+    const row = screen.getByText('React').closest('[role="button"]') as HTMLElement;
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    // Dropping a folder onto an OpenTabRow is ignored
+    fireEvent.drop(row, {
+      clientY: 28,
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json' ? JSON.stringify({ type: 'folder', id: 'f-1' }) : ''
+      }
+    });
+    expect(onMoveOpenTabs).not.toHaveBeenCalled();
+
+    // Dropping openTab on bottom half of index 3 passes visual slot 4
+    fireEvent.dragOver(row, { clientY: 28, dataTransfer: { dropEffect: 'move' } });
+    fireEvent.drop(row, {
+      clientY: 28,
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json'
+            ? JSON.stringify({ type: 'openTab', tabId: 10, tabIds: [10], index: 0 })
+            : ''
+      }
+    });
+    expect(onMoveOpenTabs).toHaveBeenCalledWith([10], 4);
+  });
 });

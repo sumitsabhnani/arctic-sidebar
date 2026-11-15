@@ -902,4 +902,82 @@ describe('useBookmarks hook', () => {
     expect(persisted['bm-child-2']).toBeUndefined();
     expect(persisted['bm-keep']).toBeDefined();
   });
+
+  it('moveBookmarks reorders folders within Active Space including moving to the very last position and blocks circular moves', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: '11', title: 'Quick Access', children: [] },
+                      {
+                        id: 'folder-a',
+                        title: 'Folder A',
+                        children: [{ id: 'sub-a1', title: 'Sub A1', children: [] }]
+                      },
+                      { id: 'bm-mid', title: 'Mid Link', url: 'https://mid.example.com' },
+                      { id: 'folder-b', title: 'Folder B', children: [] }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // 1. Move Folder A (index 1) to the very end after Folder B (pre-removal slot 4 = children.length)
+    await act(async () => {
+      await result.current.moveBookmarks(['folder-a'], '12', 4);
+    });
+
+    expect(result.current.workspaceNode?.children?.map((c) => c.id)).toEqual([
+      '11',
+      'bm-mid',
+      'folder-b',
+      'folder-a'
+    ]);
+
+    // 2. Move Folder A upward right before Folder B (pre-removal slot 2)
+    await act(async () => {
+      await result.current.moveBookmarks(['folder-a'], '12', 2);
+    });
+
+    expect(result.current.workspaceNode?.children?.map((c) => c.id)).toEqual([
+      '11',
+      'bm-mid',
+      'folder-a',
+      'folder-b'
+    ]);
+
+    // 3. Attempting to move Folder A into its own child subfolder (sub-a1) is safely ignored
+    await act(async () => {
+      await result.current.moveBookmarks(['folder-a'], 'sub-a1');
+    });
+
+    expect(result.current.workspaceNode?.children?.map((c) => c.id)).toEqual([
+      '11',
+      'bm-mid',
+      'folder-a',
+      'folder-b'
+    ]);
+  });
 });

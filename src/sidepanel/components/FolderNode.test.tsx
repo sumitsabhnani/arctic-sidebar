@@ -133,4 +133,107 @@ describe('FolderNode Component', () => {
     deleteItem.action();
     expect(onDeleteBookmark).toHaveBeenCalledWith('folder-1');
   });
+
+  it('drops openTab and bookmark OUTSIDE the folder when dropped on top or bottom edge zones of a collapsed folder', () => {
+    const onDropItemToFolder = vi.fn();
+    const props = createBaseFolderProps({
+      node: {
+        id: 'folder-1',
+        parentId: 'root-space',
+        index: 2,
+        title: 'Engineering',
+        children: []
+      },
+      collapsedFolderIds: { 'folder-1': true },
+      onDropItemToFolder
+    });
+
+    render(<FolderNode {...props} />);
+    const folderRow = screen.getByText('Engineering').closest('[role="button"]') as HTMLElement;
+    vi.spyOn(folderRow, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    // 1. Drop an openTab on the bottom zone (clientY = 32 of 34px) -> inserts AFTER folder-1 in root-space (index 3)
+    fireEvent.dragOver(folderRow, { clientY: 32, dataTransfer: { dropEffect: 'move' } });
+    expect(folderRow.className).toContain('theme-drag-over-bottom');
+    fireEvent.drop(folderRow, {
+      clientY: 32,
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json'
+            ? JSON.stringify({ type: 'openTab', tabId: 77, url: 'https://news.ycombinator.com' })
+            : ''
+      }
+    });
+    expect(onDropItemToFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'openTab', tabId: 77 }),
+      'root-space',
+      3
+    );
+
+    // 2. Drop a bookmark on the top zone (clientY = 3 of 34px) -> inserts BEFORE folder-1 in root-space (index 2)
+    onDropItemToFolder.mockClear();
+    fireEvent.dragOver(folderRow, { clientY: 3, dataTransfer: { dropEffect: 'move' } });
+    expect(folderRow.className).toContain('theme-drag-over-top');
+    fireEvent.drop(folderRow, {
+      clientY: 3,
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json'
+            ? JSON.stringify({ type: 'bookmark', id: 'bm-99', ids: ['bm-99'] })
+            : ''
+      }
+    });
+    expect(onDropItemToFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'bookmark', id: 'bm-99' }),
+      'root-space',
+      2
+    );
+
+    // 3. Drop on middle zone (clientY = 17 of 34px) -> drops INSIDE folder-1
+    onDropItemToFolder.mockClear();
+    fireEvent.dragOver(folderRow, { clientY: 17, dataTransfer: { dropEffect: 'move' } });
+    expect(folderRow.className).toContain('theme-drag-over-inside');
+    fireEvent.drop(folderRow, {
+      clientY: 17,
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json'
+            ? JSON.stringify({ type: 'openTab', tabId: 88, url: 'https://react.dev' })
+            : ''
+      }
+    });
+    expect(onDropItemToFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'openTab', tabId: 88 }),
+      'folder-1'
+    );
+  });
+
+  it('prevents circular drops of an ancestor folder into its own descendant subfolder', () => {
+    const onDropItemToFolder = vi.fn();
+    const props = createBaseFolderProps({ onDropItemToFolder });
+
+    render(<FolderNode {...props} />);
+    const subfolderRow = screen.getByText('Design Docs').closest('[role="button"]')!;
+
+    fireEvent.drop(subfolderRow, {
+      dataTransfer: {
+        getData: (type: string) =>
+          type === 'application/json'
+            ? JSON.stringify({ type: 'folder', id: 'folder-1', parentId: 'root-space', index: 0 })
+            : ''
+      }
+    });
+
+    expect(onDropItemToFolder).not.toHaveBeenCalled();
+  });
 });
