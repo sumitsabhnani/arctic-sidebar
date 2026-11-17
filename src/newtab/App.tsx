@@ -38,6 +38,10 @@ import {
   upsertPersistedBindings
 } from '../sidepanel/utils/reconcileBindings';
 import {
+  hasTextFragment,
+  scrollToHighlightInTab
+} from '../sidepanel/utils/highlight';
+import {
   COLOR_THEMES,
   isValidColorTheme,
   isValidThemeMode,
@@ -1614,12 +1618,14 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         const directUrl = formatNavigationUrl(trimmed);
         const directNorm = normalizeUrl(directUrl).toLowerCase();
         const directCanon = getCanonicalUrlKey(directUrl).toLowerCase();
+        const hasExplicitFragment = directUrl.includes('#');
         const alreadyShown = results.some(
           (r) =>
             r.url &&
             (r.url.toLowerCase() === directUrl.toLowerCase() ||
-              normalizeUrl(r.url).toLowerCase() === directNorm ||
-              getCanonicalUrlKey(r.url).toLowerCase() === directCanon)
+              (!hasExplicitFragment &&
+                (normalizeUrl(r.url).toLowerCase() === directNorm ||
+                  getCanonicalUrlKey(r.url).toLowerCase() === directCanon)))
         );
         if (!alreadyShown) {
           const directItem: SuggestionItem = {
@@ -1629,8 +1635,12 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
             url: directUrl,
             domain: getDomainFromUrl(directUrl)
           };
-          // Put explicit direct URL first if no high-confidence host match beat it
-          if (rankedOmnibox.length === 0 || rankedOmnibox[0].relevanceScore < 900) {
+          // Put explicit direct URL first if it has a # fragment (e.g. #:~:text=...) or no high-confidence host match beat it
+          if (
+            hasExplicitFragment ||
+            rankedOmnibox.length === 0 ||
+            rankedOmnibox[0].relevanceScore < 900
+          ) {
             results.unshift(directItem);
           } else {
             results.push(directItem);
@@ -1749,8 +1759,10 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
         // If bookmark info wasn't explicitly passed, check if targetUrl matches any known Arctic bookmark
         if (!bookmarkInfo?.id && arcticBookmarksRef.current.length > 0) {
-          const matchedBm = arcticBookmarksRef.current.find(
-            (bm) => normalizeUrl(bm.url) === targetNormalized
+          const matchedBm = arcticBookmarksRef.current.find((bm) =>
+            hasTextFragment(targetUrl)
+              ? bm.url === targetUrl
+              : normalizeUrl(bm.url) === targetNormalized
           );
           if (matchedBm) {
             bookmarkInfo = {
@@ -1830,6 +1842,9 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 try {
                   await chrome.windows.update(boundTab.windowId, { focused: true });
                 } catch {}
+              }
+              if (hasTextFragment(targetUrl)) {
+                await scrollToHighlightInTab(boundTabId, targetUrl);
               }
               // Notify sidebar and reveal the activated Space Tab
               try {
@@ -1926,6 +1941,9 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
                 try {
                   await chrome.windows.update(otherMatch.windowId, { focused: true });
                 } catch {}
+              }
+              if (hasTextFragment(targetUrl)) {
+                await scrollToHighlightInTab(matchedTabId, targetUrl);
               }
               try {
                 chrome.runtime?.sendMessage?.({

@@ -13,7 +13,14 @@ import { ReminderPopover } from './components/ReminderPopover';
 import { useScratchpad } from './hooks/useScratchpad';
 import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
-import type { TabBinding, LocalSettings, ColorThemeId, ThemeMode, EdgeTriggerMode } from '../types';
+import type {
+  TabBinding,
+  LocalSettings,
+  ColorThemeId,
+  ThemeMode,
+  EdgeTriggerMode,
+  StoredHighlightMeta
+} from '../types';
 import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
 import { isScratchpadUrl } from './utils/url';
 import { captureVerifiedTabFavicon, hydrateFaviconCache } from './utils/faviconCache';
@@ -24,6 +31,11 @@ import {
   isBridgedTabKey,
   isInjectableWebUrl
 } from './utils/tabPageFocus';
+import {
+  HIGHLIGHTS_STORAGE_KEY,
+  getActiveTabHighlightSelection,
+  removeStoredHighlights
+} from './utils/highlight';
 import { upsertPersistedBindings } from './utils/reconcileBindings';
 import { useFlipAnimation } from './hooks/useFlipAnimation';
 import { endDragSession, parseDragPayload, useActiveDrag } from './utils/dnd';
@@ -168,6 +180,10 @@ export const App: React.FC = () => {
   const [edgeTriggerEnabled, setEdgeTriggerEnabled] = useState<boolean>(false);
   const [edgeTriggerMode, setEdgeTriggerMode] = useState<EdgeTriggerMode>('push');
   const [tabPageFocusEnabled, setTabPageFocusEnabled] = useState<boolean>(true);
+  const [highlightPillEnabled, setHighlightPillEnabled] = useState<boolean>(true);
+  const [highlightsByBookmarkId, setHighlightsByBookmarkId] = useState<
+    Record<string, StoredHighlightMeta>
+  >({});
   const [hasDismissedPageFocusTip, setHasDismissedPageFocusTip] = useState<boolean>(false);
   const [showPageFocusPermissionHint, setShowPageFocusPermissionHint] = useState<boolean>(false);
   const [hasEdgeHostPermission, setHasEdgeHostPermission] = useState<boolean>(false);
@@ -211,6 +227,8 @@ export const App: React.FC = () => {
         'edgeTriggerEnabled',
         'edgeTriggerMode',
         'tabPageFocusEnabled',
+        'highlightPillEnabled',
+        HIGHLIGHTS_STORAGE_KEY,
         'hasDismissedPageFocusTip',
         'sidebarDockSide',
         'openArcticSettings'
@@ -241,6 +259,14 @@ export const App: React.FC = () => {
         }
         if (typeof res.tabPageFocusEnabled === 'boolean') {
           setTabPageFocusEnabled(res.tabPageFocusEnabled);
+        }
+        if (typeof res.highlightPillEnabled === 'boolean') {
+          setHighlightPillEnabled(res.highlightPillEnabled);
+        }
+        if (res[HIGHLIGHTS_STORAGE_KEY] && typeof res[HIGHLIGHTS_STORAGE_KEY] === 'object') {
+          setHighlightsByBookmarkId(
+            res[HIGHLIGHTS_STORAGE_KEY] as Record<string, StoredHighlightMeta>
+          );
         }
         if (typeof res.hasDismissedPageFocusTip === 'boolean') {
           setHasDismissedPageFocusTip(res.hasDismissedPageFocusTip);
@@ -297,6 +323,17 @@ export const App: React.FC = () => {
           typeof changes.tabPageFocusEnabled.newValue === 'boolean'
         ) {
           setTabPageFocusEnabled(changes.tabPageFocusEnabled.newValue);
+        }
+        if (
+          changes.highlightPillEnabled &&
+          typeof changes.highlightPillEnabled.newValue === 'boolean'
+        ) {
+          setHighlightPillEnabled(changes.highlightPillEnabled.newValue);
+        }
+        if (changes[HIGHLIGHTS_STORAGE_KEY]) {
+          setHighlightsByBookmarkId(
+            (changes[HIGHLIGHTS_STORAGE_KEY].newValue as Record<string, StoredHighlightMeta>) || {}
+          );
         }
         if (
           changes.hasDismissedPageFocusTip &&
@@ -698,6 +735,68 @@ export const App: React.FC = () => {
       activate();
     },
     [hasEdgeHostPermission, activeTabId, effectiveActiveTabUrl]
+  );
+
+  const handleToggleHighlightPill = useCallback(
+    (enabled: boolean) => {
+      if (!enabled) {
+        setHighlightPillEnabled(false);
+        chrome.storage.local.set({ highlightPillEnabled: false } as LocalSettings);
+        try {
+          chrome.runtime?.sendMessage?.({
+            type: 'SYNC_HIGHLIGHT_PILL',
+            injectIntoOpenTabs: false
+          });
+        } catch {
+          // ignore
+        }
+        return;
+      }
+
+      const activate = () => {
+        setHasEdgeHostPermission(true);
+        setHighlightPillEnabled(true);
+        chrome.storage.local.set({ highlightPillEnabled: true } as LocalSettings);
+        try {
+          chrome.runtime?.sendMessage?.({
+            type: 'SYNC_HIGHLIGHT_PILL',
+            injectIntoOpenTabs: true
+          });
+        } catch {
+          // ignore
+        }
+      };
+
+      if (!hasEdgeHostPermission && chrome?.permissions?.request) {
+        Promise.resolve(chrome.permissions.request({ origins: EDGE_TRIGGER_ORIGINS }))
+          .then((granted) => {
+            if (granted) {
+              activate();
+            }
+          })
+          .catch(() => {});
+        return;
+      }
+
+      activate();
+    },
+    [hasEdgeHostPermission]
+  );
+
+  const handleCopyActiveTabUrl = useCallback(
+    async (_fallbackUrl: string): Promise<{ copiedHighlight?: boolean } | void> => {
+      if (typeof activeTabId !== 'number') return;
+      const sel = await getActiveTabHighlightSelection(activeTabId, effectiveActiveTabUrl);
+      if (sel && sel.highlightUrl) {
+        try {
+          await navigator.clipboard.writeText(sel.highlightUrl);
+          return { copiedHighlight: true };
+        } catch {
+          // ignore
+        }
+      }
+    },
+    [activeTabId, effectiveActiveTabUrl]
   );
 
   const dismissPageFocusPermissionHint = useCallback(() => {
@@ -1756,6 +1855,7 @@ export const App: React.FC = () => {
           }
         }
 
+        await removeStoredHighlights(bookmarkIdsToClose);
         await removeBookmarkOrFolder(id);
       } catch (err) {
         console.warn('[Arctic] Error deleting bookmark and closing tabs:', err);
@@ -1830,6 +1930,7 @@ export const App: React.FC = () => {
         onReloadActiveTab={reloadActiveTab}
         onNavigateActiveTab={navigateActiveTab}
         onGoBackActiveTab={goBackActiveTab}
+        onCopyActiveTabUrl={handleCopyActiveTabUrl}
         onHideSidebar={handleHideSidebarClick}
         sidebarDockSide={sidebarDockSide}
       />
@@ -2259,6 +2360,7 @@ export const App: React.FC = () => {
                       onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
                       onMoveMultipleBookmarksToSpace={handleMoveMultipleBookmarksToSpace}
                       treeRoots={workspaceTreeRoots}
+                      highlightsByBookmarkId={highlightsByBookmarkId}
                     />
                   );
                 }
@@ -2314,6 +2416,7 @@ export const App: React.FC = () => {
                     onDeleteMultipleBookmarks={handleDeleteMultipleBookmarks}
                     onMoveMultipleBookmarksToSpace={handleMoveMultipleBookmarksToSpace}
                     treeRoots={workspaceTreeRoots}
+                    highlightQuote={highlightsByBookmarkId[child.id]?.quote}
                   />
                 );
               })
@@ -2485,6 +2588,7 @@ export const App: React.FC = () => {
         edgeTriggerEnabled={edgeTriggerEnabled && hasEdgeHostPermission}
         edgeTriggerMode={edgeTriggerMode}
         tabPageFocusEnabled={tabPageFocusEnabled && hasEdgeHostPermission}
+        highlightPillEnabled={highlightPillEnabled && hasEdgeHostPermission}
         allFolders={allFolders}
         activeFolderIds={activeFolderIds}
         autoArchiveInterval={autoArchiveInterval}
@@ -2497,6 +2601,7 @@ export const App: React.FC = () => {
         onToggleEdgeTrigger={handleToggleEdgeTrigger}
         onChangeEdgeTriggerMode={handleChangeEdgeTriggerMode}
         onToggleTabPageFocus={handleToggleTabPageFocus}
+        onToggleHighlightPill={handleToggleHighlightPill}
         onSelectQuickAccessFolder={setQuickAccessFolderId}
         onSelectWorkspaceFolder={setWorkspaceFolderId}
         onResetFolders={resetToDefaultFolders}

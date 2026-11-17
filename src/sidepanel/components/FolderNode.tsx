@@ -17,7 +17,7 @@ import {
   Code
 } from 'lucide-react';
 import { BookmarkRow } from './BookmarkRow';
-import type { TabBinding, SpaceItem, TabReminder } from '../../types';
+import type { TabBinding, SpaceItem, TabReminder, StoredHighlightMeta } from '../../types';
 import {
   endDragSession,
   getFolderDropZone,
@@ -82,6 +82,7 @@ interface FolderNodeProps {
   onDeleteMultipleBookmarks?: (ids: string[]) => void;
   onMoveMultipleBookmarksToSpace?: (ids: string[], targetSpaceFolderId: string) => void;
   treeRoots?: chrome.bookmarks.BookmarkTreeNode[];
+  highlightsByBookmarkId?: Record<string, StoredHighlightMeta>;
   densityMode?: 'relaxed' | 'compact';
   editingTarget?: { type: 'openTab' | 'bookmark' | 'folder'; id: string | number; initialTitle?: string; title: string } | null;
   onStartRename?: (type: 'openTab' | 'bookmark' | 'folder', id: string | number, currentTitle: string) => void;
@@ -129,6 +130,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   onDeleteMultipleBookmarks,
   onMoveMultipleBookmarksToSpace,
   treeRoots,
+  highlightsByBookmarkId,
   densityMode = 'compact',
   editingTarget,
   onStartRename,
@@ -713,6 +715,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                     onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
                     onMoveMultipleBookmarksToSpace={onMoveMultipleBookmarksToSpace}
                     treeRoots={effectiveRoots}
+                    highlightsByBookmarkId={highlightsByBookmarkId}
                     densityMode={densityMode}
                     editingTarget={editingTarget}
                     onStartRename={onStartRename}
@@ -766,6 +769,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   onDeleteMultipleBookmarks={onDeleteMultipleBookmarks}
                   onMoveMultipleBookmarksToSpace={onMoveMultipleBookmarksToSpace}
                   treeRoots={effectiveRoots}
+                  highlightQuote={highlightsByBookmarkId?.[child.id]?.quote}
                   isEditing={isEditing}
                   editTitle={isEditing && editingTarget ? editingTarget.title : (child.title || '')}
                   onStartRename={() => onStartRename?.('bookmark', child.id, child.title || '')}

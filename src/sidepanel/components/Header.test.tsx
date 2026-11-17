@@ -202,4 +202,18 @@ describe('Header component', () => {
     fireEvent.click(hideBtn);
     expect(onHideSidebar).toHaveBeenCalledTimes(1);
   });
+
+  it('upgrades Copy URL tooltip to Copied Highlight Link! when onCopyActiveTabUrl resolves copiedHighlight: true', async () => {
+    const onCopyActiveTabUrl = vi.fn().mockResolvedValue({ copiedHighlight: true });
+    const { container } = render(
+      <Header {...defaultProps} onCopyActiveTabUrl={onCopyActiveTabUrl} />
+    );
+
+    const copyBtn = container.querySelector('[data-tooltip="Copy URL"]') as HTMLElement;
+    fireEvent.click(copyBtn);
+
+    expect(onCopyActiveTabUrl).toHaveBeenCalledWith('https://news.ycombinator.com/news');
+    await new Promise((r) => setTimeout(r, 10));
+    expect(copyBtn).toHaveAttribute('data-tooltip', 'Copied Highlight Link!');
+  });
 });

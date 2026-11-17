@@ -288,4 +288,46 @@ describe('BookmarkRow component', () => {
     expect(img).toBeInTheDocument();
     expect(img?.getAttribute('src')).toBe(liveIcon);
   });
+
+  it('renders highlight quote snippet and Copy Highlight Quote context menu option for #:~:text= highlight bookmarks', () => {
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockResolvedValue(undefined)
+      }
+    });
+
+    const highlightBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'b-hl-1',
+      parentId: 'folder-1',
+      title: '“Curiosity is the best guide” — How to Do Great Work',
+      url: 'https://paulgraham.com/greatwork.html#:~:text=Curiosity%20is%20the%20best%20guide'
+    };
+
+    render(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={highlightBookmark}
+        binding={undefined}
+      />
+    );
+
+    // Displays clean page title on line 1 and styled quote snippet on line 2
+    expect(screen.getByText('How to Do Great Work')).toBeInTheDocument();
+    const quoteEl = screen.getByTestId('bookmark-highlight-quote');
+    expect(quoteEl).toHaveTextContent('“Curiosity is the best guide”');
+
+    // Right-click opens context menu with "Copy Highlight Quote"
+    defaultProps.onOpenContextMenu.mockClear();
+    const row = screen.getByText('How to Do Great Work').closest('[role="button"]')!;
+    fireEvent.contextMenu(row);
+
+    const menuItems = defaultProps.onOpenContextMenu.mock.calls[0][1];
+    const copyQuoteItem = menuItems.find(
+      (item: { label: string }) => item.label === 'Copy Highlight Quote'
+    );
+    expect(copyQuoteItem).toBeDefined();
+
+    copyQuoteItem.action();
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Curiosity is the best guide');
+  });
 });

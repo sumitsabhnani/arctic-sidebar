@@ -18,11 +18,13 @@ import {
   ArrowRightLeft,
   Folder,
   Bell,
-  PinOff
+  PinOff,
+  Quote
 } from 'lucide-react';
 import type { TabBinding, SpaceItem, TabReminder, TabWithFaviconMeta } from '../../types';
 import { useResolvedFavicon } from '../utils/faviconCache';
 import { markKeyboardRowActivation } from '../utils/tabPageFocus';
+import { parseHighlightBookmarkDisplay, stripTextFragmentFromUrl } from '../utils/highlight';
 import {
   attachMultiDragPreview,
   endDragSession,
@@ -36,13 +38,14 @@ import type { ContextMenuItem } from './ContextMenu';
 
 function formatSubdomain(rawUrl?: string): string {
   if (!rawUrl) return '';
+  const cleaned = stripTextFragmentFromUrl(rawUrl);
   try {
-    const u = new URL(rawUrl);
+    const u = new URL(cleaned);
     let host = u.hostname.replace(/^www\./, '');
     const path = u.pathname === '/' ? '' : u.pathname;
     return `${host}${path}`;
   } catch {
-    return rawUrl;
+    return cleaned;
   }
 }
 
@@ -81,6 +84,7 @@ interface BookmarkRowProps {
   onDeleteMultipleBookmarks?: (ids: string[]) => void;
   onMoveMultipleBookmarksToSpace?: (ids: string[], targetSpaceFolderId: string) => void;
   treeRoots?: chrome.bookmarks.BookmarkTreeNode[];
+  highlightQuote?: string;
   isEditing?: boolean;
   editTitle?: string;
   onStartRename?: () => void;
@@ -124,6 +128,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   onDeleteMultipleBookmarks,
   onMoveMultipleBookmarksToSpace,
   treeRoots,
+  highlightQuote,
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
   onStartRename,
@@ -153,13 +158,23 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const isAudible = Boolean(boundTab?.audible);
   const isMuted = Boolean(boundTab?.mutedInfo?.muted);
   const isBoundTabLoading = boundTab?.status === 'loading';
-  const titleText = bookmark.title || bookmark.url || 'Untitled Tab';
+  const { displayTitle, quoteText, isHighlight } = parseHighlightBookmarkDisplay(
+    bookmark.title || '',
+    bookmark.url,
+    highlightQuote
+  );
+  const titleText = isHighlight
+    ? displayTitle
+    : bookmark.title || bookmark.url || 'Untitled Tab';
 
   let tooltip = titleText;
+  if (isHighlight && quoteText) {
+    tooltip += `\n“${quoteText}”`;
+  }
   if (isNavAway && binding) {
-    tooltip = `${titleText}\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to saved URL)`;
+    tooltip += `\n↳ Current: ${binding.currentTitle || binding.currentUrl}\n(Click favicon to reset to saved URL)`;
   } else if (bookmark.url) {
-    tooltip = `${titleText}\n${bookmark.url}`;
+    tooltip += `\n${stripTextFragmentFromUrl(bookmark.url)}`;
   }
   if (isDiscarded) {
     tooltip += '\n(Sleeping to save memory - click to wake)';
@@ -328,6 +343,17 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         },
         dividerBefore: true
       },
+      ...(isHighlight && quoteText
+        ? [
+            {
+              label: 'Copy Highlight Quote',
+              icon: <Quote className="w-3.5 h-3.5" />,
+              action: () => {
+                navigator.clipboard.writeText(quoteText);
+              }
+            }
+          ]
+        : []),
       ...(isRunning && binding
         ? [
             {
@@ -582,7 +608,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         } as React.CSSProperties
       }
       className={`group relative flex items-center justify-between ${
-        densityMode === 'relaxed' ? 'min-h-[38px] py-1.5' : 'h-[34px]'
+        isHighlight && quoteText
+          ? 'min-h-[46px] py-1.5'
+          : densityMode === 'relaxed'
+          ? 'min-h-[38px] py-1.5'
+          : 'h-[34px]'
       } pr-2.5 my-0 cursor-pointer select-none transition-[background-color,color,opacity] duration-150 outline-none ${
         isPartOfActiveDrag ? 'opacity-40' : ''
       } ${isRecentlyMoved ? 'arctic-drop-settle' : ''} ${
@@ -698,6 +728,14 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           >
             {titleText}
           </span>
+          {isHighlight && quoteText && (
+            <span
+              data-testid="bookmark-highlight-quote"
+              className="truncate text-[11px] leading-snug text-zinc-600 dark:text-zinc-300 italic border-l-2 border-amber-400/90 dark:border-amber-400/75 pl-1.5 mt-0.5 select-none"
+            >
+              “{quoteText}”
+            </span>
+          )}
           {densityMode === 'relaxed' && bookmark.url && (
             <span className="truncate text-[10px] text-zinc-400 dark:text-zinc-500 leading-none select-none pt-0.5 font-mono">
               {formatSubdomain(bookmark.url)}

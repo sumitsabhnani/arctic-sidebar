@@ -37,6 +37,15 @@ import {
   focusActiveMediaOrPageInTab,
   isInjectableWebUrl
 } from '../sidepanel/utils/tabPageFocus';
+import {
+  buildHighlightUrl,
+  formatHighlightBookmarkTitle,
+  hasTextFragment,
+  removeStoredHighlights,
+  scrollToHighlightInTab,
+  stripTextFragmentFromUrl,
+  upsertStoredHighlight
+} from '../sidepanel/utils/highlight';
 import { reconcileScratchpadStorageAndBookmark } from '../sidepanel/hooks/useScratchpad';
 import { closeInactiveArcticCommandTabs } from '../sidepanel/hooks/useTabBindings';
 import {
@@ -85,9 +94,10 @@ export async function handleInstalled(): Promise<void> {
   // Reconcile open/sleeping browser tabs with bookmarks across all Spaces
   await reconcileTabBindingsInBackground();
 
-  // Sync side panel dock side & dynamic edge trigger content script
+  // Sync side panel dock side & dynamic edge trigger / highlight pill content scripts
   await syncSidePanelLayoutSide();
   await syncEdgeTriggerContentScript(true);
+  await syncHighlightPillContentScript(true);
 
   // Reconcile and schedule alarms on installation
   await reconcileReminders();
@@ -115,9 +125,10 @@ export async function handleStartup(): Promise<void> {
   // Reconcile open/sleeping browser tabs with bookmarks across all Spaces
   await reconcileTabBindingsInBackground();
 
-  // Sync side panel dock side & dynamic edge trigger content script
+  // Sync side panel dock side & dynamic edge trigger / highlight pill content scripts
   await syncSidePanelLayoutSide();
   await syncEdgeTriggerContentScript(true);
+  await syncHighlightPillContentScript(true);
 
   // Reconcile and schedule alarms on startup
   await reconcileReminders();
@@ -219,6 +230,7 @@ export async function reconcileTabBindingsInBackground(): Promise<void> {
 }
 
 let backgroundReconcileQueued = false;
+const pendingHighlightUrlByTabId = new Map<number, string>();
 function scheduleBackgroundReconcile(): void {
   if (backgroundReconcileQueued) return;
   backgroundReconcileQueued = true;
@@ -235,6 +247,7 @@ export async function handleTabRemoved(
   tabId: number,
   removeInfo?: chrome.tabs.TabRemoveInfo
 ): Promise<void> {
+  pendingHighlightUrlByTabId.delete(tabId);
   await withSessionLock(async () => {
     const session = await getSessionState();
     const bookmarkId = session.bookmarkIdByTabId[tabId];
@@ -308,6 +321,12 @@ if (chrome.tabs && chrome.tabs.onActivated) {
  * and reconcile session-restored sleeping tabs if created after startup.
  */
 export async function handleTabCreated(tab: chrome.tabs.Tab): Promise<void> {
+  if (typeof tab.id === 'number') {
+    const initialUrl = tab.pendingUrl || tab.url || '';
+    if (hasTextFragment(initialUrl)) {
+      pendingHighlightUrlByTabId.set(tab.id, initialUrl);
+    }
+  }
   if (tab.active && typeof tab.id === 'number' && typeof tab.windowId === 'number') {
     const session = await getSessionState();
     await closeInactiveArcticCommandTabs(
@@ -442,9 +461,33 @@ export async function handleTabUpdated(
     return;
   }
 
+  const incomingUrl = changeInfo.url || tab.pendingUrl || tab.url || '';
+  if (hasTextFragment(incomingUrl)) {
+    pendingHighlightUrlByTabId.set(tabId, incomingUrl);
+    // Same-document hash/fragment navigation on an already-loaded tab
+    if (changeInfo.url && tab.status === 'complete' && !changeInfo.status) {
+      void scrollToHighlightInTab(tabId, incomingUrl);
+    }
+  }
+
   await withSessionLock(async () => {
     const session = await getSessionState();
     const bookmarkId = session.bookmarkIdByTabId[tabId];
+    const binding = bookmarkId ? session.bindingsByBookmarkId[bookmarkId] : undefined;
+
+    if (changeInfo.status === 'complete') {
+      const pendingHlUrl =
+        pendingHighlightUrlByTabId.get(tabId) ||
+        (hasTextFragment(incomingUrl) ? incomingUrl : undefined) ||
+        (binding && hasTextFragment(binding.originalUrl) && !binding.isNavigatedAway
+          ? binding.originalUrl
+          : undefined);
+      if (pendingHlUrl) {
+        pendingHighlightUrlByTabId.delete(tabId);
+        void scrollToHighlightInTab(tabId, pendingHlUrl);
+      }
+    }
+
     const tabForFaviconCapture: chrome.tabs.Tab = {
       ...tab,
       ...(changeInfo.url ? { url: changeInfo.url } : {}),
@@ -473,7 +516,6 @@ export async function handleTabUpdated(
       return;
     }
 
-    const binding = session.bindingsByBookmarkId[bookmarkId];
     if (!binding) return;
 
     let hasChanged = false;
@@ -739,6 +781,10 @@ if (chrome.storage && chrome.storage.onChanged) {
       const enabled = Boolean(changes.edgeTriggerEnabled.newValue);
       void syncEdgeTriggerContentScript(enabled);
     }
+    if (areaName === 'local' && changes.highlightPillEnabled !== undefined) {
+      const enabled = changes.highlightPillEnabled.newValue !== false;
+      void syncHighlightPillContentScript(enabled);
+    }
     if (
       areaName === 'local' &&
       (changes.activeSpaceId !== undefined ||
@@ -765,6 +811,7 @@ if (chrome.storage && chrome.storage.onChanged) {
    ------------------------------------------------------------- */
 
 export const EDGE_TRIGGER_SCRIPT_ID = 'arctic-edge-trigger';
+export const HIGHLIGHT_PILL_SCRIPT_ID = 'arctic-highlight-pill';
 export const EDGE_TRIGGER_ORIGINS = ['http://*/*', 'https://*/*'];
 const SIDEPANEL_PORT_NAME = 'arctic-sidepanel';
 
@@ -1390,6 +1437,9 @@ export async function activateQuickAccessFromEdge(
     if (activatedTarget) {
       const target = activatedTarget as { tabId: number; url?: string };
       void focusActiveMediaOrPageInTab(target.tabId, target.url);
+      if (target.url && hasTextFragment(target.url)) {
+        void scrollToHighlightInTab(target.tabId, target.url);
+      }
     }
     scheduleEdgeItemsBroadcast(windowId);
   }
@@ -1505,7 +1555,10 @@ function scheduleEdgeItemsBroadcast(windowId?: number): void {
 if (chrome.bookmarks) {
   const onBookmarkMutated = () => scheduleEdgeItemsBroadcast();
   chrome.bookmarks.onCreated?.addListener(onBookmarkMutated);
-  chrome.bookmarks.onRemoved?.addListener(onBookmarkMutated);
+  chrome.bookmarks.onRemoved?.addListener((id) => {
+    void removeStoredHighlights([id]);
+    onBookmarkMutated();
+  });
   chrome.bookmarks.onChanged?.addListener(onBookmarkMutated);
   chrome.bookmarks.onMoved?.addListener(onBookmarkMutated);
 }
@@ -1848,6 +1901,254 @@ export async function syncEdgeTriggerContentScript(
   });
 }
 
+export async function syncHighlightPillContentScript(
+  injectIntoOpenTabs = false,
+  onlyInjectWhenUnregistered = false
+): Promise<boolean> {
+  return withScriptSyncLock(async () => {
+    if (!chrome.scripting?.registerContentScripts || !chrome.storage?.local?.get) {
+      return false;
+    }
+
+    try {
+      const [local, hasPerm] = await Promise.all([
+        chrome.storage.local.get(['highlightPillEnabled']),
+        hasEdgeTriggerHostPermission()
+      ]);
+
+      const shouldBeActive = local.highlightPillEnabled !== false && hasPerm;
+      const existing = await chrome.scripting
+        .getRegisteredContentScripts({ ids: [HIGHLIGHT_PILL_SCRIPT_ID] })
+        .catch(() => []);
+      const isRegistered = Array.isArray(existing) && existing.length > 0;
+
+      if (shouldBeActive) {
+        if (!isRegistered) {
+          try {
+            await chrome.scripting.registerContentScripts([
+              {
+                id: HIGHLIGHT_PILL_SCRIPT_ID,
+                matches: EDGE_TRIGGER_ORIGINS,
+                js: ['highlightPill.js'],
+                runAt: 'document_idle'
+              }
+            ]);
+          } catch (regErr) {
+            console.debug('[Arctic Background] registerContentScripts note:', regErr);
+          }
+        }
+
+        const shouldInjectOpenTabs =
+          injectIntoOpenTabs && (!onlyInjectWhenUnregistered || !isRegistered);
+
+        if (shouldInjectOpenTabs && chrome.tabs?.query && chrome.scripting?.executeScript) {
+          const allTabs = await chrome.tabs.query({}).catch(() => []);
+          const targetTabs = allTabs.filter(
+            (t) => typeof t.id === 'number' && !t.discarded && isInjectableWebUrl(t.url)
+          );
+          await Promise.allSettled(
+            targetTabs.map((t) =>
+              chrome.scripting.executeScript({
+                target: { tabId: t.id as number },
+                files: ['highlightPill.js']
+              })
+            )
+          );
+        }
+        return true;
+      } else {
+        if (isRegistered && chrome.scripting.unregisterContentScripts) {
+          await chrome.scripting
+            .unregisterContentScripts({ ids: [HIGHLIGHT_PILL_SCRIPT_ID] })
+            .catch(() => {});
+        }
+
+        if (chrome.tabs?.query && chrome.tabs?.sendMessage) {
+          const tabs = await chrome.tabs.query({}).catch(() => []);
+          for (const t of tabs) {
+            if (typeof t.id === 'number' && !t.discarded) {
+              chrome.tabs
+                .sendMessage(t.id, { type: 'ARCTIC_REMOVE_HIGHLIGHT_PILL' })
+                .catch(() => {});
+            }
+          }
+        }
+        return false;
+      }
+    } catch (err) {
+      console.warn('[Arctic Background] Failed to sync highlight pill script:', err);
+      return false;
+    }
+  });
+}
+
+async function resolveActiveSpaceTargetFolder(): Promise<{
+  folderId: string;
+  spaceName: string;
+}> {
+  let spaceName = 'Home';
+  try {
+    const local = chrome.storage?.local?.get
+      ? await chrome.storage.local.get(['spaces', 'activeSpaceId', 'workspaceFolderId'])
+      : {};
+    const spaces = Array.isArray(local.spaces) ? (local.spaces as SpaceItem[]) : [];
+    const rawActiveSpaceId =
+      typeof local.activeSpaceId === 'string' && local.activeSpaceId
+        ? local.activeSpaceId
+        : 'home';
+    const activeSpace = spaces.find((s) => s.id === rawActiveSpaceId) || spaces[0];
+    spaceName = activeSpace?.name || 'Home';
+
+    const candidateFolderId =
+      activeSpace?.folderId ||
+      ((!activeSpace || activeSpace.id === 'home') && typeof local.workspaceFolderId === 'string'
+        ? local.workspaceFolderId
+        : '');
+
+    if (candidateFolderId && chrome.bookmarks?.getSubTree) {
+      try {
+        const [sub] = await chrome.bookmarks.getSubTree(candidateFolderId);
+        if (sub && sub.id) {
+          return { folderId: sub.id, spaceName };
+        }
+      } catch {
+        // Fallback to tree search
+      }
+    }
+
+    if (chrome.bookmarks?.getTree) {
+      const tree = await chrome.bookmarks.getTree();
+      const root = tree[0];
+      const other =
+        root?.children?.find((c) => c.id === '2' || c.title.toLowerCase().includes('other')) ||
+        root?.children?.[1] ||
+        root?.children?.[0];
+      const arcticRoot = other?.children?.find(
+        (c) =>
+          !c.url &&
+          (c.title === 'Arctic' || c.title === 'Arctic Sidebar' || c.title.includes('Sidebar'))
+      );
+      if (arcticRoot?.children) {
+        const targetLower = spaceName.trim().toLowerCase();
+        const matchedSpaceFolder =
+          arcticRoot.children.find(
+            (c) =>
+              !c.url &&
+              (c.title.trim().toLowerCase() === targetLower ||
+                (targetLower === 'home' && c.title.trim().toLowerCase() === 'workspace'))
+          ) ||
+          arcticRoot.children.find(
+            (c) =>
+              !c.url &&
+              (c.title.trim().toLowerCase() === 'home' ||
+                c.title.trim().toLowerCase() === 'workspace')
+          );
+        if (matchedSpaceFolder?.id) {
+          return { folderId: matchedSpaceFolder.id, spaceName };
+        }
+      }
+      if (other?.id) {
+        return { folderId: other.id, spaceName };
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { folderId: '2', spaceName };
+}
+
+export async function saveHighlightBookmark(options: {
+  url?: string;
+  pageUrl?: string;
+  pageTitle?: string;
+  quote: string;
+  targetFolderId?: string;
+  tab?: chrome.tabs.Tab;
+}): Promise<{ ok: boolean; bookmarkId?: string; spaceName?: string; url?: string }> {
+  if (!chrome.bookmarks?.create) return { ok: false };
+
+  const cleanQuote = (options.quote || '').replace(/\s+/g, ' ').trim();
+  if (!cleanQuote) return { ok: false };
+
+  const rawPageUrl =
+    options.pageUrl ||
+    (options.tab ? getEffectiveTabUrl(options.tab) || options.tab.url : '') ||
+    options.url ||
+    '';
+  const finalHighlightUrl =
+    options.url && hasTextFragment(options.url)
+      ? options.url
+      : buildHighlightUrl(rawPageUrl, cleanQuote);
+
+  if (!finalHighlightUrl) return { ok: false };
+
+  try {
+    const resolved = options.targetFolderId
+      ? { folderId: options.targetFolderId, spaceName: 'Space' }
+      : await resolveActiveSpaceTargetFolder();
+
+    const pageTitle = options.pageTitle || options.tab?.title || '';
+    const bookmarkTitle = formatHighlightBookmarkTitle(
+      cleanQuote,
+      pageTitle,
+      stripTextFragmentFromUrl(rawPageUrl || finalHighlightUrl)
+    );
+
+    const created = await chrome.bookmarks.create({
+      parentId: resolved.folderId,
+      title: bookmarkTitle,
+      url: finalHighlightUrl
+    });
+
+    await upsertStoredHighlight({
+      bookmarkId: created.id,
+      quote: cleanQuote,
+      pageTitle: pageTitle || undefined,
+      pageUrl: stripTextFragmentFromUrl(rawPageUrl || finalHighlightUrl),
+      createdAt: Date.now()
+    });
+
+    if (options.tab && typeof options.tab.id === 'number') {
+      const tab = options.tab;
+      const tabId = tab.id as number;
+      void captureVerifiedTabFavicon(tab, finalHighlightUrl, { size: 32 });
+
+      await withSessionLock(async () => {
+        const session = await getSessionState();
+        // Unbind any previous bookmark bound to this tab so bijection stays 1-to-1
+        const prevBookmarkId = session.bookmarkIdByTabId[tabId];
+        if (prevBookmarkId && prevBookmarkId !== created.id) {
+          delete session.bindingsByBookmarkId[prevBookmarkId];
+        }
+        const newBinding: TabBinding = {
+          bookmarkId: created.id,
+          tabId,
+          windowId: tab.windowId,
+          originalUrl: finalHighlightUrl,
+          currentUrl: getEffectiveTabUrl(tab) || finalHighlightUrl,
+          currentTitle: tab.title || bookmarkTitle,
+          isNavigatedAway: false
+        };
+        session.bindingsByBookmarkId[created.id] = newBinding;
+        session.bookmarkIdByTabId[tabId] = created.id;
+        await saveSessionState(session);
+        await upsertPersistedBindings({ [created.id]: newBinding });
+      });
+    }
+
+    scheduleEdgeItemsBroadcast(options.tab?.windowId);
+    return {
+      ok: true,
+      bookmarkId: created.id,
+      spaceName: resolved.spaceName,
+      url: finalHighlightUrl
+    };
+  } catch (err) {
+    console.warn('[Arctic Background] Could not save highlight bookmark:', err);
+    return { ok: false };
+  }
+}
+
 export function handleRuntimeMessage(
   message: {
     type?: string;
@@ -1858,11 +2159,37 @@ export function handleRuntimeMessage(
     forceReset?: boolean;
     forceReload?: boolean;
     urls?: string[];
+    url?: string;
+    pageUrl?: string;
+    pageTitle?: string;
+    quote?: string;
+    targetFolderId?: string;
   },
   sender: chrome.runtime.MessageSender,
   sendResponse: (response?: unknown) => void
 ): boolean {
   if (!message || typeof message !== 'object') return false;
+
+  if (message.type === 'SAVE_HIGHLIGHT_BOOKMARK' && typeof message.quote === 'string') {
+    void saveHighlightBookmark({
+      url: message.url,
+      pageUrl: message.pageUrl,
+      pageTitle: message.pageTitle,
+      quote: message.quote,
+      targetFolderId: message.targetFolderId,
+      tab: sender?.tab
+    }).then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.type === 'SYNC_HIGHLIGHT_PILL') {
+    void syncHighlightPillContentScript(Boolean(message.injectIntoOpenTabs)).then((active) => {
+      sendResponse({ ok: true, active });
+    });
+    return true;
+  }
 
   // @chrome-workaround(sidepanel-open-user-gesture): chrome.sidePanel.open() requires a synchronous user gesture token; cannot be triggered by hover without click
   // CRITICAL: Must invoke chrome.sidePanel.open() SYNCHRONOUSLY before any await
@@ -2160,5 +2487,16 @@ if (chrome.permissions && 'onRemoved' in chrome.permissions) {
     }
   ).onRemoved?.addListener(() => {
     void syncEdgeTriggerContentScript(false);
+    void syncHighlightPillContentScript(false);
+  });
+}
+
+if (chrome.permissions && 'onAdded' in chrome.permissions) {
+  (
+    chrome.permissions as typeof chrome.permissions & {
+      onAdded?: { addListener: (cb: () => void) => void };
+    }
+  ).onAdded?.addListener(() => {
+    void syncHighlightPillContentScript(true);
   });
 }

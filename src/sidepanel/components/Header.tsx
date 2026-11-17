@@ -19,6 +19,7 @@ interface HeaderProps {
   onReloadActiveTab: (bypassCache?: boolean) => void;
   onNavigateActiveTab?: (input: string) => void;
   onGoBackActiveTab?: () => void;
+  onCopyActiveTabUrl?: (fallbackUrl: string) => Promise<{ copiedHighlight?: boolean } | void>;
   onHideSidebar?: () => void;
   sidebarDockSide?: 'left' | 'right';
 }
@@ -59,10 +60,12 @@ export const Header: React.FC<HeaderProps> = ({
   onReloadActiveTab,
   onNavigateActiveTab,
   onGoBackActiveTab,
+  onCopyActiveTabUrl,
   onHideSidebar,
   sidebarDockSide = 'left'
 }) => {
   const [isCopied, setIsCopied] = useState(false);
+  const [copiedHighlight, setCopiedHighlight] = useState(false);
 
   // URL Bar Inline Editing State
   const [isEditingUrl, setIsEditingUrl] = useState(false);
@@ -160,8 +163,19 @@ export const Header: React.FC<HeaderProps> = ({
     e.stopPropagation();
     if (!activeTabUrl) return;
     navigator.clipboard.writeText(activeTabUrl);
+    setCopiedHighlight(false);
     setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 1500);
+    if (onCopyActiveTabUrl) {
+      void Promise.resolve(onCopyActiveTabUrl(activeTabUrl)).then((res) => {
+        if (res && res.copiedHighlight) {
+          setCopiedHighlight(true);
+        }
+      });
+    }
+    setTimeout(() => {
+      setIsCopied(false);
+      setCopiedHighlight(false);
+    }, 1500);
   };
 
   const handleUrlSubmit = (e: React.FormEvent) => {
@@ -276,7 +290,13 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               disabled={!canCopyUrl}
-              data-tooltip={isCopied ? 'Copied URL!' : 'Copy URL'}
+              data-tooltip={
+                isCopied
+                  ? copiedHighlight
+                    ? 'Copied Highlight Link!'
+                    : 'Copied URL!'
+                  : 'Copy URL'
+              }
               data-tooltip-pos="bottom-right"
               onClick={handleCopyCurrentUrl}
               className={`p-1 rounded-md transition-colors ${
