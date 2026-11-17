@@ -1630,5 +1630,83 @@ describe('Background service worker reminder lifecycle', () => {
         })
       );
     });
+
+    it('handles SAVE_HIGHLIGHT_BOOKMARK by creating a #:~:text= bookmark in the active Space folder, storing highlight metadata, and binding the tab', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    { id: '12', title: 'Home', children: [] },
+                    { id: '20', title: 'Research', children: [] }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+      mockChrome.__setLocalStorage({
+        spaces: [
+          { id: 'home', name: 'Home', folderId: '12' },
+          { id: 'research', name: 'Research', folderId: '20' }
+        ],
+        activeSpaceId: 'research'
+      });
+      mockChrome.__setSessionStorage({});
+
+      const sendResponse = vi.fn();
+      handleRuntimeMessage(
+        {
+          type: 'SAVE_HIGHLIGHT_BOOKMARK',
+          pageUrl: 'https://paulgraham.com/greatwork.html',
+          pageTitle: 'How to Do Great Work',
+          quote: 'Curiosity is the best guide.'
+        },
+        {
+          tab: {
+            id: 88,
+            windowId: 10,
+            url: 'https://paulgraham.com/greatwork.html',
+            title: 'How to Do Great Work',
+            active: true
+          } as chrome.tabs.Tab
+        } as chrome.runtime.MessageSender,
+        sendResponse
+      );
+
+      await new Promise((r) => setTimeout(r, 25));
+
+      expect(sendResponse).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: true,
+          spaceName: 'Research',
+          url: 'https://paulgraham.com/greatwork.html#:~:text=Curiosity%20is%20the%20best%20guide.'
+        })
+      );
+
+      const children = await chrome.bookmarks.getChildren('20');
+      expect(children).toHaveLength(1);
+      expect(children[0].title).toBe('“Curiosity is the best guide.” — How to Do Great Work');
+      expect(children[0].url).toBe(
+        'https://paulgraham.com/greatwork.html#:~:text=Curiosity%20is%20the%20best%20guide.'
+      );
+
+      const storedHighlights = (
+        mockChrome.__getLocalStorage().highlightsByBookmarkId as Record<string, any>
+      )?.[children[0].id];
+      expect(storedHighlights?.quote).toBe('Curiosity is the best guide.');
+      expect(
+        (mockChrome.__getSessionStorage().bookmarkIdByTabId as Record<number, string>)[88]
+      ).toBe(children[0].id);
+    });
   });
 });

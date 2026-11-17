@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TabBinding, LocalSettings, TabWithFaviconMeta } from '../../types';
-import { getEffectiveTabUrl, isUrlNavigatedAway } from '../utils/url';
+import { doesTabUrlMatchBookmark, getEffectiveTabUrl, isUrlNavigatedAway } from '../utils/url';
 import { captureVerifiedTabFavicon } from '../utils/faviconCache';
 import {
   blurSidebarActiveElementIfPointer,
   focusActiveMediaOrPageInTab
 } from '../utils/tabPageFocus';
+import { hasTextFragment, scrollToHighlightInTab } from '../utils/highlight';
 import { markRecentlyMoved } from '../utils/dnd';
 import {
   clearAllPersistedBindings,
@@ -1528,8 +1529,14 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
         if (typeof activeTabId === 'number') {
           await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
+          if (hasTextFragment(finalUrl)) {
+            void scrollToHighlightInTab(activeTabId, finalUrl);
+          }
         } else {
-          await chrome.tabs.create({ url: finalUrl, active: true });
+          const created = await chrome.tabs.create({ url: finalUrl, active: true });
+          if (typeof created?.id === 'number' && hasTextFragment(finalUrl)) {
+            void scrollToHighlightInTab(created.id, finalUrl);
+          }
         }
       } else if (typeof chrome !== 'undefined' && typeof chrome.search?.query === 'function') {
         try {
@@ -1671,6 +1678,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               existingBinding.tabId,
               getEffectiveTabUrl(tab) || existingBinding.currentUrl || bookmark.url
             );
+            if (hasTextFragment(bookmark.url)) {
+              void scrollToHighlightInTab(existingBinding.tabId, bookmark.url);
+            }
             return;
           }
         } catch {
@@ -1731,8 +1741,58 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
         setActiveTabId(tabId);
         void focusActiveMediaOrPageInTab(tabId, matchUrl);
+        if (hasTextFragment(bookmark.url)) {
+          void scrollToHighlightInTab(tabId, bookmark.url);
+        }
         await refreshWindowTabs();
         return;
+      }
+
+      // If this is a Highlight Bookmark (`#:~:text=...`) and another bookmark on the same base page
+      // already has an open tab in the window, reuse that open tab and jump directly to this highlight
+      if (hasTextFragment(bookmark.url)) {
+        const sharedPageTab = orderedTabs.find(
+          (t) =>
+            typeof t.id === 'number' &&
+            !unpinnedTabIdsRef.current.has(t.id) &&
+            !isArcticCommandTab(t) &&
+            doesTabUrlMatchBookmark(getEffectiveTabUrl(t), bookmark.url!)
+        );
+        if (sharedPageTab && typeof sharedPageTab.id === 'number') {
+          const tabId = sharedPageTab.id;
+          const prevBoundBmId = latestByTab[tabId];
+          const newBindings = { ...latestBindings };
+          if (prevBoundBmId && prevBoundBmId !== bookmark.id) {
+            delete newBindings[prevBoundBmId];
+          }
+          const matchUrl = getEffectiveTabUrl(sharedPageTab) || bookmark.url;
+          const newBinding: TabBinding = {
+            bookmarkId: bookmark.id,
+            tabId,
+            windowId: sharedPageTab.windowId,
+            originalUrl: bookmark.url,
+            currentUrl: matchUrl,
+            currentTitle: sharedPageTab.title || bookmark.title || '',
+            isNavigatedAway: false
+          };
+          newBindings[bookmark.id] = newBinding;
+          const newByTab = { ...latestByTab, [tabId]: bookmark.id };
+
+          await persistSession(newBindings, newByTab);
+          await chrome.tabs.update(tabId, { active: true });
+          if (sharedPageTab.windowId) {
+            try {
+              await chrome.windows.update(sharedPageTab.windowId, { focused: true });
+            } catch {
+              // ignore
+            }
+          }
+          setActiveTabId(tabId);
+          void focusActiveMediaOrPageInTab(tabId, matchUrl);
+          void scrollToHighlightInTab(tabId, bookmark.url);
+          await refreshWindowTabs();
+          return;
+        }
       }
 
       // Otherwise, open a new tab and bind it

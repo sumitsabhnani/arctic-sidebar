@@ -225,4 +225,23 @@ describe('SettingsModal component', () => {
     fireEvent.click(pageFocusSwitch);
     expect(onToggleTabPageFocus).toHaveBeenCalledWith(true);
   });
+
+  it('renders On-Page Highlight Pill switch when onToggleHighlightPill is provided and toggles value', () => {
+    const onToggleHighlightPill = vi.fn();
+    render(
+      <SettingsModal
+        {...defaultProps}
+        highlightPillEnabled={false}
+        onToggleHighlightPill={onToggleHighlightPill}
+      />
+    );
+
+    const pillSwitch = screen.getByRole('switch', {
+      name: 'On-Page Highlight Pill (Share & Save Quotes)'
+    });
+    expect(pillSwitch).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(pillSwitch);
+    expect(onToggleHighlightPill).toHaveBeenCalledWith(true);
+  });
 });

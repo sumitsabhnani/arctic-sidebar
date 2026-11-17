@@ -63,6 +63,14 @@ export interface CachedFaviconEntry {
   updatedAt: number;
 }
 
+export interface StoredHighlightMeta {
+  bookmarkId: string;
+  quote: string;
+  pageTitle?: string;
+  pageUrl?: string;
+  createdAt: number;
+}
+
 export type TabWithFaviconMeta = chrome.tabs.Tab & {
   _faviconRev?: number;
 };
@@ -78,6 +86,7 @@ export interface LocalSettings {
   tabSpaceByTabId?: Record<number, string>;
   persistedBindingsByBookmarkId?: Record<string, PersistedTabBinding>;
   cachedFaviconsByKey?: Record<string, CachedFaviconEntry>;
+  highlightsByBookmarkId?: Record<string, StoredHighlightMeta>;
   theme?: ThemeMode;
   colorTheme?: ColorThemeId;
   quickAccessDensity?: 'relaxed' | 'compact';
@@ -88,6 +97,7 @@ export interface LocalSettings {
   isSidebarCollapsed?: boolean;
   edgeTriggerEnabled?: boolean;
   edgeTriggerMode?: EdgeTriggerMode;
+  highlightPillEnabled?: boolean;
   tabPageFocusEnabled?: boolean;
   hasDismissedPageFocusTip?: boolean;
   sidebarDockSide?: 'left' | 'right';

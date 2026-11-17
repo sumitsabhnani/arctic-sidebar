@@ -17,6 +17,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   Keyboard,
+  Quote,
   ExternalLink
 } from 'lucide-react';
 import type { BookmarkFolderOption, ColorThemeId, EdgeTriggerMode, ThemeMode } from '../../types';
@@ -34,6 +35,7 @@ interface SettingsModalProps {
   edgeTriggerEnabled?: boolean;
   edgeTriggerMode?: EdgeTriggerMode;
   tabPageFocusEnabled?: boolean;
+  highlightPillEnabled?: boolean;
   allFolders: BookmarkFolderOption[];
   activeFolderIds: {
     quickAccessId: string | null;
@@ -50,6 +52,7 @@ interface SettingsModalProps {
   onToggleEdgeTrigger?: (enabled: boolean) => void;
   onChangeEdgeTriggerMode?: (mode: EdgeTriggerMode) => void;
   onToggleTabPageFocus?: (enabled: boolean) => void;
+  onToggleHighlightPill?: (enabled: boolean) => void;
   onSelectQuickAccessFolder: (id: string) => void;
   onSelectWorkspaceFolder: (id: string) => void;
   onResetFolders: () => void;
@@ -68,6 +71,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   edgeTriggerEnabled = false,
   edgeTriggerMode = 'push',
   tabPageFocusEnabled = false,
+  highlightPillEnabled = false,
   allFolders,
   activeFolderIds,
   autoArchiveInterval,
@@ -80,6 +84,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onToggleEdgeTrigger,
   onChangeEdgeTriggerMode,
   onToggleTabPageFocus,
+  onToggleHighlightPill,
   onSelectQuickAccessFolder,
   onSelectWorkspaceFolder,
   onResetFolders,
@@ -542,6 +547,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span
                   className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
                     tabPageFocusEnabled ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          )}
+
+          {/* On-Page Highlight Pill Toggle */}
+          {onToggleHighlightPill && (
+            <div className="flex items-center justify-between pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
+              <div className="flex flex-col pr-2">
+                <span className="font-semibold text-zinc-900 dark:text-white flex items-center gap-1.5">
+                  <Quote className="w-3.5 h-3.5 theme-accent-text" />
+                  On-Page Highlight Pill (Share &amp; Save Quotes)
+                </span>
+                <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  Show a floating pill when selecting text on any webpage to copy a deep highlight link or save the quote to your active Space.
+                </span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-label="On-Page Highlight Pill (Share & Save Quotes)"
+                aria-checked={highlightPillEnabled}
+                onClick={() => onToggleHighlightPill(!highlightPillEnabled)}
+                className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  highlightPillEnabled ? 'theme-accent-bg' : 'bg-zinc-300 dark:bg-zinc-700'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                    highlightPillEnabled ? 'translate-x-4' : 'translate-x-0'
                   }`}
                 />
               </button>
