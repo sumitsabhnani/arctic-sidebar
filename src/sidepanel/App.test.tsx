@@ -565,4 +565,166 @@ describe('Sidepanel App Integration', () => {
 
     closeSpy.mockRestore();
   });
+
+  it('blurs clicked Quick Access / Space bookmark elements and bridges media & arrow keys to the active tab (with guardrails)', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [
+                          {
+                            id: 'qa-yt',
+                            title: 'YouTube',
+                            url: 'https://www.youtube.com/watch?v=abc'
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        index: 0,
+        windowId: 10,
+        active: true,
+        url: 'https://example.com',
+        title: 'Example',
+        status: 'complete'
+      } as chrome.tabs.Tab,
+      {
+        id: 2,
+        index: 1,
+        windowId: 10,
+        active: false,
+        url: 'https://www.youtube.com/watch?v=abc',
+        title: 'YouTube Watch',
+        status: 'complete'
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setHostPermissionsGranted(true);
+
+    render(<App />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    const ytTile = (await screen.findByText('YouTube')).closest('button')!;
+    ytTile.focus();
+    expect(document.activeElement).toBe(ytTile);
+
+    vi.mocked(chrome.scripting.executeScript).mockClear();
+
+    // Pointer click activates YouTube tab, blurs the sidebar tile to document.body, and auto-focuses player
+    await act(async () => {
+      fireEvent.click(ytTile);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(document.activeElement).toBe(document.body);
+    expect(chrome.scripting.executeScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { tabId: 2 }
+      })
+    );
+
+    // Pressing ArrowRight in sidepanel.html forwards keystroke to YouTube tab 2
+    vi.mocked(chrome.scripting.executeScript).mockClear();
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'ArrowRight', code: 'ArrowRight' });
+      await new Promise((r) => setTimeout(r, 15));
+    });
+
+    expect(chrome.scripting.executeScript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { tabId: 2 },
+        args: [{ key: 'ArrowRight', code: 'ArrowRight', shiftKey: false }]
+      })
+    );
+
+    // Guardrail: when a button inside the sidebar has keyboard focus (Tab navigation), do NOT forward keys
+    vi.mocked(chrome.scripting.executeScript).mockClear();
+    ytTile.focus();
+    expect(document.activeElement).toBe(ytTile);
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'ArrowRight', code: 'ArrowRight' });
+      await new Promise((r) => setTimeout(r, 15));
+    });
+    expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+  });
+
+  it('never prompts permissions on tab click when ungranted, and shows a 1-click Enable bar only when pressing a media/arrow key', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        index: 0,
+        windowId: 10,
+        active: true,
+        url: 'https://www.youtube.com/watch?v=abc',
+        title: 'YouTube Video',
+        status: 'complete'
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setHostPermissionsGranted(false);
+
+    render(<App />);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    const openTabRow = (await screen.findByText('YouTube Video')).closest('[role="button"]') as HTMLElement;
+    await act(async () => {
+      fireEvent.click(openTabRow);
+      await new Promise((r) => setTimeout(r, 15));
+    });
+
+    // Clicking tab never triggers permissions.request or shows hint banner
+    expect(chrome.permissions.request).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('page-focus-permission-hint')).not.toBeInTheDocument();
+
+    // Pressing ArrowRight while host permission is missing surfaces the subtle 1-click Enable bar
+    await act(async () => {
+      fireEvent.keyDown(window, { key: 'ArrowRight', code: 'ArrowRight' });
+    });
+
+    const hint = await screen.findByTestId('page-focus-permission-hint');
+    expect(hint).toBeInTheDocument();
+
+    const enableBtn = screen.getByRole('button', { name: 'Enable' });
+    await act(async () => {
+      fireEvent.click(enableBtn);
+      await new Promise((r) => setTimeout(r, 15));
+    });
+
+    expect(chrome.permissions.request).toHaveBeenCalledWith({
+      origins: ['http://*/*', 'https://*/*']
+    });
+    expect(screen.queryByTestId('page-focus-permission-hint')).not.toBeInTheDocument();
+  });
 });

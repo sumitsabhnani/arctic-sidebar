@@ -88,6 +88,8 @@ export interface LocalSettings {
   isSidebarCollapsed?: boolean;
   edgeTriggerEnabled?: boolean;
   edgeTriggerMode?: EdgeTriggerMode;
+  tabPageFocusEnabled?: boolean;
+  hasDismissedPageFocusTip?: boolean;
   sidebarDockSide?: 'left' | 'right';
   collapsedSections?: {
     quickAccess?: boolean;

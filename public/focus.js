@@ -1,3 +1,4 @@
+// @chrome-workaround(newtab-omnibox-focus): Chrome's chrome_url_overrides.newtab forces focus into the address bar; spawn command.html to focus the page search input directly.
 if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.getCurrent) {
   chrome.tabs.getCurrent((currentTab) => {
     if (currentTab && currentTab.active === false) {
