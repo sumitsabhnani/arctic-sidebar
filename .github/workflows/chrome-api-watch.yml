@@ -1,0 +1,79 @@
+name: Chrome API Watch
+
+on:
+  schedule:
+    # Runs at 09:00 UTC on the 1st of every month (aligned with Chrome's ~4-week milestone cycle)
+    - cron: '0 9 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-chrome-apis:
+    name: Check upstream @types/chrome for watched APIs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Chrome API & Workaround Monitor against latest npm @types/chrome
+        run: |
+          node scripts/checkChromeApis.mjs \
+            --remote \
+            --markdown-report chrome-api-report.md \
+            --json-summary chrome-api-summary.json
+
+      - name: Open or update GitHub Issue if new Chrome APIs are detected
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const summary = JSON.parse(fs.readFileSync('chrome-api-summary.json', 'utf8'));
+            const reportBody = fs.readFileSync('chrome-api-report.md', 'utf8');
+
+            if (!summary.hasNewApis) {
+              core.info('No new symbols in watched Chrome namespaces. Skipping issue creation.');
+              return;
+            }
+
+            const issueTitle = `🚀 New Chrome Extension APIs detected (@types/chrome v${summary.targetVersion})`;
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 50
+            });
+
+            const existing = existingIssues.data.find((issue) =>
+              issue.title.startsWith('🚀 New Chrome Extension APIs detected')
+            );
+
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                title: issueTitle,
+                body: reportBody
+              });
+              core.info(`Updated existing issue #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: reportBody
+              });
+              core.info(`Created new issue #${created.data.number}`);
+            }

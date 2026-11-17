@@ -8,6 +8,9 @@
     "build": "tsc && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check:chrome-apis": "node scripts/checkChromeApis.mjs",
+    "check:chrome-apis:remote": "node scripts/checkChromeApis.mjs --remote",
+    "check:chrome-apis:update": "node scripts/checkChromeApis.mjs --update",
     "zip": "npm run test && npm run build && rm -f arctic-sidebar.zip && cd dist && zip -r ../arctic-sidebar.zip .",
     "preview": "vite preview"
   },

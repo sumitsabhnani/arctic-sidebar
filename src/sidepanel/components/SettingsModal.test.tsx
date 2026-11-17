@@ -206,4 +206,23 @@ describe('SettingsModal component', () => {
     expect(chrome.tabs.create).not.toHaveBeenCalled();
     expect(chrome.tabs.update).toHaveBeenCalledWith(77, { active: true });
   });
+
+  it('renders Page Focus & Media Keys on Tab Switch switch when onToggleTabPageFocus is provided and toggles value', () => {
+    const onToggleTabPageFocus = vi.fn();
+    render(
+      <SettingsModal
+        {...defaultProps}
+        tabPageFocusEnabled={false}
+        onToggleTabPageFocus={onToggleTabPageFocus}
+      />
+    );
+
+    const pageFocusSwitch = screen.getByRole('switch', {
+      name: 'Page Focus & Media Keys on Tab Switch'
+    });
+    expect(pageFocusSwitch).toHaveAttribute('aria-checked', 'false');
+
+    fireEvent.click(pageFocusSwitch);
+    expect(onToggleTabPageFocus).toHaveBeenCalledWith(true);
+  });
 });

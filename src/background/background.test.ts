@@ -1564,5 +1564,71 @@ describe('Background service worker reminder lifecycle', () => {
         globalThis.fetch = origFetch;
       }
     });
+
+    it('runs focusActiveMediaOrPageInTab on target web tab when switching via Edge Trigger Rail with host permissions granted', async () => {
+      mockChrome.__setHostPermissionsGranted(true);
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                { id: 'qa-yt', title: 'YouTube', url: 'https://www.youtube.com/watch?v=123' }
+              ]
+            }
+          ]
+        }
+      ]);
+      mockChrome.__setTabs([
+        {
+          id: 701,
+          windowId: 10,
+          url: 'https://example.com',
+          active: true
+        } as chrome.tabs.Tab,
+        {
+          id: 702,
+          windowId: 10,
+          url: 'https://www.youtube.com/watch?v=123',
+          active: false
+        } as chrome.tabs.Tab
+      ]);
+
+      vi.mocked(chrome.scripting.executeScript).mockClear();
+
+      // 1. Activate bookmark via Edge Rail -> matches unbound YouTube tab 702 and focuses player
+      const resp1 = vi.fn();
+      handleRuntimeMessage(
+        { type: 'ACTIVATE_QUICK_ACCESS_FROM_EDGE', bookmarkId: 'qa-yt' },
+        { tab: { id: 701, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        resp1
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(resp1).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.scripting.executeScript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { tabId: 702 }
+        })
+      );
+
+      // 2. Activate Today's Tab via Edge Rail -> focuses target tab 701
+      vi.mocked(chrome.scripting.executeScript).mockClear();
+      const resp2 = vi.fn();
+      handleRuntimeMessage(
+        { type: 'ACTIVATE_TODAY_TAB_FROM_EDGE', tabId: 701 },
+        { tab: { id: 702, windowId: 10 } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+        resp2
+      );
+      await new Promise((r) => setTimeout(r, 25));
+      expect(resp2).toHaveBeenCalledWith({ ok: true });
+      expect(chrome.scripting.executeScript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { tabId: 701 }
+        })
+      );
+    });
   });
 });

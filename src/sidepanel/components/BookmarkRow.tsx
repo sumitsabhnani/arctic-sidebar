@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { TabBinding, SpaceItem, TabReminder, TabWithFaviconMeta } from '../../types';
 import { useResolvedFavicon } from '../utils/faviconCache';
+import { markKeyboardRowActivation } from '../utils/tabPageFocus';
 import {
   attachMultiDragPreview,
   endDragSession,
@@ -570,6 +571,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
+          markKeyboardRowActivation();
           onRowClick(bookmark);
         }
       }}
@@ -619,6 +621,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
+              markKeyboardRowActivation();
               onFaviconClick(bookmark, e as unknown as React.MouseEvent);
             }
           }}

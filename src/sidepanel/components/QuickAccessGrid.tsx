@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { TabBinding, TabWithFaviconMeta } from '../../types';
 import { useResolvedFavicon } from '../utils/faviconCache';
+import { markKeyboardRowActivation } from '../utils/tabPageFocus';
 import { useFlipAnimation } from '../hooks/useFlipAnimation';
 import {
   endDragSession,
@@ -429,6 +430,11 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onClick={() => onTileClick(bookmark)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          markKeyboardRowActivation();
+        }
+      }}
       onDoubleClick={(e) => {
         if (onTileDoubleClick) {
           onTileDoubleClick(bookmark, e);

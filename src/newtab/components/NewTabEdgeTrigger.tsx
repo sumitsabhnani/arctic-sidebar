@@ -13,6 +13,7 @@ import { resolveEffectiveTheme } from '../../sidepanel/utils/theme';
 import { normalizeFaviconPageUrl } from '../../sidepanel/utils/faviconCache';
 import { getFaviconUrl } from '../../sidepanel/utils/url';
 
+// @chrome-workaround(sidepanel-min-width-and-resize): Mirror the 36px collapsed rail on command.html because content scripts do not run on chrome-extension:// pages
 const MIN_THUMB_HEIGHT_PX = 24;
 
 interface NewTabEdgeTriggerProps {

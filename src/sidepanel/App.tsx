@@ -18,10 +18,16 @@ import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './ut
 import { isScratchpadUrl } from './utils/url';
 import { captureVerifiedTabFavicon, hydrateFaviconCache } from './utils/faviconCache';
 import { scrollElementIntoContainerView } from './utils/scrollIntoView';
+import {
+  focusActiveMediaOrPageInTab,
+  forwardKeyToTab,
+  isBridgedTabKey,
+  isInjectableWebUrl
+} from './utils/tabPageFocus';
 import { upsertPersistedBindings } from './utils/reconcileBindings';
 import { useFlipAnimation } from './hooks/useFlipAnimation';
 import { endDragSession, parseDragPayload, useActiveDrag } from './utils/dnd';
-import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose, Keyboard } from 'lucide-react';
 
 const EDGE_TRIGGER_ORIGINS = ['http://*/*', 'https://*/*'];
 
@@ -161,7 +167,11 @@ export const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [edgeTriggerEnabled, setEdgeTriggerEnabled] = useState<boolean>(false);
   const [edgeTriggerMode, setEdgeTriggerMode] = useState<EdgeTriggerMode>('push');
+  const [tabPageFocusEnabled, setTabPageFocusEnabled] = useState<boolean>(true);
+  const [hasDismissedPageFocusTip, setHasDismissedPageFocusTip] = useState<boolean>(false);
+  const [showPageFocusPermissionHint, setShowPageFocusPermissionHint] = useState<boolean>(false);
   const [hasEdgeHostPermission, setHasEdgeHostPermission] = useState<boolean>(false);
+  const lastForwardedKeyAtRef = React.useRef<number>(0);
   const [sidebarDockSide, setSidebarDockSide] = useState<'left' | 'right'>('left');
   const [showEdgeTriggerPrompt, setShowEdgeTriggerPrompt] = useState<boolean>(false);
   const sidePanelWindowIdRef = React.useRef<number | null>(null);
@@ -200,6 +210,8 @@ export const App: React.FC = () => {
         'showMemorySaverBar',
         'edgeTriggerEnabled',
         'edgeTriggerMode',
+        'tabPageFocusEnabled',
+        'hasDismissedPageFocusTip',
         'sidebarDockSide',
         'openArcticSettings'
       ],
@@ -226,6 +238,12 @@ export const App: React.FC = () => {
         }
         if (res.edgeTriggerMode === 'push' || res.edgeTriggerMode === 'hover') {
           setEdgeTriggerMode(res.edgeTriggerMode);
+        }
+        if (typeof res.tabPageFocusEnabled === 'boolean') {
+          setTabPageFocusEnabled(res.tabPageFocusEnabled);
+        }
+        if (typeof res.hasDismissedPageFocusTip === 'boolean') {
+          setHasDismissedPageFocusTip(res.hasDismissedPageFocusTip);
         }
         if (res.sidebarDockSide === 'left' || res.sidebarDockSide === 'right') {
           setSidebarDockSide(res.sidebarDockSide);
@@ -273,6 +291,18 @@ export const App: React.FC = () => {
             changes.edgeTriggerMode.newValue === 'hover')
         ) {
           setEdgeTriggerMode(changes.edgeTriggerMode.newValue);
+        }
+        if (
+          changes.tabPageFocusEnabled &&
+          typeof changes.tabPageFocusEnabled.newValue === 'boolean'
+        ) {
+          setTabPageFocusEnabled(changes.tabPageFocusEnabled.newValue);
+        }
+        if (
+          changes.hasDismissedPageFocusTip &&
+          typeof changes.hasDismissedPageFocusTip.newValue === 'boolean'
+        ) {
+          setHasDismissedPageFocusTip(changes.hasDismissedPageFocusTip.newValue);
         }
         if (
           changes.sidebarDockSide &&
@@ -492,6 +522,7 @@ export const App: React.FC = () => {
     };
   }, []);
 
+  // @chrome-workaround(sidepanel-close-and-visibility): Coordinate side panel closing via port/messages + window.close() until chrome.sidePanel.close() and onOpened/onClosed events are universally available
   const prepareAndCloseSidePanel = useCallback(async (injectIntoOpenTabs: boolean) => {
     isClosingPanelRef.current = true;
     let winId = sidePanelWindowIdRef.current;
@@ -621,6 +652,58 @@ export const App: React.FC = () => {
   const handleChangeEdgeTriggerMode = useCallback((nextMode: EdgeTriggerMode) => {
     setEdgeTriggerMode(nextMode);
     chrome.storage.local.set({ edgeTriggerMode: nextMode } as LocalSettings);
+  }, []);
+
+  const effectiveActiveTabUrl = useMemo(() => {
+    if (activeTabUrl) return activeTabUrl;
+    if (typeof activeTabId === 'number') {
+      const bmId = bookmarkIdByTabId[activeTabId];
+      if (bmId && bindingsByBookmarkId[bmId]) {
+        return bindingsByBookmarkId[bmId].currentUrl || bindingsByBookmarkId[bmId].originalUrl || '';
+      }
+    }
+    return '';
+  }, [activeTabUrl, activeTabId, bookmarkIdByTabId, bindingsByBookmarkId]);
+
+  const handleToggleTabPageFocus = useCallback(
+    (enabled: boolean) => {
+      if (!enabled) {
+        setTabPageFocusEnabled(false);
+        setShowPageFocusPermissionHint(false);
+        chrome.storage.local.set({ tabPageFocusEnabled: false } as LocalSettings);
+        return;
+      }
+
+      const activate = () => {
+        setHasEdgeHostPermission(true);
+        setTabPageFocusEnabled(true);
+        setShowPageFocusPermissionHint(false);
+        chrome.storage.local.set({ tabPageFocusEnabled: true } as LocalSettings);
+        if (typeof activeTabId === 'number' && isInjectableWebUrl(effectiveActiveTabUrl)) {
+          void focusActiveMediaOrPageInTab(activeTabId, effectiveActiveTabUrl);
+        }
+      };
+
+      if (!hasEdgeHostPermission && chrome?.permissions?.request) {
+        Promise.resolve(chrome.permissions.request({ origins: EDGE_TRIGGER_ORIGINS }))
+          .then((granted) => {
+            if (granted) {
+              activate();
+            }
+          })
+          .catch(() => {});
+        return;
+      }
+
+      activate();
+    },
+    [hasEdgeHostPermission, activeTabId, effectiveActiveTabUrl]
+  );
+
+  const dismissPageFocusPermissionHint = useCallback(() => {
+    setShowPageFocusPermissionHint(false);
+    setHasDismissedPageFocusTip(true);
+    chrome.storage.local.set({ hasDismissedPageFocusTip: true } as LocalSettings);
   }, []);
 
   // First-run Left-Side Tip State
@@ -1040,26 +1123,110 @@ export const App: React.FC = () => {
   }, [workspaceBookmarks, collapsedFolderIds]);
   useFlipAnimation(workspaceListRef, workspaceOrderSignature, activeSpaceId);
 
-  // Global keyboard shortcuts:
+  // Global keyboard shortcuts & active-tab media/scroll keystroke bridge:
   // - Ctrl+T / Cmd+T: New Tab
   // - Ctrl+R / Cmd+R: Reload active web page
+  // - Escape: Clear multi-selection
+  // - Media & scroll keys (when sidepanel.html body has idle focus): forwarded to active tab
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 't') {
         e.preventDefault();
         createNewTab();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
         e.preventDefault();
         reloadActiveTab(e.shiftKey);
-      } else if (e.key === 'Escape') {
+        return;
+      }
+      if (e.key === 'Escape') {
         setSelectedBookmarkIds(new Set());
         setSelectedTabIds(new Set());
+        return;
       }
+
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) {
+        return;
+      }
+
+      if (
+        isSettingsOpen ||
+        isScratchpadOpen ||
+        Boolean(contextMenu) ||
+        Boolean(activeReminderTarget) ||
+        showEdgeTriggerPrompt ||
+        Boolean(editingTarget) ||
+        isRenamingWorkspace ||
+        isCreatingRootFolder
+      ) {
+        return;
+      }
+
+      const activeEl = document.activeElement;
+      const isIdleSidebarBody =
+        !activeEl || activeEl === document.body || activeEl === document.documentElement;
+      if (!isIdleSidebarBody) {
+        return;
+      }
+
+      if (!isBridgedTabKey(e)) {
+        return;
+      }
+
+      if (!tabPageFocusEnabled) {
+        return;
+      }
+
+      if (typeof activeTabId !== 'number' || !isInjectableWebUrl(effectiveActiveTabUrl)) {
+        return;
+      }
+
+      if (!hasEdgeHostPermission) {
+        if (!hasDismissedPageFocusTip) {
+          e.preventDefault();
+          setShowPageFocusPermissionHint(true);
+        }
+        return;
+      }
+
+      e.preventDefault();
+      const now = Date.now();
+      if (e.repeat && now - lastForwardedKeyAtRef.current < 40) {
+        return;
+      }
+      lastForwardedKeyAtRef.current = now;
+
+      void forwardKeyToTab(
+        activeTabId,
+        {
+          key: e.key,
+          code: e.code,
+          shiftKey: e.shiftKey
+        },
+        effectiveActiveTabUrl
+      );
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [createNewTab, reloadActiveTab]);
+  }, [
+    createNewTab,
+    reloadActiveTab,
+    isSettingsOpen,
+    isScratchpadOpen,
+    contextMenu,
+    activeReminderTarget,
+    showEdgeTriggerPrompt,
+    editingTarget,
+    isRenamingWorkspace,
+    isCreatingRootFolder,
+    tabPageFocusEnabled,
+    activeTabId,
+    effectiveActiveTabUrl,
+    hasEdgeHostPermission,
+    hasDismissedPageFocusTip
+  ]);
 
   const handleOpenContextMenu = useCallback((e: React.MouseEvent, items: ContextMenuItem[]) => {
     e.preventDefault();
@@ -1709,6 +1876,40 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {showPageFocusPermissionHint &&
+        !hasEdgeHostPermission &&
+        tabPageFocusEnabled &&
+        !hasDismissedPageFocusTip && (
+          <div
+            data-testid="page-focus-permission-hint"
+            className="mx-2.5 mt-2 px-2.5 py-2 rounded-xl bg-cyan-500/10 dark:bg-cyan-500/15 border border-cyan-500/25 flex items-center justify-between gap-2 text-[11px] text-zinc-700 dark:text-zinc-200 animate-in fade-in slide-in-from-top-1"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Keyboard className="w-3.5 h-3.5 theme-accent-text flex-shrink-0" />
+              <span className="leading-snug">
+                Allow page access to use media &amp; arrow keys right after switching tabs.
+              </span>
+            </div>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => handleToggleTabPageFocus(true)}
+                className="px-2 py-1 rounded-lg font-semibold text-[11px] text-white theme-accent-bg hover:opacity-95 transition-opacity"
+              >
+                Enable
+              </button>
+              <button
+                type="button"
+                aria-label="Dismiss keyboard control tip"
+                onClick={dismissPageFocusPermissionHint}
+                className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+
       {/* Top Overdue Tab Reminders Banner */}
       {firedReminders.length > 0 && (
         <div className="mx-2.5 mt-2 flex flex-col space-y-2">
@@ -2283,6 +2484,7 @@ export const App: React.FC = () => {
         showMemorySaverBar={showMemorySaverBar}
         edgeTriggerEnabled={edgeTriggerEnabled && hasEdgeHostPermission}
         edgeTriggerMode={edgeTriggerMode}
+        tabPageFocusEnabled={tabPageFocusEnabled && hasEdgeHostPermission}
         allFolders={allFolders}
         activeFolderIds={activeFolderIds}
         autoArchiveInterval={autoArchiveInterval}
@@ -2294,6 +2496,7 @@ export const App: React.FC = () => {
         onToggleMemorySaverBar={handleToggleMemorySaverBar}
         onToggleEdgeTrigger={handleToggleEdgeTrigger}
         onChangeEdgeTriggerMode={handleChangeEdgeTriggerMode}
+        onToggleTabPageFocus={handleToggleTabPageFocus}
         onSelectQuickAccessFolder={setQuickAccessFolderId}
         onSelectWorkspaceFolder={setWorkspaceFolderId}
         onResetFolders={resetToDefaultFolders}

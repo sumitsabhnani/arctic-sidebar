@@ -134,10 +134,13 @@ describe('edgeTrigger content script (full-height Quick Access stripe)', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     const qaBtn = capturedShadowRoots[0].querySelector('button.arctic-qa-btn') as HTMLButtonElement;
+    const blurSpy = vi.spyOn(qaBtn, 'blur');
     mockChrome.runtime.sendMessage.mockClear();
 
+    qaBtn.focus();
     qaBtn.click();
 
+    expect(blurSpy).toHaveBeenCalled();
     expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
       {
         type: 'ACTIVATE_QUICK_ACCESS_FROM_EDGE',

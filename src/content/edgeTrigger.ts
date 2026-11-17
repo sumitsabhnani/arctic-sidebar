@@ -1,3 +1,4 @@
+// @chrome-workaround(sidepanel-min-width-and-resize): Chrome locks sidePanel to ~320-360px min width with no collapsed rail mode; inject 36px Shadow DOM rail & CSS page-push engine into web pages
 (() => {
   if (typeof window === 'undefined' || window.top !== window.self) {
     return;
@@ -1605,6 +1606,16 @@
     }
   }
 
+  function releaseRailFocusToPage(): void {
+    const shadowActive = shadowRootRef?.activeElement as HTMLElement | null | undefined;
+    if (shadowActive && typeof shadowActive.blur === 'function') {
+      shadowActive.blur();
+    }
+    if (hostEl && document.activeElement === hostEl && typeof hostEl.blur === 'function') {
+      hostEl.blur();
+    }
+  }
+
   function sendActivateBookmark(bookmarkId: string, forceReset: boolean): void {
     if (!isExtensionContextValid()) {
       cleanupAll();
@@ -1612,6 +1623,7 @@
     }
     hideTooltip();
     closeFolderFlyout();
+    releaseRailFocusToPage();
     try {
       chrome.runtime.sendMessage(
         {
@@ -1743,12 +1755,14 @@
 
             row.addEventListener('click', (e) => {
               e.stopPropagation();
+              row.blur();
               sendActivateBookmark(node.id, false);
             });
 
             row.addEventListener('dblclick', (e) => {
               e.preventDefault();
               e.stopPropagation();
+              row.blur();
               sendActivateBookmark(node.id, true);
             });
 
@@ -1891,12 +1905,14 @@
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
+      btn.blur();
       sendActivateBookmark(item.id, false);
     });
 
     btn.addEventListener('dblclick', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      btn.blur();
       sendActivateBookmark(item.id, true);
     });
 
@@ -1983,6 +1999,7 @@
     }
     hideTooltip();
     closeFolderFlyout();
+    releaseRailFocusToPage();
     try {
       chrome.runtime.sendMessage(
         {
@@ -2096,12 +2113,14 @@
 
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
+      btn.blur();
       sendActivateTodayTab(item.tabId, false);
     });
 
     btn.addEventListener('dblclick', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      btn.blur();
       sendActivateTodayTab(item.tabId, true);
     });
 

@@ -1,0 +1,409 @@
+{
+  "schemaVersion": 1,
+  "typesChromeVersion": "0.0.308",
+  "updatedAt": "2026-11-17",
+  "watchedNamespaces": {
+    "sidePanel": {
+      "functions": [
+        "getOptions",
+        "getPanelBehavior",
+        "open",
+        "setOptions",
+        "setPanelBehavior"
+      ],
+      "eventsAndVars": [],
+      "typesAndInterfaces": [
+        "GetPanelOptions",
+        "OpenOptions",
+        "PanelBehavior",
+        "PanelOptions",
+        "SidePanel"
+      ],
+      "interfaceProperties": {
+        "GetPanelOptions": [
+          "tabId"
+        ],
+        "OpenOptions": [
+          "tabId",
+          "windowId"
+        ],
+        "PanelBehavior": [
+          "openPanelOnActionClick"
+        ],
+        "PanelOptions": [
+          "enabled",
+          "path",
+          "tabId"
+        ],
+        "SidePanel": [
+          "default_path"
+        ]
+      }
+    },
+    "tabs": {
+      "functions": [
+        "captureVisibleTab",
+        "connect",
+        "create",
+        "detectLanguage",
+        "discard",
+        "duplicate",
+        "executeScript",
+        "get",
+        "getAllInWindow",
+        "getCurrent",
+        "getSelected",
+        "getZoom",
+        "getZoomSettings",
+        "goBack",
+        "goForward",
+        "group",
+        "highlight",
+        "insertCSS",
+        "move",
+        "query",
+        "reload",
+        "remove",
+        "sendMessage",
+        "sendRequest",
+        "setZoom",
+        "setZoomSettings",
+        "ungroup",
+        "update"
+      ],
+      "eventsAndVars": [
+        "TAB_ID_NONE",
+        "onActivated",
+        "onActiveChanged",
+        "onAttached",
+        "onCreated",
+        "onDetached",
+        "onHighlightChanged",
+        "onHighlighted",
+        "onMoved",
+        "onRemoved",
+        "onReplaced",
+        "onSelectionChanged",
+        "onUpdated",
+        "onZoomChange"
+      ],
+      "typesAndInterfaces": [
+        "CaptureVisibleTabOptions",
+        "ConnectInfo",
+        "CreateProperties",
+        "GroupOptions",
+        "HighlightInfo",
+        "InjectDetails",
+        "MessageSendOptions",
+        "MoveProperties",
+        "MutedInfo",
+        "QueryInfo",
+        "ReloadProperties",
+        "Tab",
+        "TabActivatedEvent",
+        "TabActiveInfo",
+        "TabAttachInfo",
+        "TabAttachedEvent",
+        "TabChangeInfo",
+        "TabCreatedEvent",
+        "TabDetachInfo",
+        "TabDetachedEvent",
+        "TabHighlightInfo",
+        "TabHighlightedEvent",
+        "TabMoveInfo",
+        "TabMovedEvent",
+        "TabRemoveInfo",
+        "TabRemovedEvent",
+        "TabReplacedEvent",
+        "TabSelectedEvent",
+        "TabUpdatedEvent",
+        "TabWindowInfo",
+        "TabZoomChangeEvent",
+        "UpdateProperties",
+        "ZoomChangeInfo",
+        "ZoomSettings"
+      ],
+      "interfaceProperties": {
+        "Tab": [
+          "active",
+          "audible",
+          "autoDiscardable",
+          "discarded",
+          "favIconUrl",
+          "frozen",
+          "groupId",
+          "height",
+          "highlighted",
+          "id",
+          "incognito",
+          "index",
+          "lastAccessed",
+          "mutedInfo",
+          "openerTabId",
+          "pendingUrl",
+          "pinned",
+          "selected",
+          "sessionId",
+          "status",
+          "title",
+          "url",
+          "width",
+          "windowId"
+        ],
+        "CreateProperties": [
+          "active",
+          "index",
+          "openerTabId",
+          "pinned",
+          "selected",
+          "url",
+          "windowId"
+        ],
+        "UpdateProperties": [
+          "active",
+          "autoDiscardable",
+          "highlighted",
+          "muted",
+          "openerTabId",
+          "pinned",
+          "selected",
+          "url"
+        ],
+        "QueryInfo": [
+          "active",
+          "audible",
+          "autoDiscardable",
+          "currentWindow",
+          "discarded",
+          "frozen",
+          "groupId",
+          "highlighted",
+          "index",
+          "lastFocusedWindow",
+          "muted",
+          "pinned",
+          "status",
+          "title",
+          "url",
+          "windowId",
+          "windowType"
+        ],
+        "HighlightInfo": [
+          "tabs",
+          "windowId"
+        ]
+      }
+    },
+    "windows": {
+      "functions": [
+        "create",
+        "get",
+        "getAll",
+        "getCurrent",
+        "getLastFocused",
+        "remove",
+        "update"
+      ],
+      "eventsAndVars": [
+        "WINDOW_ID_CURRENT",
+        "WINDOW_ID_NONE",
+        "onBoundsChanged",
+        "onCreated",
+        "onFocusChanged",
+        "onRemoved"
+      ],
+      "typesAndInterfaces": [
+        "CreateData",
+        "QueryOptions",
+        "UpdateInfo",
+        "Window",
+        "WindowEventFilter",
+        "WindowIdEvent",
+        "WindowReferenceEvent",
+        "createTypeEnum",
+        "windowStateEnum",
+        "windowTypeEnum"
+      ],
+      "interfaceProperties": {
+        "Window": [
+          "alwaysOnTop",
+          "focused",
+          "height",
+          "id",
+          "incognito",
+          "left",
+          "sessionId",
+          "state",
+          "tabs",
+          "top",
+          "type",
+          "width"
+        ],
+        "CreateData": [
+          "focused",
+          "height",
+          "incognito",
+          "left",
+          "setSelfAsOpener",
+          "state",
+          "tabId",
+          "top",
+          "type",
+          "url",
+          "width"
+        ],
+        "UpdateInfo": [
+          "drawAttention",
+          "focused",
+          "height",
+          "left",
+          "state",
+          "top",
+          "width"
+        ]
+      }
+    },
+    "commands": {
+      "functions": [
+        "getAll"
+      ],
+      "eventsAndVars": [
+        "onCommand"
+      ],
+      "typesAndInterfaces": [
+        "Command",
+        "CommandEvent"
+      ],
+      "interfaceProperties": {
+        "Command": [
+          "description",
+          "name",
+          "shortcut"
+        ]
+      }
+    },
+    "runtime": {
+      "functions": [
+        "connect",
+        "connectNative",
+        "getBackgroundPage",
+        "getContexts",
+        "getManifest",
+        "getPackageDirectoryEntry",
+        "getPlatformInfo",
+        "getURL",
+        "openOptionsPage",
+        "reload",
+        "requestUpdateCheck",
+        "restart",
+        "restartAfterDelay",
+        "sendMessage",
+        "sendNativeMessage",
+        "setUninstallURL"
+      ],
+      "eventsAndVars": [
+        "id",
+        "lastError",
+        "onBrowserUpdateAvailable",
+        "onConnect",
+        "onConnectExternal",
+        "onInstalled",
+        "onMessage",
+        "onMessageExternal",
+        "onRestartRequired",
+        "onStartup",
+        "onSuspend",
+        "onSuspendCanceled",
+        "onUpdateAvailable",
+        "onUserScriptConnect",
+        "onUserScriptMessage"
+      ],
+      "typesAndInterfaces": [
+        "ConnectInfo",
+        "ContextFilter",
+        "ContextType",
+        "ExtensionConnectEvent",
+        "ExtensionContext",
+        "ExtensionMessageEvent",
+        "InstalledDetails",
+        "LastError",
+        "Manifest",
+        "ManifestAction",
+        "ManifestBase",
+        "ManifestIcons",
+        "ManifestPermissions",
+        "ManifestV2",
+        "ManifestV3",
+        "MessageOptions",
+        "MessageSender",
+        "OnInstalledReason",
+        "PlatformArch",
+        "PlatformInfo",
+        "PlatformNaclArch",
+        "PlatformOs",
+        "Port",
+        "PortDisconnectEvent",
+        "PortMessageEvent",
+        "RequestUpdateCheckResult",
+        "RequestUpdateCheckStatus",
+        "RuntimeEvent",
+        "RuntimeInstalledEvent",
+        "RuntimeRestartRequiredEvent",
+        "RuntimeUpdateAvailableEvent",
+        "SearchProvider",
+        "UpdateAvailableDetails",
+        "UpdateCheckDetails"
+      ],
+      "interfaceProperties": {
+        "ContextFilter": [
+          "contextIds",
+          "contextTypes",
+          "documentIds",
+          "documentOrigins",
+          "documentUrls",
+          "frameIds",
+          "incognito",
+          "tabIds",
+          "windowIds"
+        ],
+        "ExtensionContext": [
+          "contextId",
+          "contextType",
+          "documentId",
+          "documentOrigin",
+          "documentUrl",
+          "frameId",
+          "incognito",
+          "tabId",
+          "windowId"
+        ],
+        "ManifestV3": [
+          "action",
+          "all_frames",
+          "background",
+          "content_scripts",
+          "content_security_policy",
+          "css",
+          "exclude_globs",
+          "exclude_matches",
+          "extension_pages",
+          "host_permissions",
+          "include_globs",
+          "js",
+          "manifest_version",
+          "match_about_blank",
+          "matches",
+          "optional_host_permissions",
+          "optional_permissions",
+          "permissions",
+          "run_at",
+          "sandbox",
+          "service_worker",
+          "type",
+          "web_accessible_resources",
+          "world"
+        ]
+      }
+    }
+  }
+}

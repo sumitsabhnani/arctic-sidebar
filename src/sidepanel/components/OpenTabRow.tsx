@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { SpaceItem, TabReminder, TabWithFaviconMeta } from '../../types';
 import { useResolvedFavicon } from '../utils/faviconCache';
+import { markKeyboardRowActivation } from '../utils/tabPageFocus';
 import {
   attachMultiDragPreview,
   endDragSession,
@@ -528,6 +529,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       onKeyDown={(e) => {
         if ((e.key === 'Enter' || e.key === ' ') && tabId) {
           e.preventDefault();
+          markKeyboardRowActivation();
           onFocus(tabId);
         }
       }}

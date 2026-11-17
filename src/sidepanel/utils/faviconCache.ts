@@ -8,6 +8,7 @@ import {
   getFaviconUrl
 } from './url';
 
+// @chrome-workaround(content-script-favicon-isolation): Content scripts (edgeTrigger.ts) cannot load chrome-extension://_favicon/ URLs directly due to cross-origin restrictions, so we cache verified base64 data URLs.
 export const FAVICON_CACHE_STORAGE_KEY = 'cachedFaviconsByKey';
 export const MAX_CACHED_FAVICONS = 250;
 export const MAX_FAVICON_DATA_URL_LENGTH = 65536;

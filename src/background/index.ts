@@ -33,6 +33,10 @@ import {
   updateBadgeCount,
   REMINDERS_STORAGE_KEY
 } from '../sidepanel/utils/reminderStorage';
+import {
+  focusActiveMediaOrPageInTab,
+  isInjectableWebUrl
+} from '../sidepanel/utils/tabPageFocus';
 import { reconcileScratchpadStorageAndBookmark } from '../sidepanel/hooks/useScratchpad';
 import { closeInactiveArcticCommandTabs } from '../sidepanel/hooks/useTabBindings';
 import {
@@ -1240,6 +1244,8 @@ export async function activateQuickAccessFromEdge(
 ): Promise<boolean> {
   if (!bookmarkId || !chrome.bookmarks?.getSubTree) return false;
 
+  let activatedTarget: { tabId: number; url?: string } | null = null;
+
   const ok = await withSessionLock(async () => {
     let bookmark: chrome.bookmarks.BookmarkTreeNode | undefined;
     try {
@@ -1288,8 +1294,13 @@ export async function activateQuickAccessFromEdge(
           session.bindingsByBookmarkId[bookmark.id] = existingBinding;
           await saveSessionState(session);
           await upsertPersistedBindings({ [bookmark.id]: existingBinding });
+          activatedTarget = { tabId: existingTab.id, url: bookmark.url };
         } else {
           await chrome.tabs.update(existingTab.id, { active: true });
+          activatedTarget = {
+            tabId: existingTab.id,
+            url: getEffectiveTabUrl(existingTab) || existingBinding.currentUrl || bookmark.url
+          };
         }
 
         if (typeof existingTab.windowId === 'number' && chrome.windows?.update) {
@@ -1339,6 +1350,7 @@ export async function activateQuickAccessFromEdge(
       await upsertPersistedBindings({ [bookmark.id]: newBinding });
 
       await chrome.tabs.update(unboundMatch.id, { active: true });
+      activatedTarget = { tabId: unboundMatch.id, url: matchUrl };
       if (typeof unboundMatch.windowId === 'number' && chrome.windows?.update) {
         try {
           await chrome.windows.update(unboundMatch.windowId, { focused: true });
@@ -1369,11 +1381,16 @@ export async function activateQuickAccessFromEdge(
       session.bookmarkIdByTabId[createdTab.id] = bookmark.id;
       await saveSessionState(session);
       await upsertPersistedBindings({ [bookmark.id]: newBinding });
+      activatedTarget = { tabId: createdTab.id, url: bookmark.url };
     }
     return true;
   });
 
   if (ok) {
+    if (activatedTarget) {
+      const target = activatedTarget as { tabId: number; url?: string };
+      void focusActiveMediaOrPageInTab(target.tabId, target.url);
+    }
     scheduleEdgeItemsBroadcast(windowId);
   }
   return ok;
@@ -1399,6 +1416,10 @@ export async function activateTodayTabFromEdge(
         // ignore
       }
     }
+    void focusActiveMediaOrPageInTab(
+      tabId,
+      getEffectiveTabUrl(updatedTab) || updatedTab?.url
+    );
     scheduleEdgeItemsBroadcast(targetWinId);
     return true;
   } catch {
@@ -1507,17 +1528,7 @@ function withScriptSyncLock<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-function isInjectableWebUrl(url?: string): boolean {
-  if (!url || !/^https?:\/\//i.test(url)) return false;
-  if (
-    url.startsWith('https://chromewebstore.google.com/') ||
-    url.startsWith('https://chrome.google.com/webstore')
-  ) {
-    return false;
-  }
-  return true;
-}
-
+// @chrome-workaround(sidepanel-dock-layout): Read side panel dock side via chrome.sidePanel.getLayout (Chrome 140+); replace cast and add setLayout when available in @types/chrome
 export async function syncSidePanelLayoutSide(): Promise<'left' | 'right' | null> {
   const sp = chrome.sidePanel as typeof chrome.sidePanel & {
     getLayout?: () => Promise<{ side?: 'left' | 'right' }>;
@@ -1536,6 +1547,7 @@ export async function syncSidePanelLayoutSide(): Promise<'left' | 'right' | null
   return null;
 }
 
+// @chrome-workaround(sidepanel-close-and-visibility): Track open Side Panel windows via ports + session storage + runtime.getContexts until chrome.sidePanel provides native onOpened/onClosed/isOpen APIs
 async function getStoredOpenWindowIds(): Promise<number[]> {
   if (!chrome.storage?.session?.get) return [];
   try {
@@ -1852,6 +1864,7 @@ export function handleRuntimeMessage(
 ): boolean {
   if (!message || typeof message !== 'object') return false;
 
+  // @chrome-workaround(sidepanel-open-user-gesture): chrome.sidePanel.open() requires a synchronous user gesture token; cannot be triggered by hover without click
   // CRITICAL: Must invoke chrome.sidePanel.open() SYNCHRONOUSLY before any await
   // so Chromium's transient user gesture token forwarded from the content script click stays valid!
   if (message.type === 'OPEN_SIDE_PANEL_FROM_EDGE') {

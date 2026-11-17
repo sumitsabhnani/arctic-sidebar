@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TabBinding, LocalSettings, TabWithFaviconMeta } from '../../types';
 import { getEffectiveTabUrl, isUrlNavigatedAway } from '../utils/url';
 import { captureVerifiedTabFavicon } from '../utils/faviconCache';
+import {
+  blurSidebarActiveElementIfPointer,
+  focusActiveMediaOrPageInTab
+} from '../utils/tabPageFocus';
 import { markRecentlyMoved } from '../utils/dnd';
 import {
   clearAllPersistedBindings,
@@ -16,6 +20,7 @@ import {
 export { isArcticCommandTab };
 
 /**
+ * @chrome-workaround(newtab-omnibox-focus): Clean up unfocused command.html / newtab.html tabs spawned by the focus.js redirect workaround.
  * Closes any unfocused empty Arctic Command / New Tab tabs in the given window
  * when focus switches to another tab (e.g. pressing Cmd+T repeatedly or clicking another tab).
  */
@@ -977,14 +982,14 @@ export function useTabBindings(activeSpaceId: string = 'home') {
    * Focus a tab
    */
   const focusTab = useCallback(async (tabId: number) => {
+    blurSidebarActiveElementIfPointer();
     setActiveTabId(tabId);
     try {
-      await chrome.tabs.update(tabId, { active: true });
+      const updatedTab = await chrome.tabs.update(tabId, { active: true });
+      const targetUrl = getEffectiveTabUrl(updatedTab) || updatedTab?.url;
+      void focusActiveMediaOrPageInTab(tabId, targetUrl);
     } catch (err) {
       console.warn('[Arctic] Could not activate tab:', err);
-    }
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
     }
   }, []);
 
@@ -1501,7 +1506,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
   const activeTab = windowTabs.find((t) => t.id === activeTabId);
   const isActiveTabLoading = activeTab?.status === 'loading';
-  const activeTabUrl = activeTab?.url || '';
+  const activeTabUrl = getEffectiveTabUrl(activeTab) || activeTab?.url || '';
   const activeTabTitle = activeTab?.title || '';
 
   const navigateActiveTab = useCallback(
@@ -1616,6 +1621,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const handleRowClick = useCallback(
     async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
       if (!bookmark.url) return;
+      blurSidebarActiveElementIfPointer();
 
       let latestBindings: Record<string, TabBinding> = {
         ...bindingsByBookmarkId,
@@ -1661,6 +1667,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               }
             }
             setActiveTabId(existingBinding.tabId);
+            void focusActiveMediaOrPageInTab(
+              existingBinding.tabId,
+              getEffectiveTabUrl(tab) || existingBinding.currentUrl || bookmark.url
+            );
             return;
           }
         } catch {
@@ -1720,6 +1730,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           }
         }
         setActiveTabId(tabId);
+        void focusActiveMediaOrPageInTab(tabId, matchUrl);
         await refreshWindowTabs();
         return;
       }
@@ -1755,6 +1766,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
         await persistSession(newBindings, newByTab);
         setActiveTabId(tabId);
+        void focusActiveMediaOrPageInTab(tabId, bookmark.url);
         await refreshWindowTabs();
       }
     },
@@ -1770,6 +1782,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         e.stopPropagation();
       }
       if (!bookmark.url) return;
+      blurSidebarActiveElementIfPointer();
 
       const existingBinding =
         bindingsByBookmarkIdRef.current[bookmark.id] || bindingsByBookmarkId[bookmark.id];
@@ -1806,6 +1819,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             };
             await persistSession(nextBindings, nextByTab);
             setActiveTabId(existingBinding.tabId);
+            void focusActiveMediaOrPageInTab(existingBinding.tabId, bookmark.url);
             await refreshWindowTabs();
             return;
           }
@@ -1825,6 +1839,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const handleQuickAccessClick = useCallback(
     async (bookmark: chrome.bookmarks.BookmarkTreeNode) => {
       if (!bookmark.url) return;
+      blurSidebarActiveElementIfPointer();
       const binding =
         bindingsByBookmarkIdRef.current[bookmark.id] || bindingsByBookmarkId[bookmark.id];
 
@@ -1845,6 +1860,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           ...bookmarkIdByTabIdRef.current
         };
         await persistSession(nextBindings, nextByTab);
+        void focusActiveMediaOrPageInTab(binding.tabId, bookmark.url);
         await refreshWindowTabs();
         return;
       }
@@ -1861,6 +1877,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     async (bookmark: chrome.bookmarks.BookmarkTreeNode, e?: React.MouseEvent) => {
       if (e) e.stopPropagation();
       if (!bookmark.url) return;
+      blurSidebarActiveElementIfPointer();
 
       const existingBinding =
         bindingsByBookmarkIdRef.current[bookmark.id] || bindingsByBookmarkId[bookmark.id];
@@ -1922,6 +1939,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             };
             await persistSession(nextBindings, nextByTab);
             setActiveTabId(existingBinding.tabId);
+            void focusActiveMediaOrPageInTab(existingBinding.tabId, bookmark.url);
             return;
           }
         } catch {
