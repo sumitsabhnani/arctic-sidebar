@@ -51,6 +51,15 @@ export function isArcticCommandTab(tab: chrome.tabs.Tab): boolean {
 
 let persistedBindingsLock: Promise<void> = Promise.resolve();
 
+function withPersistedBindingsLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = persistedBindingsLock.then(fn, fn);
+  persistedBindingsLock = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
 export async function getPersistedBindings(): Promise<Record<string, PersistedTabBinding>> {
   if (typeof chrome === 'undefined' || !chrome.storage?.local?.get) return {};
   try {
@@ -71,7 +80,7 @@ export async function upsertPersistedBindings(
     return;
   }
 
-  persistedBindingsLock = persistedBindingsLock.then(async () => {
+  await withPersistedBindingsLock(async () => {
     try {
       const existing = await getPersistedBindings();
       const next: Record<string, PersistedTabBinding> = { ...existing };
@@ -107,8 +116,6 @@ export async function upsertPersistedBindings(
       // ignore storage errors
     }
   });
-
-  await persistedBindingsLock;
 }
 
 export async function removePersistedBindings(bookmarkIds: string[]): Promise<void> {
@@ -120,7 +127,7 @@ export async function removePersistedBindings(bookmarkIds: string[]): Promise<vo
     return;
   }
 
-  persistedBindingsLock = persistedBindingsLock.then(async () => {
+  await withPersistedBindingsLock(async () => {
     try {
       const existing = await getPersistedBindings();
       let hasChanges = false;
@@ -140,20 +147,17 @@ export async function removePersistedBindings(bookmarkIds: string[]): Promise<vo
       // ignore
     }
   });
-
-  await persistedBindingsLock;
 }
 
 export async function clearAllPersistedBindings(): Promise<void> {
   if (typeof chrome === 'undefined' || !chrome.storage?.local?.remove) return;
-  persistedBindingsLock = persistedBindingsLock.then(async () => {
+  await withPersistedBindingsLock(async () => {
     try {
       await chrome.storage.local.remove(PERSISTED_BINDINGS_STORAGE_KEY);
     } catch {
       // ignore
     }
   });
-  await persistedBindingsLock;
 }
 
 export function collectBookmarkLeaves(

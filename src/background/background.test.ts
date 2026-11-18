@@ -1708,5 +1708,25 @@ describe('Background service worker reminder lifecycle', () => {
         (mockChrome.__getSessionStorage().bookmarkIdByTabId as Record<number, string>)[88]
       ).toBe(children[0].id);
     });
+
+    it('migrates and cleans up customTabTitles in session storage across handleTabReplaced and handleTabRemoved', async () => {
+      mockChrome.__setSessionStorage({
+        customTabTitles: {
+          401: 'Custom Spec Title',
+          402: 'Keep Me'
+        }
+      });
+
+      await handleTabReplaced(501, 401);
+      expect(mockChrome.__getSessionStorage().customTabTitles).toEqual({
+        501: 'Custom Spec Title',
+        402: 'Keep Me'
+      });
+
+      await handleTabRemoved(501);
+      expect(mockChrome.__getSessionStorage().customTabTitles).toEqual({
+        402: 'Keep Me'
+      });
+    });
   });
 });

@@ -1396,4 +1396,247 @@ describe('useTabBindings hook', () => {
       (result.current.tabsByTabId[55] as { _faviconRev?: number })._faviconRev
     ).toBeGreaterThan(revAfterErrorComplete);
   });
+
+  it('auto-archive protects active tabs in secondary windows, native pinned tabs, and audible tabs, and keeps at least 1 tab per window', async () => {
+    const expiredTimestamp = Date.now() - 48 * 60 * 60 * 1000; // 48h ago
+    mockChrome.__setTabs([
+      // Window 10 (current window): active tab + expired pinned tab + expired audible tab + expired normal tab
+      {
+        id: 101,
+        windowId: 10,
+        url: 'https://active-win10.com',
+        title: 'Active Win 10',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 102,
+        windowId: 10,
+        url: 'https://pinned-win10.com',
+        title: 'Pinned Win 10',
+        active: false,
+        pinned: true
+      } as chrome.tabs.Tab,
+      {
+        id: 103,
+        windowId: 10,
+        url: 'https://audible-win10.com',
+        title: 'Music Win 10',
+        active: false,
+        audible: true
+      } as chrome.tabs.Tab,
+      {
+        id: 104,
+        windowId: 10,
+        url: 'https://expired-win10.com',
+        title: 'Expired Win 10',
+        active: false
+      } as chrome.tabs.Tab,
+      // Window 20 (secondary window): active tab + expired background tab
+      {
+        id: 201,
+        windowId: 20,
+        url: 'https://active-win20.com',
+        title: 'Active Win 20',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 202,
+        windowId: 20,
+        url: 'https://expired-win20.com',
+        title: 'Expired Win 20',
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+
+    mockChrome.__setLocalStorage({
+      autoArchiveInterval: '24h',
+      tabOpenedAt: {
+        101: expiredTimestamp,
+        102: expiredTimestamp,
+        103: expiredTimestamp,
+        104: expiredTimestamp,
+        201: expiredTimestamp,
+        202: expiredTimestamp
+      }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Reconcile bookmarks so hasReconciledBookmarksRef becomes true
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks([]);
+    });
+
+    // Run refreshBindings (loadSessionState) to trigger auto-archive
+    await act(async () => {
+      await result.current.refreshBindings();
+    });
+
+    const remainingTabIds = mockChrome.__getTabs().map((t) => t.id);
+    // Expired background tabs 104 and 202 are closed
+    expect(remainingTabIds).not.toContain(104);
+    expect(remainingTabIds).not.toContain(202);
+    // Active tab in window 10 (101), native pinned tab (102), audible tab (103), and active tab in window 20 (201) are preserved!
+    expect(remainingTabIds).toEqual(expect.arrayContaining([101, 102, 103, 201]));
+  });
+
+  it('closeAllWindowTabs preserves session and persisted bindings belonging to other open browser windows', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 11,
+        windowId: 10,
+        url: 'https://win10.com',
+        title: 'Win 10 Bound',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 22,
+        windowId: 20,
+        url: 'https://win20.com',
+        title: 'Win 20 Bound',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+
+    const bindingWin10 = {
+      bookmarkId: 'bm-win10',
+      tabId: 11,
+      windowId: 10,
+      originalUrl: 'https://win10.com',
+      currentUrl: 'https://win10.com/sub',
+      currentTitle: 'Win 10 Bound',
+      isNavigatedAway: true
+    };
+    const bindingWin20 = {
+      bookmarkId: 'bm-win20',
+      tabId: 22,
+      windowId: 20,
+      originalUrl: 'https://win20.com',
+      currentUrl: 'https://win20.com/sub',
+      currentTitle: 'Win 20 Bound',
+      isNavigatedAway: true
+    };
+
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-win10': bindingWin10,
+        'bm-win20': bindingWin20
+      },
+      bookmarkIdByTabId: {
+        11: 'bm-win10',
+        22: 'bm-win20'
+      }
+    });
+    mockChrome.__setLocalStorage({
+      persistedBindingsByBookmarkId: {
+        'bm-win10': { ...bindingWin10, updatedAt: 1 },
+        'bm-win20': { ...bindingWin20, updatedAt: 1 }
+      }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.closeAllWindowTabs();
+    });
+
+    // Window 10's binding is removed, but Window 20's binding and persisted entry remain intact!
+    expect(result.current.bindingsByBookmarkId['bm-win10']).toBeUndefined();
+    expect(result.current.bindingsByBookmarkId['bm-win20']).toBeDefined();
+    expect(result.current.bookmarkIdByTabId[22]).toBe('bm-win20');
+    const persisted = mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<
+      string,
+      unknown
+    >;
+    expect(persisted?.['bm-win10']).toBeUndefined();
+    expect(persisted?.['bm-win20']).toBeDefined();
+  });
+
+  it('maintains stable callback identities across tab updates and does not resurrect deleted bindings on rapid sequential actions', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 31,
+        windowId: 10,
+        url: 'https://a.example.com',
+        title: 'A',
+        active: true
+      } as chrome.tabs.Tab,
+      {
+        id: 32,
+        windowId: 10,
+        url: 'https://b.example.com',
+        title: 'B',
+        active: false
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-a': {
+          bookmarkId: 'bm-a',
+          tabId: 31,
+          windowId: 10,
+          originalUrl: 'https://a.example.com',
+          currentUrl: 'https://a.example.com',
+          currentTitle: 'A',
+          isNavigatedAway: false
+        },
+        'bm-b': {
+          bookmarkId: 'bm-b',
+          tabId: 32,
+          windowId: 10,
+          originalUrl: 'https://b.example.com',
+          currentUrl: 'https://b.example.com',
+          currentTitle: 'B',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 31: 'bm-a', 32: 'bm-b' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const initialHandleRowClick = result.current.handleRowClick;
+    const initialHandleFaviconClick = result.current.handleFaviconClick;
+    const initialHandleCloseTab = result.current.handleCloseTab;
+    const initialToggleMuteTab = result.current.toggleMuteTab;
+
+    // Trigger a tab navigation update that mutates bindingsByBookmarkId and windowTabs
+    await act(async () => {
+      await mockChrome.__triggerTabUpdated(31, {
+        url: 'https://a.example.com/deep',
+        title: 'A Deep'
+      });
+    });
+
+    // Callback references stay stable so sidebar rows don't unnecessarily re-render
+    expect(result.current.handleRowClick).toBe(initialHandleRowClick);
+    expect(result.current.handleFaviconClick).toBe(initialHandleFaviconClick);
+    expect(result.current.handleCloseTab).toBe(initialHandleCloseTab);
+    expect(result.current.toggleMuteTab).toBe(initialToggleMuteTab);
+
+    // Rapidly close tab 31 and immediately click bookmark C in the same tick before React re-renders
+    const bookmarkC: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-c',
+      title: 'C',
+      url: 'https://c.example.com'
+    };
+    await act(async () => {
+      await result.current.handleCloseTab(31);
+      await result.current.handleRowClick(bookmarkC);
+    });
+
+    // Closed bookmark bm-a must NOT be resurrected by handleRowClick
+    expect(result.current.bindingsByBookmarkId['bm-a']).toBeUndefined();
+    expect(result.current.bookmarkIdByTabId[31]).toBeUndefined();
+    expect(result.current.bindingsByBookmarkId['bm-c']).toBeDefined();
+  });
 });
