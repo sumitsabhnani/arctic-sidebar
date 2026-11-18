@@ -1,6 +1,19 @@
 node_modules/
 dist/
+coverage/
 .DS_Store
 *.log
 *.zip
+*.tsbuildinfo
 .idea/
+.vscode/
+
+# Local AI agent rules, skills & internal dev/store docs
+.agents/
+AGENTS.md
+docs/
+
+# Generated Chrome API check reports
+chrome-api-report.md
+chrome-api-summary.json
+
