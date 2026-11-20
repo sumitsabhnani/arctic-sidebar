@@ -10,10 +10,11 @@ import {
 
 describe('newtab url detection and formatting', () => {
   describe('isLikelyUrl', () => {
-    it('identifies standard web protocols as URLs (positive)', () => {
+    it('identifies standard web protocols and local file:// URLs as URLs (positive)', () => {
       expect(isLikelyUrl('https://google.com')).toBe(true);
       expect(isLikelyUrl('http://example.com/path')).toBe(true);
       expect(isLikelyUrl('HTTPS://GITHUB.COM')).toBe(true);
+      expect(isLikelyUrl('file:///Users/sumit/Desktop/index.html')).toBe(true);
     });
 
     it('identifies localhost and local IP addresses with ports (positive)', () => {
@@ -45,9 +46,12 @@ describe('newtab url detection and formatting', () => {
   });
 
   describe('formatNavigationUrl', () => {
-    it('preserves existing http / https scheme for valid URLs (positive)', () => {
+    it('preserves existing http / https / file schemes for valid URLs (positive)', () => {
       expect(formatNavigationUrl('https://google.com')).toBe('https://google.com');
       expect(formatNavigationUrl('http://example.org')).toBe('http://example.org');
+      expect(formatNavigationUrl('file:///Users/sumit/Desktop/index.html')).toBe(
+        'file:///Users/sumit/Desktop/index.html'
+      );
     });
 
     it('prepends https:// to domain-like strings (positive)', () => {

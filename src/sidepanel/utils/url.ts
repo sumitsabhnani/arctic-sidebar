@@ -25,6 +25,9 @@ export function normalizeUrl(url: string): string {
 
     // Protocol normalization for web: equate http and https for non-local hosts
     let protocol = parsed.protocol.toLowerCase();
+    if (protocol === 'file:' && hostname === 'localhost') {
+      hostname = '';
+    }
     const isLocal =
       hostname === 'localhost' ||
       hostname.startsWith('127.') ||
@@ -455,4 +458,75 @@ export function isGoogleDocUrl(url?: string): boolean {
     lower.includes('document.new') ||
     lower.includes('docs.google.com/document')
   );
+}
+
+const EXPLICIT_URL_SCHEME_RE = /^(?:https?|file|chrome|chrome-extension|edge|ftp):\/\//i;
+const SPECIAL_URL_SCHEME_RE = /^(?:about|view-source|data|blob):/i;
+const UNIX_LOCAL_FILE_PATH_RE =
+  /^\/(?:Users|home|var|tmp|opt|mnt|Volumes|Library|Applications|private|etc)\/.+/;
+const WINDOWS_LOCAL_FILE_PATH_RE = /^[a-zA-Z]:[\\/].+/;
+
+/**
+ * Checks whether a URL uses the local `file://` scheme.
+ */
+export function isFileUrl(url?: string): boolean {
+  if (!url) return false;
+  return /^file:\/\//i.test(url.trim());
+}
+
+/**
+ * Determines whether user address-bar / command-bar input should be navigated to
+ * directly as a URL or local file path rather than sent to a web search engine.
+ */
+export function isDirectNavigationUrl(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) return false;
+  if (EXPLICIT_URL_SCHEME_RE.test(trimmed) || SPECIAL_URL_SCHEME_RE.test(trimmed)) {
+    return true;
+  }
+  if (UNIX_LOCAL_FILE_PATH_RE.test(trimmed) || WINDOWS_LOCAL_FILE_PATH_RE.test(trimmed)) {
+    return true;
+  }
+  if (/^localhost(:\d+)?(\/.*)?$/i.test(trimmed)) return true;
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(\/.*)?$/.test(trimmed)) return true;
+  if (!/\s/.test(trimmed) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/.*)?$/i.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Normalizes direct URL / local file path input for `chrome.tabs.update` / `create`.
+ * Returns `null` when the input should be treated as a search query.
+ */
+export function normalizeNavigationInput(input: string): string | null {
+  const trimmed = input.trim();
+  if (!isDirectNavigationUrl(trimmed)) return null;
+
+  if (/^file:\/\//i.test(trimmed)) {
+    try {
+      return new URL(trimmed).href;
+    } catch {
+      return trimmed;
+    }
+  }
+  if (EXPLICIT_URL_SCHEME_RE.test(trimmed) || SPECIAL_URL_SCHEME_RE.test(trimmed)) {
+    return trimmed;
+  }
+  if (UNIX_LOCAL_FILE_PATH_RE.test(trimmed)) {
+    try {
+      return new URL(`file://${trimmed}`).href;
+    } catch {
+      return `file://${trimmed}`;
+    }
+  }
+  if (WINDOWS_LOCAL_FILE_PATH_RE.test(trimmed)) {
+    const normalizedPath = trimmed.replace(/\\/g, '/');
+    try {
+      return new URL(`file:///${normalizedPath}`).href;
+    } catch {
+      return `file:///${normalizedPath}`;
+    }
+  }
+  return `https://${trimmed}`;
 }

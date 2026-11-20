@@ -44,9 +44,9 @@ describe('OpenTabsSection component', () => {
     onOpenContextMenu: vi.fn()
   };
 
-  it('renders Today\'s tabs header cleanly and tab rows', () => {
+  it('renders open tabs section cleanly without the Today\'s Tabs label and shows tab rows', () => {
     render(<OpenTabsSection {...defaultProps} />);
-    expect(screen.getByText(/Today's Tabs/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Today's Tabs/i)).not.toBeInTheDocument();
     expect(screen.queryByText('(2 ACTIVE)')).not.toBeInTheDocument();
     expect(screen.getByText('Hacker News')).toBeInTheDocument();
     expect(screen.getByText('GitHub Trending')).toBeInTheDocument();
@@ -55,8 +55,8 @@ describe('OpenTabsSection component', () => {
   it('renders Clear button and chevron dropdown menu with Clear all tabs option', () => {
     render(<OpenTabsSection {...defaultProps} />);
 
-    // Clear temporary tabs button exists and calls onCloseAll
-    const clearBtn = screen.getByTitle('Close temporary Today\'s tabs');
+    // Clear unpinned tabs button exists and calls onCloseAll
+    const clearBtn = screen.getByTitle('Close unpinned tabs');
     expect(clearBtn).toBeInTheDocument();
     expect(clearBtn).not.toHaveTextContent('Clear');
     fireEvent.click(clearBtn);
@@ -383,7 +383,7 @@ describe('OpenTabsSection component', () => {
 
     expect(screen.getByText('No unpinned tabs open.')).toBeInTheDocument();
 
-    const clearBtn = screen.getByTitle("Close temporary Today's tabs");
+    const clearBtn = screen.getByTitle('Close unpinned tabs');
     const clearOptionsBtn = screen.getByTitle('Clear options');
     expect(clearBtn).toBeInTheDocument();
     expect(clearOptionsBtn).toBeInTheDocument();
@@ -406,7 +406,7 @@ describe('OpenTabsSection component', () => {
       />
     );
 
-    expect(screen.queryByTitle("Close temporary Today's tabs")).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Close unpinned tabs')).not.toBeInTheDocument();
     expect(screen.queryByTitle('Clear options')).not.toBeInTheDocument();
   });
 

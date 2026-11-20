@@ -216,4 +216,19 @@ describe('Header component', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(copyBtn).toHaveAttribute('data-tooltip', 'Copied Highlight Link!');
   });
+
+  it('displays local file:// URL cleanly and submits exact file:// URL on Enter', () => {
+    const localFileUrl = 'file:///Users/sumit/Desktop/My%20Page.html';
+    render(<Header {...defaultProps} activeTabUrl={localFileUrl} />);
+
+    const urlButton = screen.getByText('file:///Users/sumit/Desktop/My Page.html');
+    expect(urlButton).toBeInTheDocument();
+    fireEvent.click(urlButton);
+
+    const input = screen.getByPlaceholderText('Search Google or enter URL...') as HTMLInputElement;
+    expect(input.value).toBe(localFileUrl);
+
+    fireEvent.submit(input.closest('form')!);
+    expect(defaultProps.onNavigateActiveTab).toHaveBeenCalledWith(localFileUrl);
+  });
 });

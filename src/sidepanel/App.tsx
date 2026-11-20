@@ -39,7 +39,7 @@ import {
 import { upsertPersistedBindings } from './utils/reconcileBindings';
 import { useFlipAnimation } from './hooks/useFlipAnimation';
 import { endDragSession, parseDragPayload, useActiveDrag } from './utils/dnd';
-import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose, Keyboard } from 'lucide-react';
+import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose, Keyboard, FileWarning } from 'lucide-react';
 
 const EDGE_TRIGGER_ORIGINS = ['http://*/*', 'https://*/*'];
 
@@ -131,7 +131,9 @@ export const App: React.FC = () => {
     toggleMuteTab,
     autoArchiveInterval,
     setAutoArchiveInterval,
-    updateBookmarkBindingUrl
+    updateBookmarkBindingUrl,
+    fileAccessNoticeVisible,
+    dismissFileAccessNotice
   } = useTabBindings(activeSpaceId);
 
   // Cross-Device Scratchpad
@@ -1830,12 +1832,12 @@ export const App: React.FC = () => {
   const handleDeleteBookmark = useCallback(
     async (id: string) => {
       try {
-        const bookmarkIdsToClose: string[] = [id];
+        const bookmarkIdsSet = new Set<string>([id]);
         try {
           const [subtree] = await chrome.bookmarks.getSubTree(id);
           const collectDescendants = (node: chrome.bookmarks.BookmarkTreeNode) => {
             if (node.id) {
-              bookmarkIdsToClose.push(node.id);
+              bookmarkIdsSet.add(node.id);
             }
             if (node.children) {
               for (const child of node.children) {
@@ -1843,14 +1845,19 @@ export const App: React.FC = () => {
               }
             }
           };
-          collectDescendants(subtree);
+          if (subtree) {
+            collectDescendants(subtree);
+          }
         } catch {
           // ignore if subtree cannot be queried
         }
 
+        const bookmarkIdsToClose = Array.from(bookmarkIdsSet);
+        const closedTabIds = new Set<number>();
         for (const bId of bookmarkIdsToClose) {
           const binding = bindingsByBookmarkId[bId];
-          if (binding && typeof binding.tabId === 'number') {
+          if (binding && typeof binding.tabId === 'number' && !closedTabIds.has(binding.tabId)) {
+            closedTabIds.add(binding.tabId);
             await handleCloseTab(binding.tabId);
           }
         }
@@ -1974,6 +1981,44 @@ export const App: React.FC = () => {
           >
             <X className="w-3.5 h-3.5" />
           </button>
+        </div>
+      )}
+
+      {fileAccessNoticeVisible && (
+        <div
+          data-testid="file-access-permission-hint"
+          className="mx-2.5 mt-2 px-2.5 py-2 rounded-xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/25 flex items-center justify-between gap-2 text-[11px] text-zinc-700 dark:text-zinc-200 animate-in fade-in slide-in-from-top-1"
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            <FileWarning className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+            <span className="leading-snug">
+              Enable <strong>Allow access to file URLs</strong> in Chrome to reload or reset local HTML files.
+            </span>
+          </div>
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                dismissFileAccessNotice();
+                const extId = chrome?.runtime?.id;
+                const targetUrl = extId
+                  ? `chrome://extensions/?id=${extId}`
+                  : 'chrome://extensions';
+                chrome.tabs.create({ url: targetUrl });
+              }}
+              className="px-2 py-1 rounded-lg font-semibold text-[11px] text-white bg-amber-600 hover:bg-amber-500 transition-colors whitespace-nowrap"
+            >
+              Settings
+            </button>
+            <button
+              type="button"
+              aria-label="Dismiss local file access notice"
+              onClick={dismissFileAccessNotice}
+              className="p-1 rounded-md text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -2216,7 +2261,8 @@ export const App: React.FC = () => {
           {/* Render Vertical Tree in Grouped Card (5a) */}
           <div
             ref={workspaceListRef}
-            className={`flex flex-col rounded-2xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 backdrop-blur-sm divide-y divide-black/5 dark:divide-white/5 overflow-hidden py-0.5 shadow-xs animate-in fade-in duration-100 transition-shadow ${
+            data-testid="workspace-list-card"
+            className={`flex flex-col rounded-2xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 backdrop-blur-sm overflow-hidden p-1 gap-0.5 shadow-xs animate-in fade-in duration-100 transition-shadow ${
               isEmptyWorkspaceDragOver ? 'theme-drag-over-inside' : ''
             }`}
           >
@@ -2224,7 +2270,7 @@ export const App: React.FC = () => {
             {isCreatingRootFolder && (
               <form
                 onSubmit={handleConfirmCreateRootFolder}
-                className="flex items-center h-[34px] px-2.5 my-0.5 space-x-1.5 bg-black/[0.03] dark:bg-white/[0.04] animate-in fade-in slide-in-from-top-1 duration-100"
+                className="flex items-center h-[34px] px-2.5 rounded-xl space-x-1.5 bg-black/[0.03] dark:bg-white/[0.04] animate-in fade-in slide-in-from-top-1 duration-100"
               >
                 <Folder className="w-3.5 h-3.5 text-amber-500 dark:text-amber-400 flex-shrink-0" />
                 <input

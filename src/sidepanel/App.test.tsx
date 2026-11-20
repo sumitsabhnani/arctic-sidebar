@@ -214,8 +214,8 @@ describe('Sidepanel App Integration', () => {
     expect(await screen.findByText('Example Bookmark')).toBeInTheDocument();
     expect(screen.getByText('No unpinned tabs open.')).toBeInTheDocument();
 
-    // Clear button and Clear options must still be visible in Today's Tabs header
-    expect(screen.getByTitle("Close temporary Today's tabs")).toBeInTheDocument();
+    // Clear button and Clear options must still be visible in open tabs header
+    expect(screen.getByTitle('Close unpinned tabs')).toBeInTheDocument();
     expect(screen.getByTitle('Clear options')).toBeInTheDocument();
   });
 

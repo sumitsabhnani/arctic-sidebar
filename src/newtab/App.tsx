@@ -27,8 +27,10 @@ import {
   getDomainFromUrl,
   getEffectiveTabUrl,
   getFaviconUrl,
+  isDirectNavigationUrl,
   isScratchpadUrl,
   isUrlNavigatedAway,
+  normalizeNavigationInput,
   normalizeUrl
 } from '../sidepanel/utils/url';
 import {
@@ -102,22 +104,14 @@ export interface ArcticBookmarkItem {
 }
 
 export function isLikelyUrl(input: string): boolean {
-  const trimmed = input.trim();
-  if (!trimmed) return false;
-  if (/^https?:\/\//i.test(trimmed)) return true;
-  if (/^localhost(:\d+)?(\/.*)?$/i.test(trimmed)) return true;
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(\/.*)?$/.test(trimmed)) return true;
-  if (!/\s/.test(trimmed) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/.*)?$/i.test(trimmed)) {
-    return true;
-  }
-  return false;
+  return isDirectNavigationUrl(input);
 }
 
 export function formatNavigationUrl(input: string): string {
   const trimmed = input.trim();
-  if (isLikelyUrl(trimmed)) {
-    if (/^https?:\/\//i.test(trimmed)) return trimmed;
-    return `https://${trimmed}`;
+  const normalized = normalizeNavigationInput(trimmed);
+  if (normalized) {
+    return normalized;
   }
   return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }

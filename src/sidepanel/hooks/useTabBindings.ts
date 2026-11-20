@@ -1,6 +1,13 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import type { TabBinding, LocalSettings, TabWithFaviconMeta } from '../../types';
-import { doesTabUrlMatchBookmark, getEffectiveTabUrl, isUrlNavigatedAway } from '../utils/url';
+import {
+  doesTabUrlMatchBookmark,
+  getEffectiveTabUrl,
+  isFileUrl,
+  isUrlNavigatedAway,
+  normalizeNavigationInput,
+  normalizeUrl
+} from '../utils/url';
 import { captureVerifiedTabFavicon } from '../utils/faviconCache';
 import {
   blurSidebarActiveElementIfPointer,
@@ -132,6 +139,49 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const tabsAwaitingRestoreUrlRef = useRef<Set<number>>(new Set());
   const faviconRevByTabIdRef = useRef<Record<number, number>>({});
   const tabOpenedAtRef = useRef<Record<number, number>>({});
+  const [fileAccessNoticeVisible, setFileAccessNoticeVisible] = useState<boolean>(false);
+
+  const dismissFileAccessNotice = useCallback(() => {
+    setFileAccessNoticeVisible(false);
+  }, []);
+
+  const checkAndNotifyFileAccessNeeded = useCallback(async (err?: unknown): Promise<boolean> => {
+    const msg = err instanceof Error ? err.message : String(err || '');
+    const looksLikeFileAccessError =
+      /file url|local file|not allowed to load local resource|cannot access/i.test(msg);
+
+    let isAllowed: boolean | null = null;
+    if (
+      typeof chrome !== 'undefined' &&
+      typeof chrome.extension?.isAllowedFileSchemeAccess === 'function'
+    ) {
+      try {
+        isAllowed = await new Promise<boolean>((resolve) => {
+          let settled = false;
+          const finish = (val: boolean) => {
+            if (!settled) {
+              settled = true;
+              resolve(Boolean(val));
+            }
+          };
+          const maybePromise = chrome.extension.isAllowedFileSchemeAccess(
+            finish
+          ) as unknown as Promise<boolean> | undefined;
+          if (maybePromise && typeof maybePromise.then === 'function') {
+            maybePromise.then(finish, () => finish(false));
+          }
+        });
+      } catch {
+        isAllowed = null;
+      }
+    }
+
+    if (isAllowed === false || looksLikeFileAccessError) {
+      setFileAccessNoticeVisible(true);
+      return true;
+    }
+    return false;
+  }, []);
 
   /**
    * Refresh all tabs in the current window
@@ -1047,7 +1097,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       const bookmarkId = bookmarkIdByTabIdRef.current[tabId];
       try {
         const currentWindowTabs = await chrome.tabs.query({ currentWindow: true });
-        if (currentWindowTabs.length <= 1) {
+        const isOnlyTabInWindow =
+          currentWindowTabs.length === 1 && currentWindowTabs[0]?.id === tabId;
+        if (isOnlyTabInWindow) {
           creatingManualTabCountRef.current += 1;
           try {
             await chrome.tabs.create({ active: true });
@@ -1057,7 +1109,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
         await chrome.tabs.remove(tabId);
       } catch (err) {
-        console.warn('[Arctic] Could not remove tab:', err);
+        const msg = err instanceof Error ? err.message : String(err || '');
+        if (!/no tab with id|tab .* not found/i.test(msg)) {
+          console.warn('[Arctic] Could not remove tab:', err);
+        }
       }
 
       const nextByTab = { ...bookmarkIdByTabIdRef.current };
@@ -1413,8 +1468,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   /**
    * Reload a tab
    */
-  const reloadTab = useCallback(async (tabId: number, bypassCache: boolean = false) => {
-    try {
+  const reloadTab = useCallback(
+    async (tabId: number, bypassCache: boolean = false) => {
+      const targetTab = windowTabsRef.current.find((t) => t.id === tabId);
+      const tabUrl = getEffectiveTabUrl(targetTab) || targetTab?.url || '';
+      const isLocalFile = isFileUrl(tabUrl);
+      const effectiveBypassCache = bypassCache || isLocalFile;
+
       const nextFavRev = (faviconRevByTabIdRef.current[tabId] || 0) + 1;
       faviconRevByTabIdRef.current[tabId] = nextFavRev;
       setWindowTabs((prev) =>
@@ -1424,33 +1484,76 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             : t
         )
       );
-      await chrome.tabs.reload(tabId, { bypassCache });
-    } catch (err) {
-      console.warn('[Arctic] Could not reload tab:', err);
-    }
-  }, []);
+
+      try {
+        await chrome.tabs.reload(tabId, { bypassCache: effectiveBypassCache });
+      } catch (err) {
+        if (isLocalFile && tabUrl) {
+          try {
+            await chrome.tabs.update(tabId, { url: tabUrl });
+            return;
+          } catch (fallbackErr) {
+            console.warn('[Arctic] Could not reload local file tab:', fallbackErr);
+            await checkAndNotifyFileAccessNeeded(fallbackErr);
+            await refreshWindowTabs();
+            return;
+          }
+        }
+        console.warn('[Arctic] Could not reload tab:', err);
+        await refreshWindowTabs();
+      }
+    },
+    [checkAndNotifyFileAccessNeeded, refreshWindowTabs]
+  );
 
   /**
    * Reload currently active tab
    */
-  const reloadActiveTab = useCallback(async (bypassCache: boolean = false) => {
-    if (typeof activeTabId === 'number') {
+  const reloadActiveTab = useCallback(
+    async (bypassCache: boolean = false) => {
+      let targetTabId = activeTabId;
+      let targetTab =
+        typeof targetTabId === 'number'
+          ? windowTabsRef.current.find((t) => t.id === targetTabId)
+          : undefined;
+
+      if (typeof targetTabId !== 'number') {
+        try {
+          const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (currentTab?.id) {
+            targetTabId = currentTab.id;
+            targetTab = currentTab;
+          }
+        } catch (err) {
+          console.warn('[Arctic] Could not query and reload tab:', err);
+          return;
+        }
+      }
+
+      if (typeof targetTabId !== 'number') return;
+
+      const tabUrl = getEffectiveTabUrl(targetTab) || targetTab?.url || '';
+      const isLocalFile = isFileUrl(tabUrl);
+      const effectiveBypassCache = bypassCache || isLocalFile;
+
       try {
-        await chrome.tabs.reload(activeTabId, { bypassCache });
+        await chrome.tabs.reload(targetTabId, { bypassCache: effectiveBypassCache });
       } catch (err) {
+        if (isLocalFile && tabUrl) {
+          try {
+            await chrome.tabs.update(targetTabId, { url: tabUrl });
+            return;
+          } catch (fallbackErr) {
+            console.warn('[Arctic] Could not reload active local file tab:', fallbackErr);
+            await checkAndNotifyFileAccessNeeded(fallbackErr);
+            return;
+          }
+        }
         console.warn('[Arctic] Could not reload active tab:', err);
       }
-    } else {
-      try {
-        const [currentTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (currentTab?.id) {
-          await chrome.tabs.reload(currentTab.id, { bypassCache });
-        }
-      } catch (err) {
-        console.warn('[Arctic] Could not query and reload tab:', err);
-      }
-    }
-  }, [activeTabId]);
+    },
+    [activeTabId, checkAndNotifyFileAccessNeeded]
+  );
 
   /**
    * Move / reorder one or more open tabs within window using pre-removal visual slot index
@@ -1583,27 +1686,45 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       const trimmed = rawInput.trim();
       if (!trimmed) return;
 
-      let finalUrl = trimmed;
-      const isLikelyUrl =
-        /^https?:\/\//i.test(trimmed) ||
-        /^chrome:\/\//i.test(trimmed) ||
-        /^localhost(:\d+)?(\/.*)?$/i.test(trimmed) ||
-        /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?(\/.*)?$/.test(trimmed) ||
-        (!/\s/.test(trimmed) && /^([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(\/.*)?$/i.test(trimmed));
+      const resolvedUrl = normalizeNavigationInput(trimmed);
 
-      if (isLikelyUrl) {
-        if (!/^https?:\/\//i.test(trimmed) && !/^chrome:\/\//i.test(trimmed)) {
-          finalUrl = `https://${trimmed}`;
-        }
+      if (resolvedUrl) {
+        const isLocalFile = isFileUrl(resolvedUrl);
         if (typeof activeTabId === 'number') {
-          await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
-          if (hasTextFragment(finalUrl)) {
-            void scrollToHighlightInTab(activeTabId, finalUrl);
+          const currentTab = windowTabsRef.current.find((t) => t.id === activeTabId);
+          const currentUrl = getEffectiveTabUrl(currentTab) || currentTab?.url || '';
+          const isSameExactUrl =
+            Boolean(currentUrl) &&
+            (currentUrl === resolvedUrl ||
+              (isLocalFile && normalizeUrl(currentUrl) === normalizeUrl(resolvedUrl) && currentUrl === resolvedUrl));
+
+          if (isSameExactUrl) {
+            await reloadTab(activeTabId, isLocalFile);
+            return;
+          }
+
+          try {
+            await chrome.tabs.update(activeTabId, { url: resolvedUrl, active: true });
+            if (hasTextFragment(resolvedUrl)) {
+              void scrollToHighlightInTab(activeTabId, resolvedUrl);
+            }
+          } catch (err) {
+            console.warn('[Arctic] Could not navigate active tab:', err);
+            if (isLocalFile) {
+              await checkAndNotifyFileAccessNeeded(err);
+            }
           }
         } else {
-          const created = await chrome.tabs.create({ url: finalUrl, active: true });
-          if (typeof created?.id === 'number' && hasTextFragment(finalUrl)) {
-            void scrollToHighlightInTab(created.id, finalUrl);
+          try {
+            const created = await chrome.tabs.create({ url: resolvedUrl, active: true });
+            if (typeof created?.id === 'number' && hasTextFragment(resolvedUrl)) {
+              void scrollToHighlightInTab(created.id, resolvedUrl);
+            }
+          } catch (err) {
+            console.warn('[Arctic] Could not open URL in new tab:', err);
+            if (isLocalFile) {
+              await checkAndNotifyFileAccessNeeded(err);
+            }
           }
         }
       } else if (typeof chrome !== 'undefined' && typeof chrome.search?.query === 'function') {
@@ -1614,24 +1735,24 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             await chrome.search.query({ text: trimmed, disposition: 'NEW_TAB' });
           }
         } catch {
-          finalUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+          const fallbackSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
           if (typeof activeTabId === 'number') {
-            await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
+            await chrome.tabs.update(activeTabId, { url: fallbackSearchUrl, active: true });
           } else {
-            await chrome.tabs.create({ url: finalUrl, active: true });
+            await chrome.tabs.create({ url: fallbackSearchUrl, active: true });
           }
         }
       } else {
-        finalUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
+        const fallbackSearchUrl = `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
         if (typeof activeTabId === 'number') {
-          await chrome.tabs.update(activeTabId, { url: finalUrl, active: true });
+          await chrome.tabs.update(activeTabId, { url: fallbackSearchUrl, active: true });
         } else {
-          await chrome.tabs.create({ url: finalUrl, active: true });
+          await chrome.tabs.create({ url: fallbackSearchUrl, active: true });
         }
       }
       await refreshWindowTabs();
     },
-    [activeTabId, refreshWindowTabs]
+    [activeTabId, checkAndNotifyFileAccessNeeded, refreshWindowTabs, reloadTab]
   );
 
   /**
@@ -1892,6 +2013,12 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           url: bookmark.url,
           active: true
         });
+      } catch (err) {
+        console.warn('[Arctic] Could not open bookmark URL:', err);
+        if (isFileUrl(bookmark.url)) {
+          await checkAndNotifyFileAccessNeeded(err);
+        }
+        return;
       } finally {
         creatingManualTabCountRef.current -= 1;
       }
@@ -1919,7 +2046,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         await refreshWindowTabs();
       }
     },
-    [persistSession, refreshWindowTabs]
+    [checkAndNotifyFileAccessNeeded, persistSession, refreshWindowTabs]
   );
 
   /**
@@ -1935,14 +2062,50 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       const existingBinding = bindingsByBookmarkIdRef.current[bookmark.id];
 
-      if (existingBinding && existingBinding.isNavigatedAway) {
+      if (existingBinding) {
+        let tab: chrome.tabs.Tab | undefined;
         try {
-          const tab = await chrome.tabs.get(existingBinding.tabId);
-          if (tab) {
-            await chrome.tabs.update(existingBinding.tabId, {
-              url: bookmark.url,
-              active: true
-            });
+          tab = await chrome.tabs.get(existingBinding.tabId);
+        } catch {
+          // Tab dead, fall through to handleRowClick
+          tab = undefined;
+        }
+
+        if (tab) {
+          const liveUrl = getEffectiveTabUrl(tab) || existingBinding.currentUrl || '';
+          const isLocalFile = isFileUrl(bookmark.url) || isFileUrl(liveUrl);
+          const needsUrlReset =
+            existingBinding.isNavigatedAway ||
+            isUrlNavigatedAway(liveUrl, bookmark.url) ||
+            (isLocalFile && Boolean(liveUrl) && liveUrl !== bookmark.url);
+
+          if (needsUrlReset) {
+            try {
+              await chrome.tabs.update(existingBinding.tabId, {
+                url: bookmark.url,
+                active: true
+              });
+              // Hash-only difference on a local file won't re-read from disk on tabs.update
+              if (
+                isLocalFile &&
+                liveUrl !== bookmark.url &&
+                normalizeUrl(liveUrl) === normalizeUrl(bookmark.url)
+              ) {
+                await chrome.tabs.reload(existingBinding.tabId, { bypassCache: true });
+              }
+            } catch (err) {
+              console.warn('[Arctic] Could not reset tab URL:', err);
+              if (isLocalFile) {
+                await checkAndNotifyFileAccessNeeded(err);
+              }
+              try {
+                await chrome.tabs.update(existingBinding.tabId, { active: true });
+              } catch {
+                // ignore
+              }
+              return;
+            }
+
             if (tab.windowId) {
               try {
                 await chrome.windows.update(tab.windowId, { focused: true });
@@ -1969,14 +2132,12 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             await refreshWindowTabs();
             return;
           }
-        } catch {
-          // Tab dead, fall through
         }
       }
 
       await handleRowClick(bookmark);
     },
-    [handleRowClick, persistSession, refreshWindowTabs]
+    [checkAndNotifyFileAccessNeeded, handleRowClick, persistSession, refreshWindowTabs]
   );
 
   /**
@@ -1988,29 +2149,54 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       blurSidebarActiveElementIfPointer();
       const binding = bindingsByBookmarkIdRef.current[bookmark.id];
 
-      if (binding && binding.tabId === activeTabId && binding.isNavigatedAway) {
-        await chrome.tabs.update(binding.tabId, { url: bookmark.url, active: true });
-        const updatedBinding: TabBinding = {
-          ...binding,
-          currentUrl: bookmark.url,
-          isNavigatedAway: false
-        };
-        const nextBindings = {
-          ...bindingsByBookmarkIdRef.current,
-          [bookmark.id]: updatedBinding
-        };
-        const nextByTab = {
-          ...bookmarkIdByTabIdRef.current
-        };
-        await persistSession(nextBindings, nextByTab);
-        void focusActiveMediaOrPageInTab(binding.tabId, bookmark.url);
-        await refreshWindowTabs();
-        return;
+      if (binding && binding.tabId === activeTabId) {
+        const liveTab = windowTabsRef.current.find((t) => t.id === binding.tabId);
+        const liveUrl = getEffectiveTabUrl(liveTab) || binding.currentUrl || '';
+        const isLocalFile = isFileUrl(bookmark.url) || isFileUrl(liveUrl);
+        const needsUrlReset =
+          binding.isNavigatedAway ||
+          isUrlNavigatedAway(liveUrl, bookmark.url) ||
+          (isLocalFile && Boolean(liveUrl) && liveUrl !== bookmark.url);
+
+        if (needsUrlReset) {
+          try {
+            await chrome.tabs.update(binding.tabId, { url: bookmark.url, active: true });
+            if (
+              isLocalFile &&
+              liveUrl !== bookmark.url &&
+              normalizeUrl(liveUrl) === normalizeUrl(bookmark.url)
+            ) {
+              await chrome.tabs.reload(binding.tabId, { bypassCache: true });
+            }
+          } catch (err) {
+            console.warn('[Arctic] Could not reset Quick Access tab URL:', err);
+            if (isLocalFile) {
+              await checkAndNotifyFileAccessNeeded(err);
+            }
+            return;
+          }
+          const updatedBinding: TabBinding = {
+            ...binding,
+            currentUrl: bookmark.url,
+            isNavigatedAway: false
+          };
+          const nextBindings = {
+            ...bindingsByBookmarkIdRef.current,
+            [bookmark.id]: updatedBinding
+          };
+          const nextByTab = {
+            ...bookmarkIdByTabIdRef.current
+          };
+          await persistSession(nextBindings, nextByTab);
+          void focusActiveMediaOrPageInTab(binding.tabId, bookmark.url);
+          await refreshWindowTabs();
+          return;
+        }
       }
 
       await handleRowClick(bookmark);
     },
-    [activeTabId, handleRowClick, persistSession, refreshWindowTabs]
+    [activeTabId, checkAndNotifyFileAccessNeeded, handleRowClick, persistSession, refreshWindowTabs]
   );
 
   /**
@@ -2024,72 +2210,106 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       const existingBinding = bindingsByBookmarkIdRef.current[bookmark.id];
       if (existingBinding) {
+        let tab: chrome.tabs.Tab | undefined;
         try {
-          const tab = await chrome.tabs.get(existingBinding.tabId);
-          if (tab) {
-            const needsUrlReset =
-              existingBinding.isNavigatedAway ||
-              isUrlNavigatedAway(
-                getEffectiveTabUrl(tab) || existingBinding.currentUrl || '',
-                bookmark.url
-              );
+          tab = await chrome.tabs.get(existingBinding.tabId);
+        } catch {
+          // Tab dead, fall through to handleRowClick
+          tab = undefined;
+        }
 
+        if (tab) {
+          const liveUrl = getEffectiveTabUrl(tab) || existingBinding.currentUrl || '';
+          const isLocalFile = isFileUrl(bookmark.url) || isFileUrl(liveUrl);
+          const needsUrlReset =
+            existingBinding.isNavigatedAway ||
+            isUrlNavigatedAway(liveUrl, bookmark.url) ||
+            (isLocalFile && Boolean(liveUrl) && liveUrl !== bookmark.url);
+
+          // Set optimistic loading state BEFORE awaiting reload/update so fast local HTML files
+          // finishing before the promise resolves do not get stuck in 'loading'.
+          const nextFavRev = (faviconRevByTabIdRef.current[existingBinding.tabId] || 0) + 1;
+          faviconRevByTabIdRef.current[existingBinding.tabId] = nextFavRev;
+          setWindowTabs((prev) =>
+            prev.map((t) =>
+              t.id === existingBinding.tabId
+                ? ({ ...t, status: 'loading', _faviconRev: nextFavRev } as TabWithFaviconMeta)
+                : t
+            )
+          );
+
+          try {
             if (needsUrlReset) {
               // Force navigate to original bookmark URL
               await chrome.tabs.update(existingBinding.tabId, {
                 url: bookmark.url,
                 active: true
               });
+              if (
+                isLocalFile &&
+                liveUrl !== bookmark.url &&
+                normalizeUrl(liveUrl) === normalizeUrl(bookmark.url)
+              ) {
+                await chrome.tabs.reload(existingBinding.tabId, { bypassCache: true });
+              }
             } else {
               if (!tab.active) {
                 await chrome.tabs.update(existingBinding.tabId, { active: true });
               }
-              await chrome.tabs.reload(existingBinding.tabId);
-            }
-            const nextFavRev = (faviconRevByTabIdRef.current[existingBinding.tabId] || 0) + 1;
-            faviconRevByTabIdRef.current[existingBinding.tabId] = nextFavRev;
-            setWindowTabs((prev) =>
-              prev.map((t) =>
-                t.id === existingBinding.tabId
-                  ? ({ ...t, status: 'loading', _faviconRev: nextFavRev } as TabWithFaviconMeta)
-                  : t
-              )
-            );
-
-            if (tab.windowId) {
-              try {
-                await chrome.windows.update(tab.windowId, { focused: true });
-              } catch {
-                // ignore
+              if (isLocalFile) {
+                try {
+                  await chrome.tabs.reload(existingBinding.tabId, { bypassCache: true });
+                } catch (reloadErr) {
+                  await chrome.tabs.update(existingBinding.tabId, {
+                    url: bookmark.url,
+                    active: true
+                  });
+                  void reloadErr;
+                }
+              } else {
+                await chrome.tabs.reload(existingBinding.tabId);
               }
             }
-
-            const updatedBinding: TabBinding = {
-              ...existingBinding,
-              currentUrl: bookmark.url,
-              currentTitle: bookmark.title || bookmark.url,
-              isNavigatedAway: false
-            };
-            const nextBindings = {
-              ...bindingsByBookmarkIdRef.current,
-              [bookmark.id]: updatedBinding
-            };
-            const nextByTab = {
-              ...bookmarkIdByTabIdRef.current
-            };
-            await persistSession(nextBindings, nextByTab);
-            setActiveTabId(existingBinding.tabId);
-            void focusActiveMediaOrPageInTab(existingBinding.tabId, bookmark.url);
+          } catch (err) {
+            console.warn('[Arctic] Could not reset/reload bookmark tab:', err);
+            await refreshWindowTabs();
+            if (isLocalFile) {
+              await checkAndNotifyFileAccessNeeded(err);
+            }
             return;
           }
-        } catch {
-          // Tab dead, fall through
+
+          if (tab.windowId) {
+            try {
+              await chrome.windows.update(tab.windowId, { focused: true });
+            } catch {
+              // ignore
+            }
+          }
+
+          const updatedBinding: TabBinding = {
+            ...existingBinding,
+            currentUrl: bookmark.url,
+            currentTitle: bookmark.title || bookmark.url,
+            isNavigatedAway: false
+          };
+          const nextBindings = {
+            ...bindingsByBookmarkIdRef.current,
+            [bookmark.id]: updatedBinding
+          };
+          const nextByTab = {
+            ...bookmarkIdByTabIdRef.current
+          };
+          await persistSession(nextBindings, nextByTab);
+          setActiveTabId(existingBinding.tabId);
+          void focusActiveMediaOrPageInTab(existingBinding.tabId, bookmark.url);
+          return;
         }
       }
 
       await handleRowClick(bookmark);
     },
-    [handleRowClick, persistSession]
+    [checkAndNotifyFileAccessNeeded, handleRowClick, persistSession, refreshWindowTabs]
   );
 
   /**
@@ -2175,6 +2395,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     autoArchiveInterval,
     setAutoArchiveInterval,
     updateBookmarkBindingUrl,
+    fileAccessNoticeVisible,
+    dismissFileAccessNotice,
     refreshBindings: loadSessionState,
     refreshWindowTabs
   };

@@ -75,12 +75,12 @@ describe('BookmarkRow component', () => {
     // Query all action buttons within the right-side cluster
     const actionButtons = Array.from(
       container.querySelectorAll(
-        'button[data-tooltip="Unpin to Today\'s Tabs"], button[data-tooltip="Copy link"], button[data-tooltip="Set reminder"], button[data-tooltip="Close running tab"]'
+        'button[data-tooltip="Unpin tab"], button[data-tooltip="Copy link"], button[data-tooltip="Set reminder"], button[data-tooltip="Close running tab"]'
       )
     );
 
     expect(actionButtons.length).toBe(4);
-    expect(actionButtons[0]).toHaveAttribute('data-tooltip', "Unpin to Today's Tabs");
+    expect(actionButtons[0]).toHaveAttribute('data-tooltip', 'Unpin tab');
     expect(actionButtons[1]).toHaveAttribute('data-tooltip', 'Copy link');
     expect(actionButtons[2]).toHaveAttribute('data-tooltip', 'Set reminder');
     expect(actionButtons[3]).toHaveAttribute('data-tooltip', 'Close running tab');
@@ -329,5 +329,12 @@ describe('BookmarkRow component', () => {
 
     copyQuoteItem.action();
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('Curiosity is the best guide');
+  });
+
+  it('renders active bookmark row with concentric rounded-xl border so it is never clipped by the curved active space container', () => {
+    const { container } = render(<BookmarkRow {...defaultProps} isActive={true} />);
+    const row = container.querySelector('[data-bookmark-id="b-101"]') as HTMLElement;
+    expect(row).toHaveClass('theme-active-card');
+    expect(row).toHaveClass('rounded-xl');
   });
 });

@@ -416,22 +416,24 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
     >
       {/* Header Bar */}
       <div className="flex items-center justify-between px-1 pb-1">
-        <button
-          type="button"
-          onClick={onToggleCollapse}
-          className="flex items-center space-x-1 text-left group"
-        >
-          {onToggleCollapse && (
+        {onToggleCollapse ? (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            title={isCollapsed ? 'Expand open tabs' : 'Collapse open tabs'}
+            aria-label={isCollapsed ? 'Expand open tabs' : 'Collapse open tabs'}
+            aria-expanded={!isCollapsed}
+            className="flex items-center p-1 rounded-md text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
+          >
             <ChevronDown
-              className={`w-3 h-3 text-zinc-400 dark:text-zinc-500 transition-transform duration-150 ${
+              className={`w-3 h-3 transition-transform duration-150 ${
                 isCollapsed ? '-rotate-90' : 'rotate-0'
               }`}
             />
-          )}
-          <span className="text-[11px] font-semibold tracking-wide text-zinc-500 dark:text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-200 transition-colors">
-            Today&apos;s Tabs
-          </span>
-        </button>
+          </button>
+        ) : (
+          <div />
+        )}
 
         {/* Action Buttons: Clear with Chevron & New Tab */}
         <div className="flex items-center space-x-1">
@@ -446,8 +448,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
             >
               <button
                 type="button"
-                title="Close temporary Today's tabs"
-                aria-label="Close temporary Today's tabs"
+                title="Close unpinned tabs"
+                aria-label="Close unpinned tabs"
                 onClick={() => {
                   onCloseAll();
                   if (unpinnedTabs.length === 0 && onCloseAllWindowTabs) {
@@ -510,7 +512,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                       className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
                     >
                       <Trash2 className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
-                      <span>Clear Today&apos;s tabs</span>
+                      <span>Clear unpinned tabs</span>
                     </button>
 
                     {onCloseAllWindowTabs && (

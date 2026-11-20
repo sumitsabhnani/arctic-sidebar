@@ -307,7 +307,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       ...(onUnpinBookmark
         ? [
             {
-              label: "Unpin to Today's Tabs",
+              label: 'Unpin Tab',
               icon: <PinOff className="w-3.5 h-3.5" />,
               action: () => onUnpinBookmark(bookmark)
             }
@@ -505,8 +505,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             setLocalIsEditing(false);
           }
         }}
-        style={{ paddingLeft: `${12 + depth * 14}px` }}
-        className="flex items-center h-[34px] pr-2 my-[1px] space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-lg border border-cyan-500/60"
+        style={{ paddingLeft: `${8 + depth * 14}px` }}
+        className="flex items-center h-[34px] pr-2 space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-xl border border-cyan-500/60"
       >
         <input
           type="text"
@@ -603,8 +603,8 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       }}
       style={
         {
-          paddingLeft: `${12 + depth * 14}px`,
-          '--drop-indent': `${12 + depth * 14}px`
+          paddingLeft: `${8 + depth * 14}px`,
+          '--drop-indent': `${8 + depth * 14}px`
         } as React.CSSProperties
       }
       className={`group relative flex items-center justify-between ${
@@ -613,7 +613,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           : densityMode === 'relaxed'
           ? 'min-h-[38px] py-1.5'
           : 'h-[34px]'
-      } pr-2.5 my-0 cursor-pointer select-none transition-[background-color,color,opacity] duration-150 outline-none ${
+      } pr-2 rounded-xl cursor-pointer select-none transition-[background-color,color,opacity] duration-150 outline-none ${
         isPartOfActiveDrag ? 'opacity-40' : ''
       } ${isRecentlyMoved ? 'arctic-drop-settle' : ''} ${
         dropPosition === 'top'
@@ -769,11 +769,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           </button>
         )}
 
-        {/* Unpin Tab to Today's Tabs Button (on hover) */}
+        {/* Unpin Tab Button (on hover) */}
         {onUnpinBookmark && (
           <button
             type="button"
-            data-tooltip="Unpin to Today's Tabs"
+            data-tooltip="Unpin tab"
             data-tooltip-pos="bottom-right"
             onClick={(e) => {
               e.stopPropagation();

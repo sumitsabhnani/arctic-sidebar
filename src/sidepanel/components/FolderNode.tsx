@@ -444,13 +444,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
   };
 
   return (
-    <div className="flex flex-col select-none rounded-lg transition-colors">
+    <div className="flex flex-col select-none rounded-xl transition-colors">
       {/* Folder Header Row */}
       {isRenaming ? (
         <form
           onSubmit={handleConfirmRename}
-          style={{ paddingLeft: `${12 + depth * 14}px` }}
-          className="flex items-center h-[34px] pr-2 space-x-2"
+          style={{ paddingLeft: `${8 + depth * 14}px` }}
+          className="flex items-center h-[34px] pr-2 rounded-xl space-x-2"
         >
           <Folder className="w-[18px] h-[18px] text-amber-400/90 flex-shrink-0" />
           <input
@@ -529,11 +529,11 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           }}
           style={
             {
-              paddingLeft: `${12 + depth * 14}px`,
-              '--drop-indent': `${12 + depth * 14}px`
+              paddingLeft: `${8 + depth * 14}px`,
+              '--drop-indent': `${8 + depth * 14}px`
             } as React.CSSProperties
           }
-          className={`group relative flex items-center justify-between h-[34px] pr-2 rounded-lg cursor-pointer transition-[background-color,color,opacity,box-shadow] duration-150 outline-none ${
+          className={`group relative flex items-center justify-between h-[34px] pr-2 rounded-xl cursor-pointer transition-[background-color,color,opacity,box-shadow] duration-150 outline-none ${
             isDragging ? 'opacity-40' : ''
           } ${isRecentlyMoved ? 'arctic-drop-settle' : ''} ${
             dropState === 'top'
@@ -596,13 +596,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
 
       {/* Expanded Children Container */}
       {!isCollapsed && (
-        <div className={`flex flex-col ${isSelfOrAncestorBeingDragged ? 'opacity-40 pointer-events-none' : ''}`}>
+        <div className={`flex flex-col gap-0.5 mt-0.5 ${isSelfOrAncestorBeingDragged ? 'opacity-40 pointer-events-none' : ''}`}>
           {/* Inline Subfolder Input Row if active */}
           {isCreatingSubfolder && (
             <form
               onSubmit={handleConfirmSubfolder}
-              style={{ paddingLeft: `${24 + depth * 14}px` }}
-              className="flex items-center h-[34px] pr-2 my-0.5 space-x-2 animate-in fade-in slide-in-from-top-1 duration-100"
+              style={{ paddingLeft: `${20 + depth * 14}px` }}
+              className="flex items-center h-[34px] pr-2 rounded-xl space-x-2 animate-in fade-in slide-in-from-top-1 duration-100"
             >
               <Folder className="w-[18px] h-[18px] text-amber-500 dark:text-amber-400 flex-shrink-0" />
               <input
@@ -665,7 +665,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                 }
                 onDropItemToFolder?.(data as { type: string; [key: string]: unknown }, node.id);
               }}
-              style={{ paddingLeft: `${24 + depth * 14}px` }}
+              style={{ paddingLeft: `${20 + depth * 14}px` }}
               className="py-1 text-[11px] text-zinc-400 dark:text-zinc-600 italic select-none"
             >
               Empty folder
