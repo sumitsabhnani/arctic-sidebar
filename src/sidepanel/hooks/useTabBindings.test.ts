@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useTabBindings } from './useTabBindings';
 import { mockChrome } from '../../test/setup';
@@ -1638,5 +1638,179 @@ describe('useTabBindings hook', () => {
     expect(result.current.bindingsByBookmarkId['bm-a']).toBeUndefined();
     expect(result.current.bookmarkIdByTabId[31]).toBeUndefined();
     expect(result.current.bindingsByBookmarkId['bm-c']).toBeDefined();
+  });
+
+  it('handles local file:// HTML files in address bar without redirecting to Google search', async () => {
+    const localUrl = 'file:///Users/sumit/Desktop/demo.html';
+    const otherLocalUrl = 'file:///Users/sumit/Desktop/other.html';
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        url: localUrl,
+        title: 'Local Demo',
+        active: true,
+        status: 'complete'
+      } as chrome.tabs.Tab
+    ]);
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    mockChrome.search.query.mockClear();
+    mockChrome.tabs.reload.mockClear();
+    mockChrome.tabs.update.mockClear();
+
+    // Pressing Enter on the same local HTML file URL reloads it directly (never searches Google)
+    await act(async () => {
+      await result.current.navigateActiveTab(localUrl);
+    });
+    expect(mockChrome.search.query).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(1, { bypassCache: true });
+
+    // Navigating to a different local HTML file URL updates tab directly (never searches Google)
+    await act(async () => {
+      await result.current.navigateActiveTab(otherLocalUrl);
+    });
+    expect(mockChrome.search.query).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(1, { url: otherLocalUrl, active: true });
+    const tab = await mockChrome.tabs.get(1);
+    expect(tab.url).toBe(otherLocalUrl);
+  });
+
+  it('reloads, single-click resets, and double-click reloads local file:// HTML tabs cleanly without getting stuck loading', async () => {
+    const localUrl = 'file:///Users/sumit/Desktop/report.html';
+    const localHashUrl = 'file:///Users/sumit/Desktop/report.html#section2';
+    mockChrome.__setTabs([
+      {
+        id: 70,
+        windowId: 10,
+        url: localUrl,
+        title: 'Local Report',
+        active: true,
+        status: 'complete'
+      } as chrome.tabs.Tab
+    ]);
+
+    const localBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-local-html',
+      title: 'Local Report',
+      url: localUrl
+    };
+
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-local-html': {
+          bookmarkId: 'bm-local-html',
+          tabId: 70,
+          windowId: 10,
+          originalUrl: localUrl,
+          currentUrl: localUrl,
+          currentTitle: 'Local Report',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 70: 'bm-local-html' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // 1. Header reload bypasses cache for local file:// tabs
+    mockChrome.tabs.reload.mockClear();
+    await act(async () => {
+      await result.current.reloadActiveTab(false);
+    });
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(70, { bypassCache: true });
+
+    // 2. Double-click reload when local HTML finishes loading immediately does NOT leave status stuck in 'loading'
+    mockChrome.tabs.reload.mockImplementationOnce(async (tabId?: number) => {
+      if (typeof tabId === 'number') {
+        await mockChrome.__triggerTabUpdated(tabId, { status: 'complete' });
+      }
+    });
+    await act(async () => {
+      await result.current.handleFaviconDoubleClick(localBookmark);
+    });
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(70, { bypassCache: true });
+    expect(result.current.tabsByTabId[70]?.status).toBe('complete');
+
+    // 3. Single-click favicon resets hash-drifted local HTML file and reloads from disk
+    await act(async () => {
+      await mockChrome.tabs.update(70, { url: localHashUrl });
+    });
+    mockChrome.tabs.reload.mockClear();
+    mockChrome.tabs.update.mockClear();
+
+    await act(async () => {
+      await result.current.handleFaviconClick(localBookmark);
+    });
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(70, { url: localUrl, active: true });
+    expect(mockChrome.tabs.reload).toHaveBeenCalledWith(70, { bypassCache: true });
+
+    // 4. Surfaces local file access notice if Chrome blocks navigating/reloading file:// URL
+    mockChrome.tabs.reload.mockRejectedValueOnce(
+      new Error('Cannot navigate to a file URL without local file access.')
+    );
+    mockChrome.tabs.update.mockRejectedValueOnce(
+      new Error('Cannot navigate to a file URL without local file access.')
+    );
+    await act(async () => {
+      await result.current.reloadTab(70, false);
+    });
+    expect(result.current.fileAccessNoticeVisible).toBe(true);
+    await act(async () => {
+      result.current.dismissFileAccessNotice();
+    });
+    expect(result.current.fileAccessNoticeVisible).toBe(false);
+  });
+
+  it('silently cleans up binding without warning or spawning a blank tab when handleCloseTab targets an already-closed tab', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        url: 'https://example.com',
+        title: 'Remaining Tab',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-stale': {
+          bookmarkId: 'bm-stale',
+          tabId: 999999,
+          windowId: 10,
+          originalUrl: 'https://stale.example.com',
+          currentUrl: 'https://stale.example.com',
+          currentTitle: 'Stale Tab',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 999999: 'bm-stale' }
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockChrome.tabs.remove.mockRejectedValueOnce(new Error('No tab with id: 999999.'));
+    mockChrome.tabs.create.mockClear();
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.handleCloseTab(999999);
+    });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(mockChrome.tabs.create).not.toHaveBeenCalled();
+    expect(result.current.bindingsByBookmarkId['bm-stale']).toBeUndefined();
+    expect(result.current.bookmarkIdByTabId[999999]).toBeUndefined();
+    warnSpy.mockRestore();
   });
 });

@@ -39,6 +39,15 @@ function formatDisplayUrl(rawUrl?: string): { display: string; isSecure: boolean
   }
   try {
     const parsed = new URL(rawUrl);
+    if (parsed.protocol === 'file:') {
+      let display = rawUrl;
+      try {
+        display = decodeURI(rawUrl);
+      } catch {
+        display = rawUrl;
+      }
+      return { display, isSecure: false, isInternal: false };
+    }
     const isSecure = parsed.protocol === 'https:';
     let host = parsed.hostname;
     if (host.startsWith('www.')) host = host.slice(4);

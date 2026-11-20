@@ -562,7 +562,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   On-Page Highlight Pill (Share &amp; Save Quotes)
                 </span>
                 <span className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Show a floating pill when selecting text on any webpage to copy a deep highlight link or save the quote to your active Space.
+                  Show a floating pill when selecting text on any webpage to copy text, copy a deep highlight link, or save the quote to your active Space.
                 </span>
               </div>
               <button
@@ -718,7 +718,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="flex flex-col space-y-1 pt-2 border-t border-black/[0.06] dark:border-white/[0.06]">
             <label className="text-[11px] font-medium text-zinc-600 dark:text-zinc-400 flex items-center gap-1">
               <Clock className="w-3 h-3 theme-accent-text" />
-              Auto-Archive Inactive Today&apos;s Tabs
+              Auto-Archive Inactive Unpinned Tabs
             </label>
             <select
               value={autoArchiveInterval}

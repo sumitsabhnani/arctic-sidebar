@@ -12,6 +12,9 @@ import {
   extractNoteContentFromUrl,
   getEffectiveTabUrl,
   doesTabUrlMatchBookmark,
+  isFileUrl,
+  isDirectNavigationUrl,
+  normalizeNavigationInput,
   ARCTIC_SCRATCHPAD_PREFIX,
   ARCTIC_GLOBAL_SCRATCHPAD_URL
 } from './url';
@@ -295,6 +298,42 @@ describe('url utilities', () => {
           'https://github.com'
         )
       ).toBe(false);
+    });
+  });
+
+  describe('local file:// URL and address-bar navigation helpers', () => {
+    it('detects file:// URLs and normalizes file://localhost paths', () => {
+      expect(isFileUrl('file:///Users/sumit/Desktop/demo.html')).toBe(true);
+      expect(isFileUrl('FILE:///C:/Users/demo.html')).toBe(true);
+      expect(isFileUrl('https://example.com')).toBe(false);
+      expect(normalizeUrl('file://localhost/Users/sumit/demo.html')).toBe(
+        normalizeUrl('file:///Users/sumit/demo.html')
+      );
+    });
+
+    it('recognizes local file URLs and local file paths as direct navigation URLs without redirecting to search', () => {
+      expect(isDirectNavigationUrl('file:///Users/sumit/Desktop/demo.html')).toBe(true);
+      expect(isDirectNavigationUrl('file:///Users/sumit/My File.html')).toBe(true);
+      expect(isDirectNavigationUrl('/Users/sumit/Desktop/demo.html')).toBe(true);
+      expect(isDirectNavigationUrl('C:\\Users\\sumit\\demo.html')).toBe(true);
+      expect(isDirectNavigationUrl('chrome://extensions')).toBe(true);
+      expect(isDirectNavigationUrl('chrome-extension://abc123/command.html')).toBe(true);
+      expect(isDirectNavigationUrl('how to open html file')).toBe(false);
+
+      expect(normalizeNavigationInput('file:///Users/sumit/Desktop/demo.html')).toBe(
+        'file:///Users/sumit/Desktop/demo.html'
+      );
+      expect(normalizeNavigationInput('file:///Users/sumit/My File.html')).toBe(
+        'file:///Users/sumit/My%20File.html'
+      );
+      expect(normalizeNavigationInput('/Users/sumit/Desktop/demo.html')).toBe(
+        'file:///Users/sumit/Desktop/demo.html'
+      );
+      expect(normalizeNavigationInput('C:\\Users\\sumit\\demo.html')).toBe(
+        'file:///C:/Users/sumit/demo.html'
+      );
+      expect(normalizeNavigationInput('chrome://extensions')).toBe('chrome://extensions');
+      expect(normalizeNavigationInput('react hooks tutorial')).toBeNull();
     });
   });
 });

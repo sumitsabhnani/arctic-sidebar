@@ -23,7 +23,8 @@
   ],
   "optional_host_permissions": [
     "http://*/*",
-    "https://*/*"
+    "https://*/*",
+    "file://*/*"
   ],
   "chrome_url_overrides": {
     "newtab": "newtab.html"

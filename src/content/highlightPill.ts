@@ -370,6 +370,7 @@
     return false;
   }
 
+  const COPY_TEXT_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
   const LINK_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>`;
   const BOOKMARK_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>`;
   const CHECK_SVG = `<svg class="arctic-hl-icon arctic-hl-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
@@ -385,6 +386,7 @@
   let hostEl: HTMLDivElement | null = null;
   let shadowRootRef: ShadowRoot | null = null;
   let pillEl: HTMLDivElement | null = null;
+  let copyTextBtnEl: HTMLButtonElement | null = null;
   let copyBtnEl: HTMLButtonElement | null = null;
   let saveBtnEl: HTMLButtonElement | null = null;
 
@@ -440,6 +442,7 @@
       hostEl = null;
       shadowRootRef = null;
       pillEl = null;
+      copyTextBtnEl = null;
       copyBtnEl = null;
       saveBtnEl = null;
     }
@@ -594,6 +597,29 @@
         e.stopPropagation();
       });
 
+      copyTextBtnEl = document.createElement('button');
+      copyTextBtnEl.type = 'button';
+      copyTextBtnEl.className = 'arctic-hl-btn arctic-hl-copy-text-btn';
+      copyTextBtnEl.setAttribute('aria-label', 'Copy Selected Text');
+      copyTextBtnEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!currentSelectedText) return;
+
+        void copyTextToClipboard(currentSelectedText);
+        if (copyTextBtnEl) {
+          copyTextBtnEl.setAttribute('data-success', 'true');
+          copyTextBtnEl.innerHTML = `${CHECK_SVG}<span>Copied Text!</span>`;
+        }
+        if (autoHideTimer) clearTimeout(autoHideTimer);
+        autoHideTimer = setTimeout(() => {
+          unmountPill();
+        }, 1100);
+      });
+
+      const sep1 = document.createElement('div');
+      sep1.className = 'arctic-hl-sep';
+
       copyBtnEl = document.createElement('button');
       copyBtnEl.type = 'button';
       copyBtnEl.className = 'arctic-hl-btn arctic-hl-copy-btn';
@@ -623,8 +649,8 @@
         }, 1100);
       });
 
-      const sep = document.createElement('div');
-      sep.className = 'arctic-hl-sep';
+      const sep2 = document.createElement('div');
+      sep2.className = 'arctic-hl-sep';
 
       saveBtnEl = document.createElement('button');
       saveBtnEl.type = 'button';
@@ -663,24 +689,29 @@
         );
       });
 
+      pillEl.appendChild(copyTextBtnEl);
+      pillEl.appendChild(sep1);
       pillEl.appendChild(copyBtnEl);
-      pillEl.appendChild(sep);
+      pillEl.appendChild(sep2);
       pillEl.appendChild(saveBtnEl);
       shadowRootRef.appendChild(style);
       shadowRootRef.appendChild(pillEl);
       document.body.appendChild(hostEl);
     }
 
-    if (!pillEl || !copyBtnEl || !saveBtnEl) return;
+    if (!pillEl || !copyTextBtnEl || !copyBtnEl || !saveBtnEl) return;
 
     pillEl.setAttribute('data-theme', resolveEffectiveTheme());
+    copyTextBtnEl.removeAttribute('data-success');
+    copyTextBtnEl.innerHTML = `${COPY_TEXT_SVG}<span>Copy Text</span>`;
     copyBtnEl.removeAttribute('data-success');
     copyBtnEl.innerHTML = `${LINK_SVG}<span>Copy Link</span>`;
     saveBtnEl.removeAttribute('data-success');
     saveBtnEl.innerHTML = `${BOOKMARK_SVG}<span>Save Highlight</span>`;
 
-    const estimatedWidth = 228;
-    const estimatedHeight = 32;
+    const measuredRect = pillEl.getBoundingClientRect();
+    const estimatedWidth = measuredRect.width > 0 ? Math.ceil(measuredRect.width) : 316;
+    const estimatedHeight = measuredRect.height > 0 ? Math.ceil(measuredRect.height) : 32;
     const vw = window.innerWidth || 1024;
     const vh = window.innerHeight || 768;
 

@@ -1,6 +1,7 @@
 import {
   doesTabUrlMatchBookmark,
   getEffectiveTabUrl,
+  isFileUrl,
   isScratchpadUrl,
   isUrlNavigatedAway,
   normalizeUrl
@@ -1351,15 +1352,30 @@ export async function activateQuickAccessFromEdge(
 
         if (forceReset || (isAlreadyActiveInWin && existingBinding.isNavigatedAway)) {
           const effUrl = getEffectiveTabUrl(existingTab) || existingBinding.currentUrl || '';
+          const isLocalFile = isFileUrl(bookmark.url) || isFileUrl(effUrl);
           const needsReset =
-            existingBinding.isNavigatedAway || isUrlNavigatedAway(effUrl, bookmark.url);
+            existingBinding.isNavigatedAway ||
+            isUrlNavigatedAway(effUrl, bookmark.url) ||
+            (isLocalFile && Boolean(effUrl) && effUrl !== bookmark.url);
 
           if (needsReset) {
             await chrome.tabs.update(existingTab.id, { url: bookmark.url, active: true });
+            if (
+              isLocalFile &&
+              chrome.tabs.reload &&
+              effUrl !== bookmark.url &&
+              normalizeUrl(effUrl) === normalizeUrl(bookmark.url)
+            ) {
+              await chrome.tabs.reload(existingTab.id, { bypassCache: true });
+            }
           } else {
             await chrome.tabs.update(existingTab.id, { active: true });
             if (chrome.tabs.reload) {
-              await chrome.tabs.reload(existingTab.id);
+              if (isLocalFile) {
+                await chrome.tabs.reload(existingTab.id, { bypassCache: true });
+              } else {
+                await chrome.tabs.reload(existingTab.id);
+              }
             }
           }
 
@@ -1483,7 +1499,12 @@ export async function activateTodayTabFromEdge(
   try {
     const updatedTab = await chrome.tabs.update(tabId, { active: true });
     if (forceReload && chrome.tabs.reload) {
-      await chrome.tabs.reload(tabId);
+      const targetUrl = getEffectiveTabUrl(updatedTab) || updatedTab?.url || '';
+      if (isFileUrl(targetUrl)) {
+        await chrome.tabs.reload(tabId, { bypassCache: true });
+      } else {
+        await chrome.tabs.reload(tabId);
+      }
     }
     const targetWinId =
       typeof updatedTab?.windowId === 'number' ? updatedTab.windowId : windowId;

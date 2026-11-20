@@ -77,16 +77,28 @@ describe('highlightPill content script (on-page floating selection pill)', () =>
     expect(host).not.toBeNull();
     expect(capturedShadowRoots.length).toBe(1);
 
+    const copyTextBtn = capturedShadowRoots[0].querySelector(
+      'button.arctic-hl-copy-text-btn'
+    ) as HTMLButtonElement;
     const copyBtn = capturedShadowRoots[0].querySelector(
       'button.arctic-hl-copy-btn'
     ) as HTMLButtonElement;
     const saveBtn = capturedShadowRoots[0].querySelector(
       'button.arctic-hl-save-btn'
     ) as HTMLButtonElement;
+    expect(copyTextBtn).not.toBeNull();
+    expect(copyTextBtn.textContent).toContain('Copy Text');
     expect(copyBtn).not.toBeNull();
     expect(saveBtn).not.toBeNull();
 
-    // 1. Click "Copy Link" -> writes #:~:text=... URL to clipboard and shows "Copied Link!"
+    // 1. Click "Copy Text" -> writes raw selected text to clipboard and shows "Copied Text!"
+    copyTextBtn.click();
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      'Arc lets you share a deep link to any highlighted quote.'
+    );
+    expect(copyTextBtn.textContent).toContain('Copied Text!');
+
+    // 2. Click "Copy Link" -> writes #:~:text=... URL to clipboard and shows "Copied Link!"
     copyBtn.click();
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       expect.stringContaining(
@@ -95,7 +107,7 @@ describe('highlightPill content script (on-page floating selection pill)', () =>
     );
     expect(copyBtn.textContent).toContain('Copied Link!');
 
-    // 2. Click "Save Highlight" -> sends SAVE_HIGHLIGHT_BOOKMARK and shows "Saved to Work!"
+    // 3. Click "Save Highlight" -> sends SAVE_HIGHLIGHT_BOOKMARK and shows "Saved to Work!"
     mockChrome.runtime.sendMessage.mockClear();
     saveBtn.click();
     expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(

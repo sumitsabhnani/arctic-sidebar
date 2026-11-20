@@ -883,11 +883,11 @@ describe('AppFeatures: Left-Side Positioning, Notes, Multi-Select', () => {
     expect(pinnedRowText).toBeInTheDocument();
     expect(screen.getByText('No unpinned tabs open.')).toBeInTheDocument();
 
-    // Right-click the pinned bookmark row and click "Unpin to Today's Tabs"
+    // Right-click the pinned bookmark row and click "Unpin Tab"
     const pinnedRow = pinnedRowText.closest('[role="button"]')!;
     fireEvent.contextMenu(pinnedRow);
 
-    const unpinMenuItem = await screen.findByText("Unpin to Today's Tabs");
+    const unpinMenuItem = await screen.findByText('Unpin Tab');
     await act(async () => {
       fireEvent.click(unpinMenuItem);
     });
