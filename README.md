@@ -1,4 +1,4 @@
-# 🧊 Arctic: Sidebar & Commands
+# 🧊 Arctic: Vertical Sidebar & Tabs
 
 <p align="center">
   <strong>Arc-inspired vertical tabs, spaces, audio controls, and lightning-fast command bar for Google Chrome.</strong>
@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.0.0-blue.svg" alt="Version 2.0.0" />
+  <img src="https://img.shields.io/badge/version-2.3.1-blue.svg" alt="Version 2.3.1" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT" />
   <img src="https://img.shields.io/badge/manifest-v3-orange.svg" alt="Manifest V3" />
   <img src="https://img.shields.io/badge/tests-342%20passed-brightgreen.svg" alt="Tests" />
