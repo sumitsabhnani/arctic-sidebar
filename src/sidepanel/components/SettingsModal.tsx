@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   X,
   Palette,
@@ -94,15 +94,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isHibernating, setIsHibernating] = useState(false);
   const [hibernateFeedback, setHibernateFeedback] = useState<{ text: string; isError?: boolean } | null>(null);
   const [sidebarShortcut, setSidebarShortcut] = useState<string>('');
+  const hibernateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (hibernateTimerRef.current) {
+        clearTimeout(hibernateTimerRef.current);
+        hibernateTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const refreshSidebarShortcut = useCallback(() => {
     try {
       if (!chrome?.commands?.getAll) return;
       Promise.resolve(chrome.commands.getAll())
         .then((commands) => {
-          if (!Array.isArray(commands)) return;
+          if (!isMountedRef.current || !Array.isArray(commands)) return;
           const toggleCmd = commands.find((c) => c.name === '_execute_action');
-          setSidebarShortcut((toggleCmd?.shortcut || '').trim());
+          const nextShortcut = (toggleCmd?.shortcut || '').trim();
+          setSidebarShortcut((prev) => (prev === nextShortcut ? prev : nextShortcut));
         })
         .catch(() => {});
     } catch {
@@ -111,7 +125,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, []);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      if (hibernateTimerRef.current) {
+        clearTimeout(hibernateTimerRef.current);
+        hibernateTimerRef.current = null;
+      }
+      return;
+    }
     refreshSidebarShortcut();
 
     const handleVisibility = () => {
@@ -120,16 +140,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
     };
 
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+
     window.addEventListener('focus', refreshSidebarShortcut);
     document.addEventListener('visibilitychange', handleVisibility);
-    const pollId = setInterval(refreshSidebarShortcut, 1500);
+    document.addEventListener('keydown', handleKeyDown);
+    const pollId = setInterval(() => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        refreshSidebarShortcut();
+      }
+    }, 1500);
 
     return () => {
       window.removeEventListener('focus', refreshSidebarShortcut);
       document.removeEventListener('visibilitychange', handleVisibility);
+      document.removeEventListener('keydown', handleKeyDown);
       clearInterval(pollId);
     };
-  }, [isOpen, refreshSidebarShortcut]);
+  }, [isOpen, onClose, refreshSidebarShortcut]);
 
   const handleOpenShortcutSettings = () => {
     const shortcutsUrl = 'chrome://extensions/shortcuts';
@@ -164,10 +197,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleHibernate = async () => {
     if (!onDiscardAllBackgroundTabs || isHibernating) return;
+    if (hibernateTimerRef.current) {
+      clearTimeout(hibernateTimerRef.current);
+      hibernateTimerRef.current = null;
+    }
     setIsHibernating(true);
     setHibernateFeedback(null);
     try {
       const count = await onDiscardAllBackgroundTabs();
+      if (!isMountedRef.current) return;
       if (typeof count === 'number') {
         if (count > 0) {
           setHibernateFeedback({
@@ -182,12 +220,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setHibernateFeedback({ text: 'Background tabs hibernated' });
       }
     } catch {
+      if (!isMountedRef.current) return;
       setHibernateFeedback({ text: 'Could not hibernate tabs', isError: true });
     } finally {
-      setIsHibernating(false);
-      setTimeout(() => {
-        setHibernateFeedback(null);
-      }, 4000);
+      if (isMountedRef.current) {
+        setIsHibernating(false);
+        hibernateTimerRef.current = setTimeout(() => {
+          hibernateTimerRef.current = null;
+          if (isMountedRef.current) {
+            setHibernateFeedback(null);
+          }
+        }, 4000);
+      }
     }
   };
 
@@ -598,6 +642,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               type="button"
               role="switch"
+              aria-label="Memory Saver Status Bar"
               aria-checked={showMemorySaverBar}
               onClick={() => onToggleMemorySaverBar(!showMemorySaverBar)}
               className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${

@@ -45,8 +45,11 @@ import {
 } from '../sidepanel/utils/highlight';
 import {
   COLOR_THEMES,
+  applyThemeToDocument,
   isValidColorTheme,
   isValidThemeMode,
+  persistThemeBootstrap,
+  readThemeBootstrap,
   resolveEffectiveTheme
 } from '../sidepanel/utils/theme';
 import { NewTabEdgeTrigger } from './components/NewTabEdgeTrigger';
@@ -317,8 +320,8 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [hasArrowNavigated, setHasArrowNavigated] = useState(false);
-  const [theme, setTheme] = useState<ThemeMode>('light');
-  const [colorTheme, setColorTheme] = useState<ColorThemeId>('pure-monochrome');
+  const [theme, setTheme] = useState<ThemeMode>(() => readThemeBootstrap().theme);
+  const [colorTheme, setColorTheme] = useState<ColorThemeId>(() => readThemeBootstrap().colorTheme);
   const [spaces, setSpaces] = useState<SpaceOption[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isNavigating, setIsNavigating] = useState(false);
@@ -517,11 +520,16 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
   // Sync theme, palettes, and custom search engines with Arctic storage
   useEffect(() => {
     chrome.storage.local.get(['theme', 'colorTheme', 'customSearchEngines'], (res) => {
-      if (isValidThemeMode(res.theme)) {
-        setTheme(res.theme);
+      const nextTheme = isValidThemeMode(res.theme) ? res.theme : undefined;
+      const nextColorTheme = isValidColorTheme(res.colorTheme) ? res.colorTheme : undefined;
+      if (nextTheme) {
+        setTheme(nextTheme);
       }
-      if (isValidColorTheme(res.colorTheme)) {
-        setColorTheme(res.colorTheme);
+      if (nextColorTheme) {
+        setColorTheme(nextColorTheme);
+      }
+      if (nextTheme || nextColorTheme) {
+        persistThemeBootstrap({ theme: nextTheme, colorTheme: nextColorTheme });
       }
       if (Array.isArray(res.customSearchEngines)) {
         setCustomSearchEngines(res.customSearchEngines as SiteSearchEngine[]);
@@ -535,9 +543,11 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
       if (areaName === 'local') {
         if (changes.theme && isValidThemeMode(changes.theme.newValue)) {
           setTheme(changes.theme.newValue);
+          persistThemeBootstrap({ theme: changes.theme.newValue });
         }
         if (changes.colorTheme && isValidColorTheme(changes.colorTheme.newValue)) {
           setColorTheme(changes.colorTheme.newValue);
+          persistThemeBootstrap({ colorTheme: changes.colorTheme.newValue });
         }
         if (changes.customSearchEngines) {
           setCustomSearchEngines(
@@ -597,23 +607,17 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
 
   // Apply theme & color palette classes (including live OS system theme tracking)
   useEffect(() => {
-    const applyEffectiveTheme = (effective: 'dark' | 'light') => {
-      if (effective === 'dark') {
-        document.documentElement.classList.add('dark');
-        document.documentElement.classList.remove('light');
-      } else {
-        document.documentElement.classList.remove('dark');
-        document.documentElement.classList.add('light');
-      }
-    };
-
-    applyEffectiveTheme(resolveEffectiveTheme(theme));
-    document.documentElement.setAttribute('data-color-theme', colorTheme);
+    applyThemeToDocument(theme, colorTheme);
 
     if (theme === 'system' && typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      let mediaQuery: MediaQueryList;
+      try {
+        mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      } catch {
+        return;
+      }
       const handleChange = (e: MediaQueryListEvent) => {
-        applyEffectiveTheme(e.matches ? 'dark' : 'light');
+        applyThemeToDocument(e.matches ? 'dark' : 'light', colorTheme);
       };
       if (typeof mediaQuery.addEventListener === 'function') {
         mediaQuery.addEventListener('change', handleChange);
@@ -732,6 +736,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         action: async () => {
           const nextTheme: ThemeMode = effectiveTheme === 'dark' ? 'light' : 'dark';
           setTheme(nextTheme);
+          persistThemeBootstrap({ theme: nextTheme });
           await chrome?.storage?.local?.set({ theme: nextTheme });
           showToast(`Theme switched to ${nextTheme} mode`);
         }
@@ -745,6 +750,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         icon: <Monitor className="w-4 h-4 text-cyan-400" />,
         action: async () => {
           setTheme('system');
+          persistThemeBootstrap({ theme: 'system' });
           await chrome?.storage?.local?.set({ theme: 'system' });
           showToast('Theme set to System (auto light/dark)');
         }
@@ -759,6 +765,7 @@ export const App: React.FC<{ debounceMs?: number }> = ({ debounceMs }) => {
         icon: <Palette className="w-4 h-4" style={{ color: t.accentColor }} />,
         action: async () => {
           setColorTheme(t.id);
+          persistThemeBootstrap({ colorTheme: t.id });
           await chrome?.storage?.local?.set({ colorTheme: t.id });
           showToast(`Color palette set to ${t.name}`);
         }

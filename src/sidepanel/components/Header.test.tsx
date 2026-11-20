@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { Header } from './Header';
 
 describe('Header component', () => {
@@ -230,5 +230,45 @@ describe('Header component', () => {
 
     fireEvent.submit(input.closest('form')!);
     expect(defaultProps.onNavigateActiveTab).toHaveBeenCalledWith(localFileUrl);
+  });
+
+  it('resets copy feedback timer cleanly on rapid repeated clicks and swallows clipboard errors', async () => {
+    vi.useFakeTimers();
+    try {
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: vi.fn().mockRejectedValue(new Error('Document is not focused'))
+        }
+      });
+
+      const { container, unmount } = render(<Header {...defaultProps} />);
+      const copyBtn = container.querySelector('[data-tooltip="Copy URL"]') as HTMLElement;
+
+      fireEvent.click(copyBtn);
+      expect(copyBtn).toHaveAttribute('data-tooltip', 'Copied URL!');
+
+      // Advance 1000ms (before 1500ms expiry) and click again
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+      fireEvent.click(copyBtn);
+      expect(copyBtn).toHaveAttribute('data-tooltip', 'Copied URL!');
+
+      // At 1600ms total, the first timer would have expired if not cleared, but second click still has 900ms left
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(600);
+      });
+      expect(copyBtn).toHaveAttribute('data-tooltip', 'Copied URL!');
+
+      // After full 1500ms from second click, resets cleanly back to Copy URL
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(950);
+      });
+      expect(copyBtn).toHaveAttribute('data-tooltip', 'Copy URL');
+
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

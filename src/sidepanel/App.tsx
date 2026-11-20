@@ -21,7 +21,14 @@ import type {
   EdgeTriggerMode,
   StoredHighlightMeta
 } from '../types';
-import { isValidColorTheme, isValidThemeMode, resolveEffectiveTheme } from './utils/theme';
+import {
+  applyThemeToDocument,
+  isValidColorTheme,
+  isValidThemeMode,
+  persistThemeBootstrap,
+  readThemeBootstrap,
+  resolveEffectiveTheme
+} from './utils/theme';
 import { isScratchpadUrl } from './utils/url';
 import { captureVerifiedTabFavicon, hydrateFaviconCache } from './utils/faviconCache';
 import { scrollElementIntoContainerView } from './utils/scrollIntoView';
@@ -172,9 +179,9 @@ export const App: React.FC = () => {
     anchorRect: DOMRect;
   } | null>(null);
 
-  // Theme State
-  const [theme, setTheme] = useState<ThemeMode>('light');
-  const [colorTheme, setColorTheme] = useState<ColorThemeId>('pure-monochrome');
+  // Theme State (seeded synchronously from bootstrap cache to prevent light-mode flash)
+  const [theme, setTheme] = useState<ThemeMode>(() => readThemeBootstrap().theme);
+  const [colorTheme, setColorTheme] = useState<ColorThemeId>(() => readThemeBootstrap().colorTheme);
   const [quickAccessDensity, setQuickAccessDensity] = useState<'relaxed' | 'compact'>('relaxed');
   const [tabsDensity, setTabsDensity] = useState<'relaxed' | 'compact'>('compact');
   const [showMemorySaverBar, setShowMemorySaverBar] = useState<boolean>(false);
@@ -236,11 +243,16 @@ export const App: React.FC = () => {
         'openArcticSettings'
       ],
       (res) => {
-        if (isValidThemeMode(res.theme)) {
-          setTheme(res.theme);
+        const nextTheme = isValidThemeMode(res.theme) ? res.theme : undefined;
+        const nextColorTheme = isValidColorTheme(res.colorTheme) ? res.colorTheme : undefined;
+        if (nextTheme) {
+          setTheme(nextTheme);
         }
-        if (isValidColorTheme(res.colorTheme)) {
-          setColorTheme(res.colorTheme);
+        if (nextColorTheme) {
+          setColorTheme(nextColorTheme);
+        }
+        if (nextTheme || nextColorTheme) {
+          persistThemeBootstrap({ theme: nextTheme, colorTheme: nextColorTheme });
         }
         const qaDensity = res.quickAccessDensity || res.densityMode;
         if (qaDensity === 'relaxed' || qaDensity === 'compact') {
@@ -297,9 +309,11 @@ export const App: React.FC = () => {
       if (areaName === 'local') {
         if (changes.theme && isValidThemeMode(changes.theme.newValue)) {
           setTheme(changes.theme.newValue);
+          persistThemeBootstrap({ theme: changes.theme.newValue });
         }
         if (changes.colorTheme && isValidColorTheme(changes.colorTheme.newValue)) {
           setColorTheme(changes.colorTheme.newValue);
+          persistThemeBootstrap({ colorTheme: changes.colorTheme.newValue });
         }
         if (changes.quickAccessDensity && (changes.quickAccessDensity.newValue === 'relaxed' || changes.quickAccessDensity.newValue === 'compact')) {
           setQuickAccessDensity(changes.quickAccessDensity.newValue);
@@ -408,23 +422,17 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const applyEffectiveTheme = (effective: 'dark' | 'light') => {
-      if (effective === 'dark') {
-        document.documentElement.classList.add('dark');
-        document.documentElement.classList.remove('light');
-      } else {
-        document.documentElement.classList.remove('dark');
-        document.documentElement.classList.add('light');
-      }
-    };
-
-    applyEffectiveTheme(resolveEffectiveTheme(theme));
-    document.documentElement.setAttribute('data-color-theme', colorTheme);
+    applyThemeToDocument(theme, colorTheme);
 
     if (theme === 'system' && typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-      const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      let mediaQuery: MediaQueryList;
+      try {
+        mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+      } catch {
+        return;
+      }
       const handleChange = (e: MediaQueryListEvent) => {
-        applyEffectiveTheme(e.matches ? 'dark' : 'light');
+        applyThemeToDocument(e.matches ? 'dark' : 'light', colorTheme);
       };
       if (typeof mediaQuery.addEventListener === 'function') {
         mediaQuery.addEventListener('change', handleChange);
@@ -440,6 +448,7 @@ export const App: React.FC = () => {
     setTheme((prev) => {
       const currentEffective = resolveEffectiveTheme(prev);
       const next: ThemeMode = currentEffective === 'dark' ? 'light' : 'dark';
+      persistThemeBootstrap({ theme: next });
       chrome.storage.local.set({ theme: next } as LocalSettings);
       return next;
     });
@@ -447,11 +456,13 @@ export const App: React.FC = () => {
 
   const handleSelectThemeMode = useCallback((mode: ThemeMode) => {
     setTheme(mode);
+    persistThemeBootstrap({ theme: mode });
     chrome.storage.local.set({ theme: mode } as LocalSettings);
   }, []);
 
   const handleSelectColorTheme = useCallback((newTheme: ColorThemeId) => {
     setColorTheme(newTheme);
+    persistThemeBootstrap({ colorTheme: newTheme });
     chrome.storage.local.set({ colorTheme: newTheme } as LocalSettings);
   }, []);
 

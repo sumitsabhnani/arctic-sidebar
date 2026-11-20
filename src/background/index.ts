@@ -59,7 +59,7 @@ import {
   isSameSiteForFavicon,
   normalizeFaviconPageUrl,
   upsertCachedFaviconEntries
-} from '../sidepanel/utils/faviconCache';
+} from '../sidepanel/utils/faviconStore';
 
 let sessionLock: Promise<void> = Promise.resolve();
 

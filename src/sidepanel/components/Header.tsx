@@ -75,6 +75,21 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const [isCopied, setIsCopied] = useState(false);
   const [copiedHighlight, setCopiedHighlight] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const copySeqRef = useRef(0);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      copySeqRef.current += 1;
+      if (copyTimerRef.current) {
+        clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // URL Bar Inline Editing State
   const [isEditingUrl, setIsEditingUrl] = useState(false);
@@ -171,19 +186,31 @@ export const Header: React.FC<HeaderProps> = ({
   const handleCopyCurrentUrl = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!activeTabUrl) return;
-    navigator.clipboard.writeText(activeTabUrl);
+    if (navigator.clipboard?.writeText) {
+      Promise.resolve(navigator.clipboard.writeText(activeTabUrl)).catch(() => {});
+    }
+    const seq = ++copySeqRef.current;
+    if (copyTimerRef.current) {
+      clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
     setCopiedHighlight(false);
     setIsCopied(true);
     if (onCopyActiveTabUrl) {
-      void Promise.resolve(onCopyActiveTabUrl(activeTabUrl)).then((res) => {
-        if (res && res.copiedHighlight) {
-          setCopiedHighlight(true);
-        }
-      });
+      void Promise.resolve(onCopyActiveTabUrl(activeTabUrl))
+        .then((res) => {
+          if (isMountedRef.current && copySeqRef.current === seq && res && res.copiedHighlight) {
+            setCopiedHighlight(true);
+          }
+        })
+        .catch(() => {});
     }
-    setTimeout(() => {
-      setIsCopied(false);
-      setCopiedHighlight(false);
+    copyTimerRef.current = setTimeout(() => {
+      copyTimerRef.current = null;
+      if (isMountedRef.current && copySeqRef.current === seq) {
+        setIsCopied(false);
+        setCopiedHighlight(false);
+      }
     }, 1500);
   };
 
