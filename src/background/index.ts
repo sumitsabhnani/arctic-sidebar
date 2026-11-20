@@ -260,6 +260,20 @@ export async function handleTabRemoved(
         await removePersistedBindings([bookmarkId]);
       }
     }
+
+    if (chrome.storage?.session?.get && chrome.storage?.session?.set) {
+      try {
+        const data = await chrome.storage.session.get(['customTabTitles']);
+        const customTitles = data.customTabTitles as Record<number, string> | undefined;
+        if (customTitles && customTitles[tabId] !== undefined) {
+          const nextTitles = { ...customTitles };
+          delete nextTitles[tabId];
+          await chrome.storage.session.set({ customTabTitles: nextTitles });
+        }
+      } catch {
+        // ignore
+      }
+    }
   });
 
   if (!removeInfo?.isWindowClosing) {
@@ -407,6 +421,20 @@ export async function handleTabReplaced(
       delete session.bookmarkIdByTabId[removedTabId];
       session.bookmarkIdByTabId[addedTabId] = bookmarkId;
       await saveSessionState(session);
+    }
+
+    if (chrome.storage?.session?.get && chrome.storage?.session?.set) {
+      try {
+        const data = await chrome.storage.session.get(['customTabTitles']);
+        const customTitles = data.customTabTitles as Record<number, string> | undefined;
+        if (customTitles && customTitles[removedTabId] !== undefined) {
+          const nextTitles = { ...customTitles, [addedTabId]: customTitles[removedTabId] };
+          delete nextTitles[removedTabId];
+          await chrome.storage.session.set({ customTabTitles: nextTitles });
+        }
+      } catch {
+        // ignore
+      }
     }
 
     if (chrome.storage?.local?.get && chrome.storage?.local?.set) {
