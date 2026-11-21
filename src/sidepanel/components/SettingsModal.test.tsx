@@ -244,4 +244,42 @@ describe('SettingsModal component', () => {
     fireEvent.click(pillSwitch);
     expect(onToggleHighlightPill).toHaveBeenCalledWith(true);
   });
+
+  it('closes modal when Escape key is pressed and skips background shortcut polling when document is hidden', async () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      const getAllSpy = vi.spyOn(chrome.commands, 'getAll');
+
+      render(<SettingsModal {...defaultProps} onClose={onClose} />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
+      });
+      getAllSpy.mockClear();
+
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        value: 'hidden'
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3500);
+      });
+      expect(getAllSpy).not.toHaveBeenCalled();
+
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        value: 'visible'
+      });
+
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        value: 'visible'
+      });
+      vi.useRealTimers();
+    }
+  });
 });

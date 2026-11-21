@@ -1,8 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   COLOR_THEMES,
+  THEME_BOOTSTRAP_STORAGE_KEY,
+  applyThemeToDocument,
   isValidColorTheme,
   isValidThemeMode,
+  persistThemeBootstrap,
+  readThemeBootstrap,
   resolveEffectiveTheme
 } from './theme';
 
@@ -59,6 +63,68 @@ describe('theme utilities', () => {
           throw new Error('matchMedia unavailable');
         });
         expect(resolveEffectiveTheme('system')).toBe('light');
+      } finally {
+        window.matchMedia = originalMatchMedia;
+      }
+    });
+  });
+
+  describe('theme bootstrap cache & pre-paint initialization', () => {
+    it('returns safe defaults when bootstrap cache is empty or malformed', () => {
+      expect(readThemeBootstrap()).toEqual({
+        theme: 'light',
+        colorTheme: 'pure-monochrome'
+      });
+
+      window.localStorage.setItem(THEME_BOOTSTRAP_STORAGE_KEY, '{invalid-json');
+      expect(readThemeBootstrap()).toEqual({
+        theme: 'light',
+        colorTheme: 'pure-monochrome'
+      });
+
+      window.localStorage.setItem(
+        THEME_BOOTSTRAP_STORAGE_KEY,
+        JSON.stringify({ theme: 'bogus', colorTheme: 'not-a-palette' })
+      );
+      expect(readThemeBootstrap()).toEqual({
+        theme: 'light',
+        colorTheme: 'pure-monochrome'
+      });
+    });
+
+    it('merges partial theme and palette updates into localStorage and applies classes to documentElement', () => {
+      persistThemeBootstrap({ theme: 'dark' });
+      expect(readThemeBootstrap()).toEqual({
+        theme: 'dark',
+        colorTheme: 'pure-monochrome'
+      });
+
+      persistThemeBootstrap({ colorTheme: 'midnight-amethyst' });
+      expect(readThemeBootstrap()).toEqual({
+        theme: 'dark',
+        colorTheme: 'midnight-amethyst'
+      });
+
+      applyThemeToDocument('dark', 'midnight-amethyst');
+      expect(document.documentElement.classList.contains('dark')).toBe(true);
+      expect(document.documentElement.classList.contains('light')).toBe(false);
+      expect(document.documentElement.getAttribute('data-color-theme')).toBe('midnight-amethyst');
+    });
+
+    it('resolves system mode correctly when applying theme to documentElement before paint', () => {
+      const originalMatchMedia = window.matchMedia;
+      try {
+        window.matchMedia = vi.fn().mockReturnValue({ matches: true });
+        document.documentElement.className = 'light';
+        document.documentElement.setAttribute('data-color-theme', 'pure-monochrome');
+
+        persistThemeBootstrap({ theme: 'system', colorTheme: 'glacier-blue' });
+        const boot = readThemeBootstrap();
+        applyThemeToDocument(boot.theme, boot.colorTheme);
+
+        expect(document.documentElement.classList.contains('dark')).toBe(true);
+        expect(document.documentElement.classList.contains('light')).toBe(false);
+        expect(document.documentElement.getAttribute('data-color-theme')).toBe('glacier-blue');
       } finally {
         window.matchMedia = originalMatchMedia;
       }

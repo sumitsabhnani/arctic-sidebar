@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
 import {
   FAVICON_CACHE_STORAGE_KEY,
   FAVICON_PROBE_URL,
@@ -11,8 +12,10 @@ import {
   isLoadableTabFaviconUrl,
   isSameSiteForFavicon,
   normalizeFaviconPageUrl,
+  recordVerifiedImgFavicon,
   resetFaviconCacheForTests,
-  upsertCachedFaviconEntries
+  upsertCachedFaviconEntries,
+  useResolvedFavicon
 } from './faviconCache';
 import { mockChrome } from '../../test/setup';
 
@@ -203,5 +206,121 @@ describe('faviconCache utilities', () => {
     expect(
       stored[getFaviconCacheKey(`https://site-${MAX_CACHED_FAVICONS + 14}.example.com`)]
     ).toBeDefined();
+  });
+
+  it('notifies only key-scoped useResolvedFavicon subscribers without re-rendering unrelated rows', async () => {
+    await hydrateFaviconCache();
+
+    let alphaRenders = 0;
+    let bravoRenders = 0;
+
+    const alphaHook = renderHook(() => {
+      alphaRenders += 1;
+      return useResolvedFavicon({ pageUrl: 'https://alpha.example.com' });
+    });
+
+    const bravoHook = renderHook(() => {
+      bravoRenders += 1;
+      return useResolvedFavicon({ pageUrl: 'https://bravo.example.com' });
+    });
+
+    const initialAlphaRenders = alphaRenders;
+    const initialBravoRenders = bravoRenders;
+
+    const alphaDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    await act(async () => {
+      await upsertCachedFaviconEntries({
+        [getFaviconCacheKey('https://alpha.example.com')]: {
+          dataUrl: alphaDataUrl,
+          iconUrl: 'https://alpha.example.com/favicon.png',
+          pageUrl: 'https://alpha.example.com',
+          updatedAt: Date.now()
+        }
+      });
+    });
+
+    expect(alphaHook.result.current.faviconSrc).toBe(alphaDataUrl);
+    expect(alphaRenders).toBeGreaterThan(initialAlphaRenders);
+    // Unrelated row must NOT re-render when alpha's favicon updates
+    expect(bravoRenders).toBe(initialBravoRenders);
+
+    alphaHook.unmount();
+    bravoHook.unmount();
+  });
+
+  it('coalesces synchronous upsert bursts into a single storage.local write and skips no-op rewrites', async () => {
+    await hydrateFaviconCache();
+    const setSpy = vi.spyOn(chrome.storage.local, 'set');
+    setSpy.mockClear();
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(encodeURIComponent(FAVICON_PROBE_URL))) {
+        return makePngResponse([1, 2, 3, 4]);
+      }
+      return makePngResponse([9, 8, 7, 6]);
+    });
+    globalThis.fetch = fetchSpy;
+
+    // 1. Fire 20 concurrent upserts in the same synchronous turn -> coalesced into 1 storage write
+    await Promise.all(
+      Array.from({ length: 20 }, (_, idx) => {
+        const url = `https://burst-${idx}.example.com`;
+        return upsertCachedFaviconEntries({
+          [getFaviconCacheKey(url)]: {
+            dataUrl: 'data:image/png;base64,AAAA',
+            iconUrl: `${url}/favicon.ico`,
+            pageUrl: url,
+            updatedAt: 5000 + idx
+          }
+        });
+      })
+    );
+
+    expect(setSpy).toHaveBeenCalledTimes(1);
+
+    // 2. Repeatedly firing onLoad / tab capture for an already-verified entry performs 0 storage writes & 0 fetches
+    setSpy.mockClear();
+    fetchSpy.mockClear();
+
+    const cachedUrl = 'https://burst-0.example.com';
+    for (let i = 0; i < 15; i++) {
+      await recordVerifiedImgFavicon({
+        faviconSrc: `${cachedUrl}/favicon.ico`,
+        pageUrl: cachedUrl
+      });
+      const res = await captureVerifiedTabFavicon(
+        { url: cachedUrl, favIconUrl: `${cachedUrl}/favicon.ico` },
+        cachedUrl
+      );
+      expect(res).toBe('data:image/png;base64,AAAA');
+    }
+
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates concurrent fetchRealChromeFaviconDataUrl calls for the same URL and size', async () => {
+    let targetFetches = 0;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      await new Promise((r) => setTimeout(r, 15));
+      if (url.includes(encodeURIComponent(FAVICON_PROBE_URL))) {
+        return makePngResponse([1, 1, 1]);
+      }
+      targetFetches += 1;
+      return makePngResponse([2, 2, 2]);
+    });
+
+    const results = await Promise.all([
+      fetchRealChromeFaviconDataUrl('https://concurrent.example.com', 32),
+      fetchRealChromeFaviconDataUrl('https://concurrent.example.com', 32),
+      fetchRealChromeFaviconDataUrl('https://www.concurrent.example.com', 32)
+    ]);
+
+    expect(targetFetches).toBe(1);
+    expect(results[0]).toMatch(/^data:image\/png;base64,/);
+    expect(results[1]).toBe(results[0]);
+    expect(results[2]).toBe(results[0]);
   });
 });

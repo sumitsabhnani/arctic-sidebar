@@ -12,6 +12,15 @@ export type ColorThemeId =
 
 export type ThemeMode = 'dark' | 'light' | 'system';
 
+export const THEME_BOOTSTRAP_STORAGE_KEY = 'arctic_theme_bootstrap';
+export const DEFAULT_THEME_MODE: ThemeMode = 'light';
+export const DEFAULT_COLOR_THEME: ColorThemeId = 'pure-monochrome';
+
+export interface ThemeBootstrapSnapshot {
+  theme: ThemeMode;
+  colorTheme: ColorThemeId;
+}
+
 export interface ThemeOption {
   id: ColorThemeId;
   name: string;
@@ -115,8 +124,10 @@ export const COLOR_THEMES: ThemeOption[] = [
   }
 ];
 
+const COLOR_THEME_ID_SET: ReadonlySet<string> = new Set(COLOR_THEMES.map((t) => t.id));
+
 export function isValidColorTheme(val: unknown): val is ColorThemeId {
-  return typeof val === 'string' && COLOR_THEMES.some((t) => t.id === val);
+  return typeof val === 'string' && COLOR_THEME_ID_SET.has(val);
 }
 
 export function isValidThemeMode(val: unknown): val is ThemeMode {
@@ -135,4 +146,84 @@ export function resolveEffectiveTheme(theme: ThemeMode): 'dark' | 'light' {
     return 'light';
   }
   return theme === 'dark' ? 'dark' : 'light';
+}
+
+/**
+ * Reads the last-known theme snapshot synchronously from `localStorage` so
+ * `sidepanel.html` and `command.html` initialize React state without flashing light mode.
+ */
+export function readThemeBootstrap(): ThemeBootstrapSnapshot {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem(THEME_BOOTSTRAP_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { theme?: unknown; colorTheme?: unknown };
+        return {
+          theme: isValidThemeMode(parsed?.theme) ? parsed.theme : DEFAULT_THEME_MODE,
+          colorTheme: isValidColorTheme(parsed?.colorTheme)
+            ? parsed.colorTheme
+            : DEFAULT_COLOR_THEME
+        };
+      }
+    } catch {
+      // ignore localStorage access or JSON parse errors
+    }
+  }
+  return {
+    theme: DEFAULT_THEME_MODE,
+    colorTheme: DEFAULT_COLOR_THEME
+  };
+}
+
+/**
+ * Persists a lightweight synchronous snapshot to `localStorage` so external pre-paint
+ * bootstrap (`themeInit.js`) and initial `useState` avoid any flash of wrong theme.
+ */
+export function persistThemeBootstrap(patch: {
+  theme?: ThemeMode;
+  colorTheme?: ColorThemeId;
+}): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    const current = readThemeBootstrap();
+    const next: ThemeBootstrapSnapshot = {
+      theme: patch.theme && isValidThemeMode(patch.theme) ? patch.theme : current.theme,
+      colorTheme:
+        patch.colorTheme && isValidColorTheme(patch.colorTheme)
+          ? patch.colorTheme
+          : current.colorTheme
+    };
+    window.localStorage.setItem(THEME_BOOTSTRAP_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // ignore quota or restricted storage errors
+  }
+}
+
+export function applyThemeToDocument(
+  theme: ThemeMode,
+  colorTheme: ColorThemeId,
+  doc: Document | undefined = typeof document !== 'undefined' ? document : undefined
+): 'dark' | 'light' {
+  const effective = resolveEffectiveTheme(theme);
+  const root = doc?.documentElement;
+  if (root) {
+    if (effective === 'dark') {
+      root.classList.add('dark');
+      root.classList.remove('light');
+    } else {
+      root.classList.remove('dark');
+      root.classList.add('light');
+    }
+    root.setAttribute('data-color-theme', colorTheme);
+  }
+  return effective;
+}
+
+export function resetThemeBootstrapForTests(): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  try {
+    window.localStorage.removeItem(THEME_BOOTSTRAP_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
 }
