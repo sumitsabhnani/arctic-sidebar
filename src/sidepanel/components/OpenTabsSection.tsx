@@ -105,7 +105,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
     () => unpinnedTabs.map((t) => String(t.id ?? '')).join(','),
     [unpinnedTabs]
   );
-  useFlipAnimation(listRef, openTabsOrderSignature, activeSpaceId);
+  const flipResetKey = `${activeSpaceId ?? ''}:${densityMode}:${isCollapsed ? '1' : '0'}`;
+  useFlipAnimation(listRef, openTabsOrderSignature, flipResetKey);
   const prevTabIdsRef = React.useRef<Set<number> | null>(null);
   const prevSpaceIdRef = React.useRef<string | undefined>(activeSpaceId);
   const prevActiveTabIdRef = React.useRef<number | null | undefined>(undefined);

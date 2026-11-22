@@ -1921,4 +1921,135 @@ describe('useTabBindings hook', () => {
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it('does not transiently leak a closed bound bookmark tab into unpinnedTabs while refreshWindowTabs is pending', async () => {
+    const initialTabs: chrome.tabs.Tab[] = [
+      { id: 101, windowId: 10, index: 0, url: 'https://hostinger.example.com', title: 'Hostinger', active: true } as chrome.tabs.Tab,
+      { id: 102, windowId: 10, index: 1, url: 'https://snaptrade.example.com', title: 'SnapTrade', active: false } as chrome.tabs.Tab,
+      { id: 103, windowId: 10, index: 2, url: 'https://kite.example.com', title: 'Kite', active: false } as chrome.tabs.Tab
+    ];
+    mockChrome.__setTabs(initialTabs);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-snap': {
+          bookmarkId: 'bm-snap',
+          tabId: 102,
+          windowId: 10,
+          originalUrl: 'https://snaptrade.example.com',
+          currentUrl: 'https://snaptrade.example.com',
+          currentTitle: 'SnapTrade',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 102: 'bm-snap' }
+    });
+
+    const observedUnpinnedSnapshots: number[][] = [];
+    const { result } = renderHook(() => {
+      const state = useTabBindings();
+      observedUnpinnedSnapshots.push(
+        state.unpinnedTabs.map((t) => t.id).filter((id): id is number => typeof id === 'number')
+      );
+      return state;
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([101, 103]);
+    observedUnpinnedSnapshots.length = 0;
+
+    // Delay chrome.tabs.query for the refresh triggered by onRemoved so we observe the immediate render
+    let resolveDeferredQuery!: (tabs: chrome.tabs.Tab[]) => void;
+    const deferredQuery = new Promise<chrome.tabs.Tab[]>((resolve) => {
+      resolveDeferredQuery = resolve;
+    });
+    const origQuery = mockChrome.tabs.query.getMockImplementation();
+    mockChrome.tabs.query.mockImplementationOnce(() => deferredQuery);
+
+    // Fire onRemoved for the bound tab 102 (before deferredQuery resolves)
+    act(() => {
+      mockChrome.__triggerTabRemoved(102, false);
+    });
+
+    // Neither the immediate render nor any intermediate snapshot may include closed bound tab 102
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([101, 103]);
+    expect(observedUnpinnedSnapshots.some((ids) => ids.includes(102))).toBe(false);
+
+    // Now resolve the delayed refresh
+    await act(async () => {
+      resolveDeferredQuery([initialTabs[0], { ...initialTabs[2], index: 1 }]);
+      await Promise.resolve();
+    });
+
+    if (origQuery) {
+      mockChrome.tabs.query.mockImplementation(origQuery);
+    }
+
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([101, 103]);
+    expect(observedUnpinnedSnapshots.some((ids) => ids.includes(102))).toBe(false);
+  });
+
+  it('ignores stale in-flight refreshWindowTabs responses that resolve after a tab is closed', async () => {
+    const initialTabs: chrome.tabs.Tab[] = [
+      { id: 201, windowId: 10, index: 0, url: 'https://hostinger.example.com', title: 'Hostinger', active: true } as chrome.tabs.Tab,
+      { id: 202, windowId: 10, index: 1, url: 'https://tracker.example.com', title: 'Tracker', active: false } as chrome.tabs.Tab,
+      { id: 203, windowId: 10, index: 2, url: 'https://kite.example.com', title: 'Kite', active: false } as chrome.tabs.Tab
+    ];
+    mockChrome.__setTabs(initialTabs);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-tracker': {
+          bookmarkId: 'bm-tracker',
+          tabId: 202,
+          windowId: 10,
+          originalUrl: 'https://tracker.example.com',
+          currentUrl: 'https://tracker.example.com',
+          currentTitle: 'Tracker',
+          isNavigatedAway: false
+        }
+      },
+      bookmarkIdByTabId: { 202: 'bm-tracker' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([201, 203]);
+
+    // Start an in-flight refresh (triggered by window focus) whose snapshot still contains tab 202
+    let resolveStaleQuery!: (tabs: chrome.tabs.Tab[]) => void;
+    const staleQuery = new Promise<chrome.tabs.Tab[]>((resolve) => {
+      resolveStaleQuery = resolve;
+    });
+    mockChrome.tabs.query.mockImplementationOnce(() => staleQuery);
+
+    act(() => {
+      // Trigger window focus -> kicks off refreshWindowTabs() with staleQuery
+      const listeners = (mockChrome.windows.onFocusChanged.addListener as ReturnType<typeof vi.fn>).mock.calls;
+      const focusHandler = listeners[listeners.length - 1]?.[0];
+      focusHandler?.(10);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // While staleQuery is still pending, close bound tab 202
+    await act(async () => {
+      await result.current.handleCloseTab(202);
+    });
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([201, 203]);
+
+    // Now the stale query from BEFORE close resolves with tab 202 still present
+    await act(async () => {
+      resolveStaleQuery(initialTabs);
+      await Promise.resolve();
+    });
+
+    // Stale snapshot must be discarded; tab 202 must NOT reappear in unpinnedTabs
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([201, 203]);
+    expect(result.current.tabsByTabId[202]).toBeUndefined();
+  });
 });

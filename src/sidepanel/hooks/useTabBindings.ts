@@ -155,6 +155,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const faviconRevByTabIdRef = useRef<Record<number, number>>({});
   const tabOpenedAtRef = useRef<Record<number, number>>({});
   const recentTabResetRef = useRef<Map<number, { url: string; at: number }>>(new Map());
+  const refreshTabsSeqRef = useRef<number>(0);
   const [fileAccessNoticeVisible, setFileAccessNoticeVisible] = useState<boolean>(false);
 
   const markRecentTabReset = useCallback((tabId: number, url: string) => {
@@ -222,14 +223,35 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   }, []);
 
   /**
+   * Synchronously prune closed tab ID(s) from windowTabs and invalidate any in-flight
+   * refreshWindowTabs() query so a closing bound tab never transiently leaks into unpinnedTabs.
+   */
+  const pruneClosedTabsFromWindow = useCallback((tabIds: number[]) => {
+    if (tabIds.length === 0) return;
+    const removedSet = new Set(tabIds);
+    refreshTabsSeqRef.current += 1;
+    setWindowTabs((prev) => {
+      if (!prev.some((t) => typeof t.id === 'number' && removedSet.has(t.id))) {
+        return prev;
+      }
+      const next = prev.filter((t) => typeof t.id !== 'number' || !removedSet.has(t.id));
+      windowTabsRef.current = next;
+      return next;
+    });
+  }, []);
+
+  /**
    * Refresh all tabs in the current window
    */
   const refreshWindowTabs = useCallback(async () => {
+    const reqSeq = ++refreshTabsSeqRef.current;
     try {
       const currentWin = await chrome.windows.getCurrent();
+      if (reqSeq !== refreshTabsSeqRef.current || !isMountedRef.current) return;
       if (currentWin.id) {
         currentWindowIdRef.current = currentWin.id;
         const tabs = await chrome.tabs.query({ windowId: currentWin.id });
+        if (reqSeq !== refreshTabsSeqRef.current || !isMountedRef.current) return;
         const tabsWithCustom: TabWithFaviconMeta[] = tabs.map((t) => {
           if (typeof t.id !== 'number') return t;
           const customTitle = customTabTitlesRef.current[t.id];
@@ -243,6 +265,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           }
           return t;
         });
+        windowTabsRef.current = tabsWithCustom;
         setWindowTabs(tabsWithCustom);
 
         const active = tabs.find((t) => t.active);
@@ -716,7 +739,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       tabsAwaitingRestoreUrlRef.current.delete(tabId);
       recentTabResetRef.current.delete(tabId);
       delete faviconRevByTabIdRef.current[tabId];
-      refreshWindowTabs();
+      pruneClosedTabsFromWindow([tabId]);
+      void refreshWindowTabs();
 
       if (!removeInfo?.isWindowClosing) {
         if (tabOpenedAtRef.current[tabId] !== undefined) {
@@ -1052,7 +1076,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         chrome.runtime.onMessage.removeListener(handleRuntimeMessage);
       }
     };
-  }, [loadSessionState, migrateReplacedTabId, refreshWindowTabs, scheduleReconcile]);
+  }, [loadSessionState, migrateReplacedTabId, pruneClosedTabsFromWindow, refreshWindowTabs, scheduleReconcile]);
 
   /**
    * Map of all window tabs by tabId for instant lookup (audible, mutedInfo, discarded, etc.)
@@ -1154,6 +1178,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
       }
 
+      pruneClosedTabsFromWindow([tabId]);
+
       const nextByTab = { ...bookmarkIdByTabIdRef.current };
       delete nextByTab[tabId];
 
@@ -1166,7 +1192,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       await persistSession(nextBindings, nextByTab);
       await refreshWindowTabs();
     },
-    [persistSession, refreshWindowTabs]
+    [persistSession, pruneClosedTabsFromWindow, refreshWindowTabs]
   );
 
   /**
@@ -1190,8 +1216,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     }
 
     await chrome.tabs.remove(tabIdsToClose);
+    pruneClosedTabsFromWindow(tabIdsToClose);
     await refreshWindowTabs();
-  }, [unpinnedTabs, windowTabs.length, refreshWindowTabs]);
+  }, [unpinnedTabs, windowTabs.length, pruneClosedTabsFromWindow, refreshWindowTabs]);
 
   /**
    * Close all active tabs in the current window (Clear All action).
@@ -1216,6 +1243,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     } catch (err) {
       console.warn('[Arctic] Could not close all window tabs:', err);
     }
+
+    pruneClosedTabsFromWindow(tabIdsToClose);
 
     const closedTabSet = new Set<number>(tabIdsToClose);
     const nextByTab = { ...bookmarkIdByTabIdRef.current };
@@ -1245,7 +1274,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     }
     await persistSession(nextBindings, nextByTab);
     await refreshWindowTabs();
-  }, [persistSession, refreshWindowTabs]);
+  }, [persistSession, pruneClosedTabsFromWindow, refreshWindowTabs]);
 
   /**
    * Close a specific list of unpinned tabs (e.g. from the active space)
@@ -1262,9 +1291,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
       }
       await chrome.tabs.remove(tabIdsToClose);
+      pruneClosedTabsFromWindow(tabIdsToClose);
       await refreshWindowTabs();
     },
-    [windowTabs.length, refreshWindowTabs]
+    [windowTabs.length, pruneClosedTabsFromWindow, refreshWindowTabs]
   );
 
   /**
