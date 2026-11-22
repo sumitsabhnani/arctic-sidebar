@@ -327,4 +327,24 @@ describe('QuickAccessGrid component', () => {
     expect(recoveredImg?.getAttribute('src')).toBe(liveIconUrl);
     expect(container.querySelector('svg.lucide-globe')).not.toBeInTheDocument();
   });
+
+  it('ignores the second click (detail > 1) of a double-click so onTileClick does not race with onTileDoubleClick', () => {
+    const onTileClick = vi.fn();
+    const onTileDoubleClick = vi.fn();
+    render(
+      <QuickAccessGrid
+        {...defaultProps}
+        onTileClick={onTileClick}
+        onTileDoubleClick={onTileDoubleClick}
+      />
+    );
+
+    const tile = screen.getByTitle(/GitHub/i);
+    fireEvent.click(tile, { detail: 1 });
+    fireEvent.click(tile, { detail: 2 });
+    fireEvent.doubleClick(tile);
+
+    expect(onTileClick).toHaveBeenCalledTimes(1);
+    expect(onTileDoubleClick).toHaveBeenCalledTimes(1);
+  });
 });
