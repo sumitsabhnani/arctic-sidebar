@@ -429,7 +429,10 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      onClick={() => onTileClick(bookmark)}
+      onClick={(e) => {
+        if (e.detail > 1) return;
+        onTileClick(bookmark);
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           markKeyboardRowActivation();

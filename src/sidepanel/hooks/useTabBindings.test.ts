@@ -1813,4 +1813,112 @@ describe('useTabBindings hook', () => {
     expect(result.current.bookmarkIdByTabId[999999]).toBeUndefined();
     warnSpy.mockRestore();
   });
+
+  it('deduplicates rapid double-click URL resets on Quick Access tiles and silences expected Navigation rejected warnings', async () => {
+    const bookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-qa-race',
+      title: 'Gmail',
+      url: 'https://mail.google.com/mail/u/0/#inbox'
+    };
+    mockChrome.__setTabs([
+      {
+        id: 77,
+        windowId: 10,
+        url: 'https://mail.google.com/mail/u/0/#inbox/FMfcgzThread',
+        title: 'Draft Email',
+        status: 'complete',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-qa-race': {
+          bookmarkId: 'bm-qa-race',
+          tabId: 77,
+          windowId: 10,
+          originalUrl: bookmark.url!,
+          currentUrl: 'https://mail.google.com/mail/u/0/#inbox/FMfcgzThread',
+          currentTitle: 'Draft Email',
+          isNavigatedAway: true
+        }
+      },
+      bookmarkIdByTabId: { 77: 'bm-qa-race' }
+    });
+
+    const { result } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // 1. Rapid double-click sequence: click #1 (handleQuickAccessClick) + dblclick (handleFaviconDoubleClick)
+    // must only issue ONE chrome.tabs.update({ url }) instead of firing a competing navigation.
+    mockChrome.tabs.update.mockClear();
+    await act(async () => {
+      await Promise.all([
+        result.current.handleQuickAccessClick(bookmark),
+        result.current.handleFaviconDoubleClick(bookmark)
+      ]);
+    });
+
+    const urlUpdateCalls = mockChrome.tabs.update.mock.calls.filter(
+      ([tabId, props]) => tabId === 77 && Boolean(props?.url)
+    );
+    expect(urlUpdateCalls).toHaveLength(1);
+
+    // 2. When Chrome rejects navigation with "Navigation rejected." (e.g., beforeunload cancel),
+    // do not spam console.warn into chrome://extensions Errors.
+    await act(async () => {
+      await mockChrome.__triggerTabUpdated(77, {
+        url: 'https://mail.google.com/mail/u/0/#inbox/FMfcgzThread2'
+      });
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockChrome.tabs.update.mockRejectedValueOnce(new Error('Navigation rejected.'));
+    mockChrome.tabs.update.mockRejectedValueOnce(new Error('Navigation rejected.'));
+
+    // Advance past dedupe window by resetting on a different bookmark URL via direct rejection
+    const rejectedBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-qa-reject',
+      title: 'Docs',
+      url: 'https://docs.google.com/document/d/abc'
+    };
+    mockChrome.__setTabs([
+      {
+        id: 78,
+        windowId: 10,
+        url: 'https://docs.google.com/document/d/other',
+        title: 'Other Doc',
+        status: 'complete',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({
+      bindingsByBookmarkId: {
+        'bm-qa-reject': {
+          bookmarkId: 'bm-qa-reject',
+          tabId: 78,
+          windowId: 10,
+          originalUrl: rejectedBookmark.url!,
+          currentUrl: 'https://docs.google.com/document/d/other',
+          currentTitle: 'Other Doc',
+          isNavigatedAway: true
+        }
+      },
+      bookmarkIdByTabId: { 78: 'bm-qa-reject' }
+    });
+
+    const { result: result2 } = renderHook(() => useTabBindings());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result2.current.handleQuickAccessClick(rejectedBookmark);
+      await result2.current.handleFaviconDoubleClick(rejectedBookmark);
+    });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });

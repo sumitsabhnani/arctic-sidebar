@@ -614,6 +614,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
           onSelectBookmark?.(bookmark, e);
           return;
         }
+        if (e.detail > 1) return;
         onSelectBookmark?.(bookmark, e);
         onRowClick(bookmark);
       }}
@@ -668,6 +669,10 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
           title={isNavAway ? 'Reset tab to saved URL (Double-click to reload)' : `${titleText} (Double-click to reload original page)`}
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey) {
+              return;
+            }
+            if (e.detail > 1) {
+              e.stopPropagation();
               return;
             }
             onFaviconClick(bookmark, e);

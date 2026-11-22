@@ -27,6 +27,21 @@ import {
 
 export { isArcticCommandTab };
 
+const TAB_RESET_DEDUPE_WINDOW_MS = 500;
+
+/**
+ * Returns true for expected, recoverable Chrome tab navigation rejections
+ * (e.g. user canceled a `beforeunload` dialog, superseded double-click navigation,
+ * tab closed mid-action, tab-strip drag lock, or empty history back navigation)
+ * so we handle them gracefully without polluting `chrome://extensions` with warnings.
+ */
+export function isExpectedTabNavigationError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err || '');
+  return /navigation rejected|no tab with id|tab .* not found|cannot be edited right now|cannot find a (?:next|previous) page/i.test(
+    msg
+  );
+}
+
 /**
  * @chrome-workaround(newtab-omnibox-focus): Clean up unfocused command.html / newtab.html tabs spawned by the focus.js redirect workaround.
  * Closes any unfocused empty Arctic Command / New Tab tabs in the given window
@@ -139,7 +154,30 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const tabsAwaitingRestoreUrlRef = useRef<Set<number>>(new Set());
   const faviconRevByTabIdRef = useRef<Record<number, number>>({});
   const tabOpenedAtRef = useRef<Record<number, number>>({});
+  const recentTabResetRef = useRef<Map<number, { url: string; at: number }>>(new Map());
   const [fileAccessNoticeVisible, setFileAccessNoticeVisible] = useState<boolean>(false);
+
+  const markRecentTabReset = useCallback((tabId: number, url: string) => {
+    const now = Date.now();
+    recentTabResetRef.current.set(tabId, { url, at: now });
+    if (recentTabResetRef.current.size > 32) {
+      for (const [id, entry] of recentTabResetRef.current.entries()) {
+        if (now - entry.at > TAB_RESET_DEDUPE_WINDOW_MS * 2) {
+          recentTabResetRef.current.delete(id);
+        }
+      }
+    }
+  }, []);
+
+  const hasRecentTabReset = useCallback((tabId: number, url: string): boolean => {
+    const entry = recentTabResetRef.current.get(tabId);
+    if (!entry) return false;
+    if (Date.now() - entry.at > TAB_RESET_DEDUPE_WINDOW_MS) {
+      recentTabResetRef.current.delete(tabId);
+      return false;
+    }
+    return entry.url === url;
+  }, []);
 
   const dismissFileAccessNotice = useCallback(() => {
     setFileAccessNoticeVisible(false);
@@ -676,6 +714,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     // Listen to tab removal
     const handleRemoved = (tabId: number, removeInfo?: chrome.tabs.TabRemoveInfo) => {
       tabsAwaitingRestoreUrlRef.current.delete(tabId);
+      recentTabResetRef.current.delete(tabId);
       delete faviconRevByTabIdRef.current[tabId];
       refreshWindowTabs();
 
@@ -1493,13 +1532,17 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             await chrome.tabs.update(tabId, { url: tabUrl });
             return;
           } catch (fallbackErr) {
-            console.warn('[Arctic] Could not reload local file tab:', fallbackErr);
-            await checkAndNotifyFileAccessNeeded(fallbackErr);
+            const notified = await checkAndNotifyFileAccessNeeded(fallbackErr);
+            if (!notified && !isExpectedTabNavigationError(fallbackErr)) {
+              console.warn('[Arctic] Could not reload local file tab:', fallbackErr);
+            }
             await refreshWindowTabs();
             return;
           }
         }
-        console.warn('[Arctic] Could not reload tab:', err);
+        if (!isExpectedTabNavigationError(err)) {
+          console.warn('[Arctic] Could not reload tab:', err);
+        }
         await refreshWindowTabs();
       }
     },
@@ -1544,12 +1587,16 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             await chrome.tabs.update(targetTabId, { url: tabUrl });
             return;
           } catch (fallbackErr) {
-            console.warn('[Arctic] Could not reload active local file tab:', fallbackErr);
-            await checkAndNotifyFileAccessNeeded(fallbackErr);
+            const notified = await checkAndNotifyFileAccessNeeded(fallbackErr);
+            if (!notified && !isExpectedTabNavigationError(fallbackErr)) {
+              console.warn('[Arctic] Could not reload active local file tab:', fallbackErr);
+            }
             return;
           }
         }
-        console.warn('[Arctic] Could not reload active tab:', err);
+        if (!isExpectedTabNavigationError(err)) {
+          console.warn('[Arctic] Could not reload active tab:', err);
+        }
       }
     },
     [activeTabId, checkAndNotifyFileAccessNeeded]
@@ -1693,10 +1740,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         if (typeof activeTabId === 'number') {
           const currentTab = windowTabsRef.current.find((t) => t.id === activeTabId);
           const currentUrl = getEffectiveTabUrl(currentTab) || currentTab?.url || '';
-          const isSameExactUrl =
-            Boolean(currentUrl) &&
-            (currentUrl === resolvedUrl ||
-              (isLocalFile && normalizeUrl(currentUrl) === normalizeUrl(resolvedUrl) && currentUrl === resolvedUrl));
+          const isSameExactUrl = Boolean(currentUrl) && currentUrl === resolvedUrl;
 
           if (isSameExactUrl) {
             await reloadTab(activeTabId, isLocalFile);
@@ -1709,9 +1753,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               void scrollToHighlightInTab(activeTabId, resolvedUrl);
             }
           } catch (err) {
-            console.warn('[Arctic] Could not navigate active tab:', err);
-            if (isLocalFile) {
-              await checkAndNotifyFileAccessNeeded(err);
+            const notified = isLocalFile ? await checkAndNotifyFileAccessNeeded(err) : false;
+            if (!notified && !isExpectedTabNavigationError(err)) {
+              console.warn('[Arctic] Could not navigate active tab:', err);
             }
           }
         } else {
@@ -1721,9 +1765,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               void scrollToHighlightInTab(created.id, resolvedUrl);
             }
           } catch (err) {
-            console.warn('[Arctic] Could not open URL in new tab:', err);
-            if (isLocalFile) {
-              await checkAndNotifyFileAccessNeeded(err);
+            const notified = isLocalFile ? await checkAndNotifyFileAccessNeeded(err) : false;
+            if (!notified && !isExpectedTabNavigationError(err)) {
+              console.warn('[Arctic] Could not open URL in new tab:', err);
             }
           }
         }
@@ -1763,7 +1807,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       try {
         await chrome.tabs.goBack(activeTabId);
       } catch (err) {
-        console.warn('[Arctic] Could not go back in active tab:', err);
+        if (!isExpectedTabNavigationError(err)) {
+          console.warn('[Arctic] Could not go back in active tab:', err);
+        }
       }
     }
   }, [activeTabId]);
@@ -2080,6 +2126,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             (isLocalFile && Boolean(liveUrl) && liveUrl !== bookmark.url);
 
           if (needsUrlReset) {
+            if (hasRecentTabReset(existingBinding.tabId, bookmark.url)) {
+              return;
+            }
+            markRecentTabReset(existingBinding.tabId, bookmark.url);
             try {
               await chrome.tabs.update(existingBinding.tabId, {
                 url: bookmark.url,
@@ -2094,9 +2144,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
                 await chrome.tabs.reload(existingBinding.tabId, { bypassCache: true });
               }
             } catch (err) {
-              console.warn('[Arctic] Could not reset tab URL:', err);
-              if (isLocalFile) {
-                await checkAndNotifyFileAccessNeeded(err);
+              recentTabResetRef.current.delete(existingBinding.tabId);
+              const notified = isLocalFile ? await checkAndNotifyFileAccessNeeded(err) : false;
+              if (!notified && !isExpectedTabNavigationError(err)) {
+                console.warn('[Arctic] Could not reset tab URL:', err);
               }
               try {
                 await chrome.tabs.update(existingBinding.tabId, { active: true });
@@ -2137,7 +2188,14 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       await handleRowClick(bookmark);
     },
-    [checkAndNotifyFileAccessNeeded, handleRowClick, persistSession, refreshWindowTabs]
+    [
+      checkAndNotifyFileAccessNeeded,
+      handleRowClick,
+      hasRecentTabReset,
+      markRecentTabReset,
+      persistSession,
+      refreshWindowTabs
+    ]
   );
 
   /**
@@ -2159,6 +2217,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           (isLocalFile && Boolean(liveUrl) && liveUrl !== bookmark.url);
 
         if (needsUrlReset) {
+          if (hasRecentTabReset(binding.tabId, bookmark.url)) {
+            return;
+          }
+          markRecentTabReset(binding.tabId, bookmark.url);
           try {
             await chrome.tabs.update(binding.tabId, { url: bookmark.url, active: true });
             if (
@@ -2169,9 +2231,10 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               await chrome.tabs.reload(binding.tabId, { bypassCache: true });
             }
           } catch (err) {
-            console.warn('[Arctic] Could not reset Quick Access tab URL:', err);
-            if (isLocalFile) {
-              await checkAndNotifyFileAccessNeeded(err);
+            recentTabResetRef.current.delete(binding.tabId);
+            const notified = isLocalFile ? await checkAndNotifyFileAccessNeeded(err) : false;
+            if (!notified && !isExpectedTabNavigationError(err)) {
+              console.warn('[Arctic] Could not reset Quick Access tab URL:', err);
             }
             return;
           }
@@ -2196,7 +2259,15 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       await handleRowClick(bookmark);
     },
-    [activeTabId, checkAndNotifyFileAccessNeeded, handleRowClick, persistSession, refreshWindowTabs]
+    [
+      activeTabId,
+      checkAndNotifyFileAccessNeeded,
+      handleRowClick,
+      hasRecentTabReset,
+      markRecentTabReset,
+      persistSession,
+      refreshWindowTabs
+    ]
   );
 
   /**
@@ -2226,6 +2297,12 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             isUrlNavigatedAway(liveUrl, bookmark.url) ||
             (isLocalFile && Boolean(liveUrl) && liveUrl !== bookmark.url);
 
+          // If the first click of this double-click just initiated an identical reset navigation,
+          // let that navigation finish instead of firing a competing chrome.tabs.update that aborts it.
+          if (needsUrlReset && hasRecentTabReset(existingBinding.tabId, bookmark.url)) {
+            return;
+          }
+
           // Set optimistic loading state BEFORE awaiting reload/update so fast local HTML files
           // finishing before the promise resolves do not get stuck in 'loading'.
           const nextFavRev = (faviconRevByTabIdRef.current[existingBinding.tabId] || 0) + 1;
@@ -2240,6 +2317,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
           try {
             if (needsUrlReset) {
+              markRecentTabReset(existingBinding.tabId, bookmark.url);
               // Force navigate to original bookmark URL
               await chrome.tabs.update(existingBinding.tabId, {
                 url: bookmark.url,
@@ -2271,10 +2349,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
               }
             }
           } catch (err) {
-            console.warn('[Arctic] Could not reset/reload bookmark tab:', err);
+            if (needsUrlReset) {
+              recentTabResetRef.current.delete(existingBinding.tabId);
+            }
             await refreshWindowTabs();
-            if (isLocalFile) {
-              await checkAndNotifyFileAccessNeeded(err);
+            const notified = isLocalFile ? await checkAndNotifyFileAccessNeeded(err) : false;
+            if (!notified && !isExpectedTabNavigationError(err)) {
+              console.warn('[Arctic] Could not reset/reload bookmark tab:', err);
             }
             return;
           }
@@ -2309,7 +2390,14 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       await handleRowClick(bookmark);
     },
-    [checkAndNotifyFileAccessNeeded, handleRowClick, persistSession, refreshWindowTabs]
+    [
+      checkAndNotifyFileAccessNeeded,
+      handleRowClick,
+      hasRecentTabReset,
+      markRecentTabReset,
+      persistSession,
+      refreshWindowTabs
+    ]
   );
 
   /**
