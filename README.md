@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2.3.1-blue.svg" alt="Version 2.3.1" />
+  <img src="https://img.shields.io/badge/version-2.3.2-blue.svg" alt="Version 2.3.2" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License MIT" />
   <img src="https://img.shields.io/badge/manifest-v3-orange.svg" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/tests-342%20passed-brightgreen.svg" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-435%20passed-brightgreen.svg" alt="Tests" />
   <img src="https://img.shields.io/badge/privacy-100%25_local_%26_tracker--free-teal.svg" alt="Privacy" />
 </p>
 
