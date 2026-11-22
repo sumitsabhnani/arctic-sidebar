@@ -337,4 +337,18 @@ describe('BookmarkRow component', () => {
     expect(row).toHaveClass('theme-active-card');
     expect(row).toHaveClass('rounded-xl');
   });
+
+  it('commits inline bookmark rename when blurring outside the form and cancels cleanly on Cancel button', () => {
+    const onRenameBookmark = vi.fn();
+    render(<BookmarkRow {...defaultProps} onRenameBookmark={onRenameBookmark} />);
+
+    fireEvent.doubleClick(screen.getByText('Google Docs'));
+    const input = screen.getByDisplayValue('Google Docs');
+    fireEvent.change(input, { target: { value: 'Quarterly Docs' } });
+
+    // Blurring outside the form commits and closes the rename input
+    fireEvent.blur(input, { relatedTarget: document.body });
+    expect(onRenameBookmark).toHaveBeenCalledWith('b-101', 'Quarterly Docs');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
 });

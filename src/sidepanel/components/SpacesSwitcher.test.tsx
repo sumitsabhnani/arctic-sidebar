@@ -57,15 +57,23 @@ describe('SpacesSwitcher component', () => {
     expect(defaultProps.onCreateSpace).toHaveBeenCalledWith('Study & Research', 'code');
   });
 
-  it('triggers right-click context menu with rename and delete options', () => {
+  it('triggers right-click context menu with rename and delete options for non-Home spaces, and omits delete for Home', () => {
+    defaultProps.onOpenContextMenu.mockClear();
     render(<SpacesSwitcher {...defaultProps} />);
     const workBtn = screen.getByText('Work').closest('button')!;
     fireEvent.contextMenu(workBtn);
 
     expect(defaultProps.onOpenContextMenu).toHaveBeenCalled();
-    const contextMenuItems = defaultProps.onOpenContextMenu.mock.calls[0][1];
-    expect(contextMenuItems.some((item: { label: string }) => item.label.includes('Rename "Work"'))).toBe(true);
-    expect(contextMenuItems.some((item: { label: string }) => item.label.includes('Remove "Work" Space'))).toBe(true);
+    const workMenuItems = defaultProps.onOpenContextMenu.mock.calls[0][1];
+    expect(workMenuItems.some((item: { label: string }) => item.label.includes('Rename "Work"'))).toBe(true);
+    expect(workMenuItems.some((item: { label: string }) => item.label.includes('Remove "Work" Space'))).toBe(true);
+
+    defaultProps.onOpenContextMenu.mockClear();
+    const homeBtn = screen.getByText('Home').closest('button')!;
+    fireEvent.contextMenu(homeBtn);
+    const homeMenuItems = defaultProps.onOpenContextMenu.mock.calls[0][1];
+    expect(homeMenuItems.some((item: { label: string }) => item.label.includes('Rename "Home"'))).toBe(true);
+    expect(homeMenuItems.some((item: { label: string }) => item.label.includes('Remove "Home" Space'))).toBe(false);
   });
 
   it('handles item drop onto a space tab', () => {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Globe,
   RotateCcw,
@@ -87,13 +87,17 @@ interface BookmarkRowProps {
   highlightQuote?: string;
   isEditing?: boolean;
   editTitle?: string;
-  onStartRename?: () => void;
+  onStartRename?: (
+    type: 'openTab' | 'bookmark' | 'folder',
+    id: string | number,
+    currentTitle: string
+  ) => void;
   onChangeEditTitle?: (newTitle: string) => void;
   onSaveRename?: () => void;
   onCancelRename?: () => void;
 }
 
-export const BookmarkRow: React.FC<BookmarkRowProps> = ({
+export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
   bookmark,
   depth = 0,
   binding,
@@ -148,6 +152,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
   const [localIsEditing, setLocalIsEditing] = useState(false);
   const [localEditTitle, setLocalEditTitle] = useState(bookmark.title || '');
   const [isCopied, setIsCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+      }
+    };
+  }, []);
 
   const isControlled = typeof onStartRename === 'function';
   const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
@@ -186,12 +199,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     size: 32
   });
 
-  const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
-
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!onOpenContextMenu) return;
     e.preventDefault();
 
+    const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
     const isMultiSelected = Boolean(selectedBookmarkIds && selectedBookmarkIds.has(bookmark.id) && selectedBookmarkIds.size > 1);
 
     if (isMultiSelected) {
@@ -286,7 +298,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               icon: <Edit2 className="w-3.5 h-3.5" />,
               action: () => {
                 if (onStartRename) {
-                  onStartRename();
+                  onStartRename('bookmark', bookmark.id, bookmark.title || '');
                 } else {
                   setLocalEditTitle(bookmark.title || '');
                   setLocalIsEditing(true);
@@ -339,7 +351,9 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
         label: 'Copy Link',
         icon: <Link2 className="w-3.5 h-3.5" />,
         action: () => {
-          if (bookmark.url) navigator.clipboard.writeText(bookmark.url);
+          if (bookmark.url) {
+            Promise.resolve(navigator.clipboard?.writeText(bookmark.url)).catch(() => {});
+          }
         },
         dividerBefore: true
       },
@@ -349,7 +363,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
               label: 'Copy Highlight Quote',
               icon: <Quote className="w-3.5 h-3.5" />,
               action: () => {
-                navigator.clipboard.writeText(quoteText);
+                Promise.resolve(navigator.clipboard?.writeText(quoteText)).catch(() => {});
               }
             }
           ]
@@ -490,20 +504,24 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
     }
   };
 
+  const handleCommitRename = () => {
+    if (onSaveRename) {
+      onSaveRename();
+    } else {
+      const trimmed = effectiveEditTitle.trim();
+      if (trimmed && onRenameBookmark) {
+        void onRenameBookmark(bookmark.id, trimmed);
+      }
+      setLocalIsEditing(false);
+    }
+  };
+
   if (effectiveIsEditing) {
     return (
       <form
-        onSubmit={async (e) => {
+        onSubmit={(e) => {
           e.preventDefault();
-          if (onSaveRename) {
-            onSaveRename();
-          } else {
-            const trimmed = effectiveEditTitle.trim();
-            if (trimmed && onRenameBookmark) {
-              await onRenameBookmark(bookmark.id, trimmed);
-            }
-            setLocalIsEditing(false);
-          }
+          handleCommitRename();
         }}
         style={{ paddingLeft: `${8 + depth * 14}px` }}
         className="flex items-center h-[34px] pr-2 space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-xl border border-cyan-500/60"
@@ -527,6 +545,16 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
                 setLocalEditTitle(bookmark.title || '');
               }
             }
+          }}
+          onBlur={(e) => {
+            if (
+              e.currentTarget.form &&
+              e.relatedTarget &&
+              e.currentTarget.form.contains(e.relatedTarget as Node)
+            ) {
+              return;
+            }
+            void handleCommitRename();
           }}
           autoFocus
           onFocus={(e) => e.target.select()}
@@ -707,7 +735,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
           onDoubleClick={(e) => {
             e.stopPropagation();
             if (onStartRename) {
-              onStartRename();
+              onStartRename('bookmark', bookmark.id, bookmark.title || '');
             } else {
               setLocalEditTitle(bookmark.title || '');
               setLocalIsEditing(true);
@@ -794,9 +822,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
             onClick={(e) => {
               e.stopPropagation();
               if (bookmark.url) {
-                navigator.clipboard.writeText(bookmark.url);
+                Promise.resolve(navigator.clipboard?.writeText(bookmark.url)).catch(() => {});
                 setIsCopied(true);
-                setTimeout(() => setIsCopied(false), 1500);
+                if (copiedTimerRef.current) {
+                  clearTimeout(copiedTimerRef.current);
+                }
+                copiedTimerRef.current = setTimeout(() => {
+                  copiedTimerRef.current = null;
+                  setIsCopied(false);
+                }, 1500);
               }
             }}
             className={`hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md transition-colors ${
@@ -873,4 +907,4 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = ({
       </div>
     </div>
   );
-};
+});
