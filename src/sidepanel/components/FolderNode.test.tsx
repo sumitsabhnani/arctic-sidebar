@@ -236,4 +236,15 @@ describe('FolderNode Component', () => {
 
     expect(onDropItemToFolder).not.toHaveBeenCalled();
   });
+
+  it('does not trigger folder rename when double-clicking the New subfolder hover button', () => {
+    const onStartRename = vi.fn();
+    const props = createBaseFolderProps({ onStartRename });
+    const { container } = render(<FolderNode {...props} />);
+
+    const newSubfolderBtn = container.querySelector('[data-tooltip="New subfolder"]') as HTMLElement;
+    fireEvent.doubleClick(newSubfolderBtn);
+
+    expect(onStartRename).not.toHaveBeenCalled();
+  });
 });

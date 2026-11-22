@@ -980,4 +980,220 @@ describe('useBookmarks hook', () => {
       'folder-b'
     ]);
   });
+
+  it('setWorkspaceFolderId and setQuickAccessFolderId on a non-Home space do not corrupt Home and persist custom external folders across reloads', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '1',
+            title: 'Bookmarks Bar',
+            children: [
+              {
+                id: 'ext-work-ws',
+                title: 'External Work Folder',
+                children: [{ id: 'ext-bm-1', title: 'Client App', url: 'https://client.example.com' }]
+              },
+              {
+                id: 'ext-work-qa',
+                title: 'External Work QA',
+                children: [{ id: 'ext-qa-1', title: 'Slack', url: 'https://slack.com' }]
+              }
+            ]
+          },
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [{ id: '11', title: 'Quick Access', children: [] }]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const initialHomeFolderId = result.current.spaces.find((s) => s.id === 'home')?.folderId;
+    const initialHomeQaId = result.current.spaces.find((s) => s.id === 'home')?.quickAccessFolderId;
+
+    // Create and stay on a non-Home space "Work"
+    await act(async () => {
+      await result.current.createSpace('Work', 'briefcase');
+    });
+
+    // Customize Work's workspace and Quick Access folders to external folders outside Arctic
+    await act(async () => {
+      await result.current.setWorkspaceFolderId('ext-work-ws');
+      await result.current.setQuickAccessFolderId('ext-work-qa');
+    });
+
+    // Global Home storage keys must NOT have been overwritten
+    expect(mockChrome.__getLocalStorage().workspaceFolderId).toBeUndefined();
+    expect(mockChrome.__getLocalStorage().quickAccessFolderId).toBeUndefined();
+
+    // Home space keeps its original folders; Work retains its custom external folders even after reload
+    const homeSpace = result.current.spaces.find((s) => s.id === 'home');
+    const workSpace = result.current.spaces.find((s) => s.name === 'Work');
+    expect(homeSpace?.folderId).toBe(initialHomeFolderId);
+    expect(homeSpace?.quickAccessFolderId).toBe(initialHomeQaId);
+    expect(workSpace?.folderId).toBe('ext-work-ws');
+    expect(workSpace?.quickAccessFolderId).toBe('ext-work-qa');
+    expect(result.current.workspaceNode?.id).toBe('ext-work-ws');
+    expect(result.current.quickAccessNode?.id).toBe('ext-work-qa');
+  });
+
+  it('skips redundant storage.sync writes on unchanged bookmark reloads and skips getTree on selectSpace', async () => {
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await result.current.createSpace('Work', 'briefcase');
+    });
+
+    const workId = result.current.spaces.find((s) => s.name === 'Work')!.id;
+    const workFolderId = result.current.activeFolderIds.workspaceId!;
+
+    vi.mocked(chrome.storage.sync.set).mockClear();
+    vi.mocked(chrome.bookmarks.getTree).mockClear();
+
+    // Creating a bookmark inside Work does not alter spaces/activeSpaceId -> zero storage.sync writes
+    await act(async () => {
+      await result.current.createBookmark(workFolderId, 'Docs', 'https://docs.example.com');
+    });
+    expect(chrome.storage.sync.set).not.toHaveBeenCalled();
+
+    // Switching space skips redundant chrome.bookmarks.getTree() when folder list is already loaded
+    vi.mocked(chrome.bookmarks.getTree).mockClear();
+    await act(async () => {
+      await result.current.selectSpace('home');
+    });
+    expect(chrome.bookmarks.getTree).not.toHaveBeenCalled();
+    expect(result.current.activeSpaceId).toBe('home');
+
+    await act(async () => {
+      await result.current.selectSpace(workId);
+    });
+    expect(chrome.bookmarks.getTree).not.toHaveBeenCalled();
+    expect(result.current.activeSpaceId).toBe(workId);
+  });
+
+  it('deleteSpace cleans up persistedBindingsByBookmarkId and renameSpace on Home preserves a single Home space without duplicating folders', async () => {
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: '11', title: 'Quick Access', children: [] },
+                      { id: 'bm-home-keep', title: 'Keep', url: 'https://keep.example.com' }
+                    ]
+                  },
+                  {
+                    id: '20',
+                    title: 'TempSpace',
+                    children: [
+                      {
+                        id: '21',
+                        title: 'Quick Access',
+                        children: [{ id: 'bm-temp-qa', title: 'Temp QA', url: 'https://qa.example.com' }]
+                      },
+                      { id: 'bm-temp-ws', title: 'Temp Link', url: 'https://temp.example.com' }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({
+      persistedBindingsByBookmarkId: {
+        'bm-home-keep': {
+          bookmarkId: 'bm-home-keep',
+          originalUrl: 'https://keep.example.com',
+          currentUrl: 'https://keep.example.com/1',
+          currentTitle: 'Keep',
+          isNavigatedAway: true,
+          updatedAt: 1
+        },
+        'bm-temp-qa': {
+          bookmarkId: 'bm-temp-qa',
+          originalUrl: 'https://qa.example.com',
+          currentUrl: 'https://qa.example.com/1',
+          currentTitle: 'Temp QA',
+          isNavigatedAway: true,
+          updatedAt: 1
+        },
+        'bm-temp-ws': {
+          bookmarkId: 'bm-temp-ws',
+          originalUrl: 'https://temp.example.com',
+          currentUrl: 'https://temp.example.com/1',
+          currentTitle: 'Temp Link',
+          isNavigatedAway: true,
+          updatedAt: 1
+        }
+      }
+    });
+
+    const { result } = renderHook(() => useBookmarks());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const tempSpace = result.current.spaces.find((s) => s.name === 'TempSpace')!;
+    expect(tempSpace).toBeDefined();
+
+    // 1. Deleting TempSpace cleans up persisted bindings for both its QA and workspace bookmarks
+    await act(async () => {
+      await result.current.deleteSpace(tempSpace.id);
+    });
+
+    const persisted = mockChrome.__getLocalStorage().persistedBindingsByBookmarkId as Record<
+      string,
+      unknown
+    >;
+    expect(persisted['bm-temp-qa']).toBeUndefined();
+    expect(persisted['bm-temp-ws']).toBeUndefined();
+    expect(persisted['bm-home-keep']).toBeDefined();
+
+    // 2. Renaming the built-in Home space keeps a single space named "Main" without spawning a duplicate Home folder
+    await act(async () => {
+      await result.current.renameSpace('home', 'Main');
+    });
+
+    expect(result.current.spaces).toHaveLength(1);
+    expect(result.current.spaces[0].id).toBe('home');
+    expect(result.current.spaces[0].name).toBe('Main');
+    expect(result.current.spaces[0].folderId).toBe('12');
+  });
 });

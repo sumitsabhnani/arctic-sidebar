@@ -36,6 +36,44 @@ function inferSpaceIcon(name: string): string {
   return 'folder';
 }
 
+function areSpacesEqual(a: SpaceItem[] | undefined, b: SpaceItem[]): boolean {
+  if (!Array.isArray(a) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const sa = a[i];
+    const sb = b[i];
+    if (
+      sa.id !== sb.id ||
+      sa.name !== sb.name ||
+      sa.folderId !== sb.folderId ||
+      sa.icon !== sb.icon ||
+      sa.quickAccessFolderId !== sb.quickAccessFolderId
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function collectSubtreeBookmarkIds(nodeId: string): Promise<string[]> {
+  try {
+    const [sub] = await chrome.bookmarks.getSubTree(nodeId);
+    if (!sub) return [nodeId];
+    const ids: string[] = [];
+    const walk = (n: chrome.bookmarks.BookmarkTreeNode) => {
+      if (n.url) ids.push(n.id);
+      if (n.children) {
+        for (const child of n.children) {
+          walk(child);
+        }
+      }
+    };
+    walk(sub);
+    return ids;
+  } catch {
+    return [nodeId];
+  }
+}
+
 export function useBookmarks() {
   const [quickAccessNode, setQuickAccessNode] = useState<chrome.bookmarks.BookmarkTreeNode | null>(null);
   const [workspaceNode, setWorkspaceNode] = useState<chrome.bookmarks.BookmarkTreeNode | null>(null);
@@ -57,11 +95,22 @@ export function useBookmarks() {
   });
   const [loading, setLoading] = useState<boolean>(true);
 
-  const isInternalMutationRef = useRef<boolean>(false);
+  const isMountedRef = useRef<boolean>(true);
+  const internalMutationCountRef = useRef<number>(0);
   const isLoadingRef = useRef<boolean>(false);
   const pendingReloadRef = useRef<boolean>(false);
+  const pendingFolderListRefreshRef = useRef<boolean>(false);
+  const folderListReqIdRef = useRef<number>(0);
   const bookmarkDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const storageDebounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const spacesRef = useRef<SpaceItem[]>(spaces);
+  spacesRef.current = spaces;
+  const activeSpaceIdRef = useRef<string>(activeSpaceId);
+  activeSpaceIdRef.current = activeSpaceId;
+  const activeFolderIdsRef = useRef(activeFolderIds);
+  activeFolderIdsRef.current = activeFolderIds;
+  const allFoldersRef = useRef<BookmarkFolderOption[]>(allFolders);
+  allFoldersRef.current = allFolders;
   const treesSnapshotRef = useRef<chrome.bookmarks.BookmarkTreeNode[]>([]);
   treesSnapshotRef.current = [
     ...(quickAccessNode ? [quickAccessNode] : []),
@@ -69,7 +118,15 @@ export function useBookmarks() {
     ...allSpaceBookmarkNodes
   ];
 
-  const persistSpaces = async (newSpaces: SpaceItem[], newActiveSpaceId?: string) => {
+  const beginInternalMutation = useCallback(() => {
+    internalMutationCountRef.current += 1;
+  }, []);
+
+  const endInternalMutation = useCallback(() => {
+    internalMutationCountRef.current = Math.max(0, internalMutationCountRef.current - 1);
+  }, []);
+
+  const persistSpaces = useCallback(async (newSpaces: SpaceItem[], newActiveSpaceId?: string) => {
     const payload: Record<string, unknown> = { spaces: newSpaces };
     if (newActiveSpaceId) {
       payload.activeSpaceId = newActiveSpaceId;
@@ -82,15 +139,19 @@ export function useBookmarks() {
         console.warn('[Arctic] Could not sync spaces to storage.sync:', e);
       }
     }
-  };
+  }, []);
 
   // Load collapsed folders from storage.local
   useEffect(() => {
+    isMountedRef.current = true;
     chrome.storage.local.get(['collapsedFolderIds'], (res) => {
-      if (res.collapsedFolderIds) {
+      if (isMountedRef.current && res.collapsedFolderIds) {
         setCollapsedFolderIds(res.collapsedFolderIds as Record<string, boolean>);
       }
     });
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   const toggleFolderCollapse = useCallback((folderId: string) => {
@@ -108,13 +169,13 @@ export function useBookmarks() {
   const setAllFoldersCollapsed = useCallback((collapsed: boolean) => {
     setCollapsedFolderIds((prev) => {
       const updated = { ...prev };
-      for (const folder of allFolders) {
+      for (const folder of allFoldersRef.current) {
         updated[folder.id] = collapsed;
       }
       chrome.storage.local.set({ collapsedFolderIds: updated });
       return updated;
     });
-  }, [allFolders]);
+  }, []);
 
   const expandFoldersById = useCallback((folderIds: string[]) => {
     if (folderIds.length === 0) return;
@@ -298,7 +359,8 @@ export function useBookmarks() {
    * and automatically clean up / consolidate any duplicate or empty legacy folders.
    */
   const ensureDefaultFolders = async (
-    activeSpaceNamesLower: Set<string> = new Set()
+    activeSpaceNamesLower: Set<string> = new Set(),
+    knownHomeFolderId?: string
   ): Promise<{
     rootId: string;
     quickAccessId: string;
@@ -485,13 +547,19 @@ export function useBookmarks() {
       }
     }
 
-    // Find or create 'Home'
-    let homeFolder = dedupedChildren.find(
-      (c) =>
-        !c.url &&
-        !removedIds.has(c.id) &&
-        (c.title.trim().toLowerCase() === 'home' || c.title.trim().toLowerCase() === 'workspace')
-    );
+    // Find or create 'Home' (respecting knownHomeFolderId so renaming Home never spawns a duplicate folder)
+    let homeFolder =
+      (knownHomeFolderId
+        ? dedupedChildren.find(
+            (c) => !c.url && !removedIds.has(c.id) && c.id === knownHomeFolderId
+          )
+        : undefined) ||
+      dedupedChildren.find(
+        (c) =>
+          !c.url &&
+          !removedIds.has(c.id) &&
+          (c.title.trim().toLowerCase() === 'home' || c.title.trim().toLowerCase() === 'workspace')
+      );
     if (!homeFolder) {
       homeFolder = await chrome.bookmarks.create({
         parentId: arcticSidebar.id,
@@ -599,15 +667,18 @@ export function useBookmarks() {
   /**
    * Core function to reload bookmarks from Chrome
    */
-  const loadBookmarks = useCallback(async () => {
+  const loadBookmarks = useCallback(async (options?: { skipFolderListRefresh?: boolean }) => {
     if (isLoadingRef.current) {
       pendingReloadRef.current = true;
+      if (!options?.skipFolderListRefresh) {
+        pendingFolderListRefreshRef.current = true;
+      }
       return;
     }
     isLoadingRef.current = true;
+    beginInternalMutation();
 
     try {
-      isInternalMutationRef.current = true;
       // Check stored custom settings in storage.local first so ensureDefaultFolders knows which spaces are active
       const settings = (await chrome.storage.local.get([
         'quickAccessFolderId',
@@ -620,8 +691,10 @@ export function useBookmarks() {
       const activeSpaceNamesLower = new Set(
         currentSpaces.map((s) => s.name.trim().toLowerCase())
       );
+      const knownHomeFolderId =
+        settings.workspaceFolderId || currentSpaces.find((s) => s.id === 'home')?.folderId;
 
-      const defaultIds = await ensureDefaultFolders(activeSpaceNamesLower);
+      const defaultIds = await ensureDefaultFolders(activeSpaceNamesLower, knownHomeFolderId);
       const homeFolderId = settings.workspaceFolderId || defaultIds.workspaceId;
       const children = defaultIds.arcticSidebarSubtree.children || [];
 
@@ -630,22 +703,32 @@ export function useBookmarks() {
       const ensuredSpaces: SpaceItem[] = [];
       const seenSpaceIds = new Set<string>();
       const seenSpaceNamesLower = new Set<string>();
+      const seenFolderIds = new Set<string>();
 
       for (const s of currentSpaces) {
         let updated = { ...s };
         if (s.id === 'home' || s.name.toLowerCase() === 'home' || s.name.toLowerCase() === 'workspace') {
           if (hasHome) continue; // deduplicate multiple home entries
           hasHome = true;
+          const trimmedHomeName = s.name.trim();
+          const resolvedHomeName =
+            s.id === 'home' && trimmedHomeName && trimmedHomeName.toLowerCase() !== 'workspace'
+              ? trimmedHomeName
+              : 'Home';
+          const resolvedHomeQaId = settings.quickAccessFolderId || defaultIds.quickAccessId;
           updated = {
             ...updated,
             id: 'home',
-            name: 'Home',
+            name: resolvedHomeName,
             folderId: homeFolderId,
-            icon: 'home',
-            quickAccessFolderId: defaultIds.quickAccessId
+            icon: updated.icon || 'home',
+            quickAccessFolderId: resolvedHomeQaId
           };
           seenSpaceIds.add('home');
           seenSpaceNamesLower.add('home');
+          seenSpaceNamesLower.add(resolvedHomeName.toLowerCase());
+          seenFolderIds.add(homeFolderId);
+          seenFolderIds.add(defaultIds.workspaceId);
           ensuredSpaces.push(updated);
         } else {
           // Ensure unique space ID
@@ -653,17 +736,18 @@ export function useBookmarks() {
             updated.id = `space-${updated.folderId || Date.now()}-${ensuredSpaces.length}`;
           }
 
-          // Reconcile folderId with actual bookmark tree, and merge any duplicate folders with the same space name
+          // Reconcile folderId with actual bookmark tree while respecting custom external folders
           const matchingFolders = children.filter(
             (c) => !c.url && c.title.toLowerCase() === updated.name.toLowerCase()
           );
+          const inArcticById = updated.folderId
+            ? children.find((c) => !c.url && c.id === updated.folderId)
+            : undefined;
           let primaryFolder: chrome.bookmarks.BookmarkTreeNode | undefined;
-          if (matchingFolders.length > 0) {
-            primaryFolder =
-              matchingFolders.find((c) => c.id === updated.folderId) || matchingFolders[0];
-            updated.folderId = primaryFolder.id;
 
-            // Merge any duplicate folders of the same space name into primaryFolder
+          if (inArcticById) {
+            primaryFolder = inArcticById;
+            // Merge any duplicate folders of the same space name under Arctic into primaryFolder
             for (const dup of matchingFolders) {
               if (dup.id === primaryFolder.id) continue;
               try {
@@ -673,41 +757,79 @@ export function useBookmarks() {
               }
             }
           } else {
-            let folderExists = false;
+            let customExternalFolder: chrome.bookmarks.BookmarkTreeNode | undefined;
             if (updated.folderId) {
               try {
                 const sub = await chrome.bookmarks.getSubTree(updated.folderId);
-                if (sub && sub.length > 0) {
-                  folderExists = true;
-                  primaryFolder = sub[0];
+                if (sub && sub.length > 0 && !sub[0].url) {
+                  customExternalFolder = sub[0];
                 }
               } catch {
-                folderExists = false;
+                customExternalFolder = undefined;
               }
             }
-            if (!folderExists) {
+
+            if (customExternalFolder) {
+              primaryFolder = customExternalFolder;
+            } else if (matchingFolders.length > 0) {
+              primaryFolder = matchingFolders[0];
+              updated.folderId = primaryFolder.id;
+
+              for (const dup of matchingFolders) {
+                if (dup.id === primaryFolder.id) continue;
+                try {
+                  await mergeAndRemoveFolder(primaryFolder, dup);
+                } catch {
+                  // ignore
+                }
+              }
+            } else {
               // Stale space entry whose bookmark folder was already deleted — skip it!
               continue;
             }
           }
 
-          // Each space has its own Quick Access subfolder directly inside its space folder (<Space> / Quick Access)
-          const qaChild = primaryFolder?.children?.find(
-            (c) => !c.url && c.title.trim().toLowerCase() === QUICK_ACCESS_FOLDER_NAME.toLowerCase()
-          );
-          if (qaChild) {
-            updated.quickAccessFolderId = qaChild.id;
-          } else if (primaryFolder) {
-            try {
-              const ensuredQa = await ensureSpaceQuickAccessChild(primaryFolder, [], false);
-              updated.quickAccessFolderId = ensuredQa.id;
-            } catch {
-              updated.quickAccessFolderId = defaultIds.quickAccessId;
+          // Preserve a valid custom Quick Access folder if configured; otherwise use '<Space> / Quick Access'
+          let hasValidStoredQa = false;
+          if (updated.quickAccessFolderId) {
+            const directQa = primaryFolder?.children?.find(
+              (c) => !c.url && c.id === updated.quickAccessFolderId
+            );
+            if (directQa) {
+              hasValidStoredQa = true;
+            } else if (updated.quickAccessFolderId !== defaultIds.quickAccessId) {
+              try {
+                const subQa = await chrome.bookmarks.getSubTree(updated.quickAccessFolderId);
+                if (subQa && subQa.length > 0 && !subQa[0].url) {
+                  hasValidStoredQa = true;
+                }
+              } catch {
+                hasValidStoredQa = false;
+              }
+            }
+          }
+
+          if (!hasValidStoredQa) {
+            const qaChild = primaryFolder?.children?.find(
+              (c) => !c.url && c.title.trim().toLowerCase() === QUICK_ACCESS_FOLDER_NAME.toLowerCase()
+            );
+            if (qaChild) {
+              updated.quickAccessFolderId = qaChild.id;
+            } else if (primaryFolder) {
+              try {
+                const ensuredQa = await ensureSpaceQuickAccessChild(primaryFolder, [], false);
+                updated.quickAccessFolderId = ensuredQa.id;
+              } catch {
+                updated.quickAccessFolderId = defaultIds.quickAccessId;
+              }
             }
           }
 
           seenSpaceIds.add(updated.id);
           seenSpaceNamesLower.add(updated.name.trim().toLowerCase());
+          if (updated.folderId) {
+            seenFolderIds.add(updated.folderId);
+          }
           ensuredSpaces.push(updated);
         }
       }
@@ -718,10 +840,12 @@ export function useBookmarks() {
           name: 'Home',
           folderId: homeFolderId,
           icon: 'home',
-          quickAccessFolderId: defaultIds.quickAccessId
+          quickAccessFolderId: settings.quickAccessFolderId || defaultIds.quickAccessId
         });
         seenSpaceIds.add('home');
         seenSpaceNamesLower.add('home');
+        seenFolderIds.add(homeFolderId);
+        seenFolderIds.add(defaultIds.workspaceId);
       }
 
       // Automatically discover any non-Home space folders present under Arctic root
@@ -733,6 +857,7 @@ export function useBookmarks() {
           lower === 'workspace' ||
           lower === 'quick access' ||
           lower.startsWith('quick access (') ||
+          seenFolderIds.has(child.id) ||
           seenSpaceNamesLower.has(lower)
         ) {
           continue;
@@ -757,6 +882,7 @@ export function useBookmarks() {
 
         seenSpaceIds.add(discoveredId);
         seenSpaceNamesLower.add(lower);
+        seenFolderIds.add(child.id);
         ensuredSpaces.push({
           id: discoveredId,
           name: child.title.trim(),
@@ -773,8 +899,13 @@ export function useBookmarks() {
           ? settings.activeSpaceId
           : currentSpaces[0].id;
 
-      // Persist spaces to both storage.local and storage.sync
-      await persistSpaces(currentSpaces, currentActiveSpaceId);
+      // Only persist spaces to storage.local & storage.sync when spaces or activeSpaceId actually changed
+      if (
+        !areSpacesEqual(settings.spaces, currentSpaces) ||
+        settings.activeSpaceId !== currentActiveSpaceId
+      ) {
+        await persistSpaces(currentSpaces, currentActiveSpaceId);
+      }
 
       const activeSpace =
         currentSpaces.find((s) => s.id === currentActiveSpaceId) || currentSpaces[0];
@@ -785,13 +916,18 @@ export function useBookmarks() {
           ? settings.quickAccessFolderId
           : activeSpace.quickAccessFolderId || defaultIds.quickAccessId;
 
-      setSpaces(currentSpaces);
-      setActiveSpaceId(currentActiveSpaceId);
-      setActiveFolderIds({
+      if (!isMountedRef.current) return;
+
+      spacesRef.current = currentSpaces;
+      activeSpaceIdRef.current = currentActiveSpaceId;
+      activeFolderIdsRef.current = {
         quickAccessId: activeQaId,
         workspaceId,
         defaultRootId: defaultIds.rootId
-      });
+      };
+      setSpaces(currentSpaces);
+      setActiveSpaceId(currentActiveSpaceId);
+      setActiveFolderIds(activeFolderIdsRef.current);
 
       // Load Quick Access sub-tree (reuse already fetched node when matching default)
       let resolvedQaNode: chrome.bookmarks.BookmarkTreeNode | null = null;
@@ -812,6 +948,7 @@ export function useBookmarks() {
       if (resolvedQaNode) {
         resolvedQaNode = stampBookmarkTreeIndices(resolvedQaNode);
       }
+      if (!isMountedRef.current) return;
       setQuickAccessNode(resolvedQaNode);
 
       // Load active Space / Home sub-tree (reuse already fetched node when matching default)
@@ -830,6 +967,7 @@ export function useBookmarks() {
       if (resolvedWsNode) {
         resolvedWsNode = stampBookmarkTreeIndices(resolvedWsNode);
       }
+      if (!isMountedRef.current) return;
       setWorkspaceNode(resolvedWsNode);
 
       // Assemble bookmark subtrees across ALL Spaces (active space first, then all other spaces)
@@ -881,41 +1019,63 @@ export function useBookmarks() {
         }
       }
 
+      if (!isMountedRef.current) return;
       setAllSpaceBookmarkNodes(combinedSpaceNodes);
 
       // Unblock UI immediately before loading full bookmark folder dropdown options in background
       setLoading(false);
 
-      // Asynchronously load all folders for Settings dropdown selection
-      chrome.bookmarks
-        .getTree()
-        .then((fullTree) => {
-          setAllFolders(collectFolderOptions(fullTree));
-        })
-        .catch((err) => {
-          console.warn('[Arctic] Could not load full folder list:', err);
-        });
+      // Asynchronously load all folders for Settings dropdown selection (skip when only switching spaces)
+      if (!options?.skipFolderListRefresh || allFoldersRef.current.length === 0) {
+        const reqId = ++folderListReqIdRef.current;
+        chrome.bookmarks
+          .getTree()
+          .then((fullTree) => {
+            if (isMountedRef.current && reqId === folderListReqIdRef.current) {
+              setAllFolders(collectFolderOptions(fullTree));
+            }
+          })
+          .catch((err) => {
+            console.warn('[Arctic] Could not load full folder list:', err);
+          });
+      }
     } catch (err) {
       console.error('[Arctic] Error loading bookmarks:', err);
     } finally {
-      isInternalMutationRef.current = false;
+      endInternalMutation();
       isLoadingRef.current = false;
-      setLoading(false);
-      if (pendingReloadRef.current) {
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
+      if (pendingReloadRef.current && isMountedRef.current) {
+        const needsFolderList = pendingFolderListRefreshRef.current;
         pendingReloadRef.current = false;
-        loadBookmarks();
+        pendingFolderListRefreshRef.current = false;
+        void loadBookmarks({ skipFolderListRefresh: !needsFolderList });
       }
     }
-  }, []);
+  }, [beginInternalMutation, endInternalMutation, persistSpaces]);
 
   // Switch active Space
   const selectSpace = useCallback(
     async (spaceId: string) => {
-      await chrome.storage.local.set({ activeSpaceId: spaceId });
-      setActiveSpaceId(spaceId);
-      await loadBookmarks();
+      beginInternalMutation();
+      try {
+        await chrome.storage.local.set({ activeSpaceId: spaceId });
+        if (chrome.storage && chrome.storage.sync) {
+          try {
+            await chrome.storage.sync.set({ activeSpaceId: spaceId });
+          } catch (e) {
+            console.warn('[Arctic] Could not sync activeSpaceId to storage.sync:', e);
+          }
+        }
+        setActiveSpaceId(spaceId);
+      } finally {
+        endInternalMutation();
+      }
+      await loadBookmarks({ skipFolderListRefresh: true });
     },
-    [loadBookmarks]
+    [beginInternalMutation, endInternalMutation, loadBookmarks]
   );
 
   // Create a new Space (reuses or merges any existing folder with the same name under Arctic root, or creates a new one)
@@ -923,9 +1083,10 @@ export function useBookmarks() {
     async (name: string, icon: string = 'folder', existingFolderId?: string) => {
       const trimmed = name.trim();
       if (!trimmed) return;
-      isInternalMutationRef.current = true;
+      beginInternalMutation();
       try {
-        const parentId = activeFolderIds.defaultRootId || '2';
+        const parentId = activeFolderIdsRef.current.defaultRootId || '2';
+        const activeQaId = activeFolderIdsRef.current.quickAccessId;
         const trimmedLower = trimmed.toLowerCase();
         const targetQaTitle = `Quick Access (${trimmed})`;
         const targetQaLower = targetQaTitle.toLowerCase();
@@ -973,7 +1134,7 @@ export function useBookmarks() {
           const legacyQaFolders = rootChildren.filter(
             (c) =>
               !c.url &&
-              c.id !== activeFolderIds.quickAccessId &&
+              c.id !== activeQaId &&
               c.title.toLowerCase() === targetQaLower
           );
           const ensuredQa = await ensureSpaceQuickAccessChild(
@@ -983,11 +1144,14 @@ export function useBookmarks() {
           );
           qaFolderId = ensuredQa.id;
         } catch {
-          qaFolderId = activeFolderIds.quickAccessId || parentId;
+          qaFolderId = activeQaId || parentId;
         }
 
         const stored = (await chrome.storage.local.get(['spaces'])) as LocalSettings;
-        const baseSpaces = Array.isArray(stored.spaces) && stored.spaces.length > 0 ? stored.spaces : spaces;
+        const baseSpaces =
+          Array.isArray(stored.spaces) && stored.spaces.length > 0
+            ? stored.spaces
+            : spacesRef.current;
 
         const existingSpaceIdx = baseSpaces.findIndex(
           (s) => s.name.toLowerCase() === trimmedLower && s.id !== 'home'
@@ -1017,11 +1181,11 @@ export function useBookmarks() {
 
         await persistSpaces(updatedSpaces, targetSpaceId);
       } finally {
-        isInternalMutationRef.current = false;
+        endInternalMutation();
       }
       await loadBookmarks();
     },
-    [activeFolderIds.defaultRootId, activeFolderIds.quickAccessId, spaces, loadBookmarks]
+    [beginInternalMutation, endInternalMutation, persistSpaces, loadBookmarks]
   );
 
   // Rename a Space
@@ -1029,12 +1193,17 @@ export function useBookmarks() {
     async (spaceId: string, newName: string) => {
       const trimmed = newName.trim();
       if (!trimmed) return;
-      isInternalMutationRef.current = true;
+      beginInternalMutation();
       try {
         const stored = (await chrome.storage.local.get(['spaces'])) as LocalSettings;
-        const baseSpaces = Array.isArray(stored.spaces) && stored.spaces.length > 0 ? stored.spaces : spaces;
-        const target = baseSpaces.find((s) => s.id === spaceId) || spaces.find((s) => s.id === spaceId);
-        if (target) {
+        const baseSpaces =
+          Array.isArray(stored.spaces) && stored.spaces.length > 0
+            ? stored.spaces
+            : spacesRef.current;
+        const target =
+          baseSpaces.find((s) => s.id === spaceId) ||
+          spacesRef.current.find((s) => s.id === spaceId);
+        if (target && target.folderId) {
           try {
             await chrome.bookmarks.update(target.folderId, { title: trimmed });
           } catch {
@@ -1044,49 +1213,60 @@ export function useBookmarks() {
         const updated = baseSpaces.map((s) => (s.id === spaceId ? { ...s, name: trimmed } : s));
         await persistSpaces(updated);
       } finally {
-        isInternalMutationRef.current = false;
+        endInternalMutation();
       }
       await loadBookmarks();
     },
-    [spaces, loadBookmarks]
+    [beginInternalMutation, endInternalMutation, persistSpaces, loadBookmarks]
   );
 
-  // Delete a Space (keeps at least 1 space)
+  // Delete a Space (keeps at least 1 space and cleans up persisted tab bindings)
   const deleteSpace = useCallback(
     async (spaceId: string) => {
       const stored = (await chrome.storage.local.get(['spaces', 'activeSpaceId'])) as LocalSettings;
-      const baseSpaces = Array.isArray(stored.spaces) && stored.spaces.length > 0 ? stored.spaces : spaces;
+      const baseSpaces =
+        Array.isArray(stored.spaces) && stored.spaces.length > 0
+          ? stored.spaces
+          : spacesRef.current;
       if (baseSpaces.length <= 1) return;
 
-      isInternalMutationRef.current = true;
+      beginInternalMutation();
       try {
-        const target = baseSpaces.find((s) => s.id === spaceId) || spaces.find((s) => s.id === spaceId);
+        const target =
+          baseSpaces.find((s) => s.id === spaceId) ||
+          spacesRef.current.find((s) => s.id === spaceId);
         const homeId = baseSpaces.find((s) => s.id === 'home')?.folderId;
         const homeQaId = baseSpaces.find((s) => s.id === 'home')?.quickAccessFolderId;
 
         if (target && target.id !== 'home') {
           const removedIds = new Set<string>();
-          if (target.quickAccessFolderId && target.quickAccessFolderId !== homeQaId) {
+          const bookmarkIdsToClean = new Set<string>();
+
+          const collectAndRemoveTree = async (folderId: string) => {
+            const bmIds = await collectSubtreeBookmarkIds(folderId);
+            for (const bId of bmIds) {
+              bookmarkIdsToClean.add(bId);
+            }
             try {
-              await chrome.bookmarks.removeTree(target.quickAccessFolderId);
-              removedIds.add(target.quickAccessFolderId);
+              await chrome.bookmarks.removeTree(folderId);
+              removedIds.add(folderId);
             } catch {
               // ignore
             }
+          };
+
+          if (target.quickAccessFolderId && target.quickAccessFolderId !== homeQaId) {
+            await collectAndRemoveTree(target.quickAccessFolderId);
           }
           if (target.folderId && target.folderId !== homeId) {
-            try {
-              await chrome.bookmarks.removeTree(target.folderId);
-              removedIds.add(target.folderId);
-            } catch {
-              // ignore
-            }
+            await collectAndRemoveTree(target.folderId);
           }
 
           // Also clean up any matching folder by title under the Arctic root in case folderId was stale
-          if (activeFolderIds.defaultRootId) {
+          const defaultRootId = activeFolderIdsRef.current.defaultRootId;
+          if (defaultRootId) {
             try {
-              const rootChildren = await chrome.bookmarks.getChildren(activeFolderIds.defaultRootId);
+              const rootChildren = await chrome.bookmarks.getChildren(defaultRootId);
               const targetTitleLower = target.name.toLowerCase();
               const targetQaTitleLower = `quick access (${targetTitleLower})`;
               for (const child of rootChildren) {
@@ -1097,17 +1277,16 @@ export function useBookmarks() {
                   child.id !== homeId &&
                   child.id !== homeQaId
                 ) {
-                  try {
-                    await chrome.bookmarks.removeTree(child.id);
-                    removedIds.add(child.id);
-                  } catch {
-                    // ignore
-                  }
+                  await collectAndRemoveTree(child.id);
                 }
               }
             } catch {
               // ignore
             }
+          }
+
+          if (bookmarkIdsToClean.size > 0) {
+            await removePersistedBindings(Array.from(bookmarkIdsToClean));
           }
         }
 
@@ -1120,7 +1299,7 @@ export function useBookmarks() {
           updated.length > 0
             ? updated
             : [baseSpaces.find((s) => s.id === 'home') || baseSpaces[0]];
-        const currentAct = stored.activeSpaceId || activeSpaceId;
+        const currentAct = stored.activeSpaceId || activeSpaceIdRef.current;
         const nextActive =
           finalSpaces.some((s) => s.id === currentAct) ? currentAct : finalSpaces[0].id;
 
@@ -1128,35 +1307,68 @@ export function useBookmarks() {
         setActiveSpaceId(nextActive);
         await persistSpaces(finalSpaces, nextActive);
       } finally {
-        isInternalMutationRef.current = false;
+        endInternalMutation();
       }
       await loadBookmarks();
     },
-    [spaces, activeSpaceId, activeFolderIds.defaultRootId, loadBookmarks]
+    [beginInternalMutation, endInternalMutation, persistSpaces, loadBookmarks]
   );
 
-  // Set custom folder IDs
-  const setQuickAccessFolderId = async (id: string) => {
-    const updatedSpaces = spaces.map((s) =>
-      s.id === activeSpaceId ? { ...s, quickAccessFolderId: id } : s
-    );
-    await chrome.storage.local.set({ quickAccessFolderId: id });
-    await persistSpaces(updatedSpaces);
-    loadBookmarks();
-  };
+  // Set custom folder IDs (scoped strictly to the active space; only update legacy global Home keys when editing Home)
+  const setQuickAccessFolderId = useCallback(
+    async (id: string) => {
+      beginInternalMutation();
+      try {
+        const stored = (await chrome.storage.local.get(['spaces', 'activeSpaceId'])) as LocalSettings;
+        const baseSpaces =
+          Array.isArray(stored.spaces) && stored.spaces.length > 0
+            ? stored.spaces
+            : spacesRef.current;
+        const curActiveSpaceId = stored.activeSpaceId || activeSpaceIdRef.current;
+        const updatedSpaces = baseSpaces.map((s) =>
+          s.id === curActiveSpaceId ? { ...s, quickAccessFolderId: id } : s
+        );
+        spacesRef.current = updatedSpaces;
+        if (curActiveSpaceId === 'home') {
+          await chrome.storage.local.set({ quickAccessFolderId: id });
+        }
+        await persistSpaces(updatedSpaces);
+      } finally {
+        endInternalMutation();
+      }
+      await loadBookmarks();
+    },
+    [beginInternalMutation, endInternalMutation, persistSpaces, loadBookmarks]
+  );
 
-  const setWorkspaceFolderId = async (id: string) => {
-    // Update the currently active space's folderId (and workspaceFolderId if home)
-    const updatedSpaces = spaces.map((s) =>
-      s.id === activeSpaceId ? { ...s, folderId: id } : s
-    );
-    await chrome.storage.local.set({ workspaceFolderId: id });
-    await persistSpaces(updatedSpaces);
-    loadBookmarks();
-  };
+  const setWorkspaceFolderId = useCallback(
+    async (id: string) => {
+      beginInternalMutation();
+      try {
+        const stored = (await chrome.storage.local.get(['spaces', 'activeSpaceId'])) as LocalSettings;
+        const baseSpaces =
+          Array.isArray(stored.spaces) && stored.spaces.length > 0
+            ? stored.spaces
+            : spacesRef.current;
+        const curActiveSpaceId = stored.activeSpaceId || activeSpaceIdRef.current;
+        const updatedSpaces = baseSpaces.map((s) =>
+          s.id === curActiveSpaceId ? { ...s, folderId: id } : s
+        );
+        spacesRef.current = updatedSpaces;
+        if (curActiveSpaceId === 'home') {
+          await chrome.storage.local.set({ workspaceFolderId: id });
+        }
+        await persistSpaces(updatedSpaces);
+      } finally {
+        endInternalMutation();
+      }
+      await loadBookmarks();
+    },
+    [beginInternalMutation, endInternalMutation, persistSpaces, loadBookmarks]
+  );
 
-  const resetToDefaultFolders = async () => {
-    isInternalMutationRef.current = true;
+  const resetToDefaultFolders = useCallback(async () => {
+    beginInternalMutation();
     try {
       await chrome.storage.local.remove([
         'quickAccessFolderId',
@@ -1173,69 +1385,97 @@ export function useBookmarks() {
         ]);
       }
     } finally {
-      isInternalMutationRef.current = false;
+      endInternalMutation();
     }
-    loadBookmarks();
-  };
+    await loadBookmarks();
+  }, [beginInternalMutation, endInternalMutation, loadBookmarks]);
 
   // Add bookmark
-  const createBookmark = async (parentId: string, title: string, url: string) => {
-    await chrome.bookmarks.create({ parentId, title, url });
-    loadBookmarks();
-  };
+  const createBookmark = useCallback(
+    async (parentId: string, title: string, url: string) => {
+      beginInternalMutation();
+      try {
+        await chrome.bookmarks.create({ parentId, title, url });
+      } finally {
+        endInternalMutation();
+      }
+      await loadBookmarks({ skipFolderListRefresh: true });
+    },
+    [beginInternalMutation, endInternalMutation, loadBookmarks]
+  );
 
   // Add folder (if a folder named 'Quick Access' already exists in parent, reuse it instead of duplicating)
-  const createFolder = async (parentId: string, title: string) => {
-    const trimmed = title.trim();
-    if (!trimmed) return;
-    if (trimmed.toLowerCase() === QUICK_ACCESS_FOLDER_NAME.toLowerCase()) {
+  const createFolder = useCallback(
+    async (parentId: string, title: string) => {
+      const trimmed = title.trim();
+      if (!trimmed) return;
+      beginInternalMutation();
       try {
-        const siblings = await chrome.bookmarks.getChildren(parentId);
-        const existingQa = siblings.find(
-          (c) => !c.url && c.title.trim().toLowerCase() === QUICK_ACCESS_FOLDER_NAME.toLowerCase()
-        );
-        if (existingQa) {
-          loadBookmarks();
-          return;
+        if (trimmed.toLowerCase() === QUICK_ACCESS_FOLDER_NAME.toLowerCase()) {
+          try {
+            const siblings = await chrome.bookmarks.getChildren(parentId);
+            const existingQa = siblings.find(
+              (c) =>
+                !c.url && c.title.trim().toLowerCase() === QUICK_ACCESS_FOLDER_NAME.toLowerCase()
+            );
+            if (existingQa) {
+              return;
+            }
+          } catch {
+            // ignore
+          }
         }
-      } catch {
-        // ignore
+        await chrome.bookmarks.create({ parentId, title: trimmed });
+      } finally {
+        endInternalMutation();
       }
-    }
-    await chrome.bookmarks.create({ parentId, title: trimmed });
-    loadBookmarks();
-  };
+      await loadBookmarks();
+    },
+    [beginInternalMutation, endInternalMutation, loadBookmarks]
+  );
 
   // Rename bookmark or folder
-  const renameBookmarkOrFolder = async (id: string, title: string) => {
-    try {
-      await chrome.bookmarks.update(id, { title });
-      // Also sync space name if this folder is a space root
-      const matchingSpace = spaces.find((s) => s.folderId === id);
-      if (matchingSpace) {
-        const updatedSpaces = spaces.map((s) =>
-          s.folderId === id ? { ...s, name: title } : s
-        );
-        await persistSpaces(updatedSpaces);
+  const renameBookmarkOrFolder = useCallback(
+    async (id: string, title: string) => {
+      beginInternalMutation();
+      try {
+        await chrome.bookmarks.update(id, { title });
+        // Also sync space name if this folder is a space root
+        const matchingSpace = spacesRef.current.find((s) => s.folderId === id);
+        if (matchingSpace) {
+          const updatedSpaces = spacesRef.current.map((s) =>
+            s.folderId === id ? { ...s, name: title } : s
+          );
+          await persistSpaces(updatedSpaces);
+        }
+      } catch (err) {
+        console.warn('[Arctic] Could not rename bookmark/folder:', err);
+      } finally {
+        endInternalMutation();
       }
-    } catch (err) {
-      console.warn('[Arctic] Could not rename bookmark/folder:', err);
-    }
-    loadBookmarks();
-  };
+      await loadBookmarks();
+    },
+    [beginInternalMutation, endInternalMutation, persistSpaces, loadBookmarks]
+  );
 
   // Update bookmark URL & title (replace bookmarked URL)
-  const updateBookmarkUrl = async (bookmarkId: string, newUrl: string, newTitle?: string) => {
-    try {
-      await chrome.bookmarks.update(bookmarkId, {
-        url: newUrl,
-        ...(newTitle ? { title: newTitle } : {})
-      });
-      loadBookmarks();
-    } catch (err) {
-      console.warn('[Arctic] Could not update bookmark URL:', err);
-    }
-  };
+  const updateBookmarkUrl = useCallback(
+    async (bookmarkId: string, newUrl: string, newTitle?: string) => {
+      beginInternalMutation();
+      try {
+        await chrome.bookmarks.update(bookmarkId, {
+          url: newUrl,
+          ...(newTitle ? { title: newTitle } : {})
+        });
+      } catch (err) {
+        console.warn('[Arctic] Could not update bookmark URL:', err);
+      } finally {
+        endInternalMutation();
+      }
+      await loadBookmarks({ skipFolderListRefresh: true });
+    },
+    [beginInternalMutation, endInternalMutation, loadBookmarks]
+  );
 
   // Remove bookmark or folder
   const removeBookmarkOrFolder = useCallback(
@@ -1261,49 +1501,45 @@ export function useBookmarks() {
         prev.map((node) => pruneNode(node)!).filter(Boolean)
       );
 
-      // Remove any persisted bindings for deleted bookmark(s)
+      beginInternalMutation();
       try {
-        const [sub] = await chrome.bookmarks.getSubTree(id);
-        if (sub) {
-          const removedIds: string[] = [];
-          const walkIds = (n: chrome.bookmarks.BookmarkTreeNode) => {
-            if (n.url) removedIds.push(n.id);
-            if (n.children) n.children.forEach(walkIds);
-          };
-          walkIds(sub);
-          if (removedIds.length > 0) {
-            await removePersistedBindings(removedIds);
+        // Remove any persisted bindings for deleted bookmark(s)
+        const removedIds = await collectSubtreeBookmarkIds(id);
+        if (removedIds.length > 0) {
+          await removePersistedBindings(removedIds);
+        }
+
+        try {
+          await chrome.bookmarks.removeTree(id);
+        } catch {
+          try {
+            await chrome.bookmarks.remove(id);
+          } catch {
+            // ignore if already removed
           }
         }
-      } catch {
-        await removePersistedBindings([id]);
-      }
-
-      try {
-        await chrome.bookmarks.removeTree(id);
-      } catch {
-        try {
-          await chrome.bookmarks.remove(id);
-        } catch {
-          // ignore if already removed
-        }
+      } finally {
+        endInternalMutation();
       }
       await loadBookmarks();
     },
-    [loadBookmarks]
+    [beginInternalMutation, endInternalMutation, loadBookmarks]
   );
 
   // Move a bookmark or folder to another Space's root folder
   const moveNodeToSpace = useCallback(
     async (nodeId: string, targetSpaceFolderId: string) => {
+      beginInternalMutation();
       try {
         await chrome.bookmarks.move(nodeId, { parentId: targetSpaceFolderId });
-        await loadBookmarks();
       } catch (err) {
         console.warn('[Arctic] Could not move item to space:', err);
+      } finally {
+        endInternalMutation();
       }
+      await loadBookmarks();
     },
-    [loadBookmarks]
+    [beginInternalMutation, endInternalMutation, loadBookmarks]
   );
 
   // Optimistically insert newly created/pinned bookmark nodes before background reload completes
@@ -1360,7 +1596,7 @@ export function useBookmarks() {
         markRecentlyMoved(validIds);
       }
 
-      isInternalMutationRef.current = true;
+      beginInternalMutation();
       try {
         let curIndex = targetIndex;
         for (const id of validIds) {
@@ -1399,11 +1635,11 @@ export function useBookmarks() {
       } catch (err) {
         console.warn('[Arctic] Could not move bookmarks:', err);
       } finally {
-        isInternalMutationRef.current = false;
+        endInternalMutation();
       }
       await loadBookmarks();
     },
-    [loadBookmarks]
+    [beginInternalMutation, endInternalMutation, loadBookmarks]
   );
 
   // Set up listeners for real-time Chrome bookmark sync
@@ -1411,7 +1647,7 @@ export function useBookmarks() {
     loadBookmarks();
 
     const handleBookmarkChange = (_id?: string, info?: unknown) => {
-      if (isInternalMutationRef.current) return;
+      if (internalMutationCountRef.current > 0) return;
       const obj = info as
         | { url?: string; title?: string; node?: chrome.bookmarks.BookmarkTreeNode }
         | undefined;
@@ -1438,8 +1674,14 @@ export function useBookmarks() {
       changes: { [key: string]: chrome.storage.StorageChange },
       areaName: string
     ) => {
-      if (isInternalMutationRef.current) return;
-      if (areaName === 'local' && (changes.activeSpaceId || changes.spaces || changes.workspaceFolderId)) {
+      if (internalMutationCountRef.current > 0) return;
+      if (
+        areaName === 'local' &&
+        (changes.activeSpaceId ||
+          changes.spaces ||
+          changes.workspaceFolderId ||
+          changes.quickAccessFolderId)
+      ) {
         if (storageDebounceTimerRef.current) {
           clearTimeout(storageDebounceTimerRef.current);
         }

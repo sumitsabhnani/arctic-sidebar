@@ -91,7 +91,7 @@ interface FolderNodeProps {
   onCancelRename?: () => void;
 }
 
-export const FolderNode: React.FC<FolderNodeProps> = ({
+export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
   node,
   depth = 0,
   collapsedFolderIds,
@@ -171,8 +171,8 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
     );
   const isRecentlyMoved = recentlyMovedIds.has(node.id);
 
-  // Find all open/running tab IDs under this folder and its subfolders
-  const runningTabIdsUnderFolder = useMemo(() => {
+  // Lazily compute all open/running tab IDs under this folder and its subfolders only when needed (context menu)
+  const getRunningTabIdsUnderFolder = () => {
     const bookmarkIds = getDescendantBookmarkIds(node);
     const tabIds: number[] = [];
     for (const bId of bookmarkIds) {
@@ -182,13 +182,13 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
       }
     }
     return tabIds;
-  }, [node, bindingsByBookmarkId]);
+  };
 
   // Archive all tabs under this folder to sleep
-  const handleArchiveAllTabs = (e?: React.MouseEvent) => {
+  const handleArchiveAllTabs = (tabIds: number[], e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!onDiscardTab) return;
-    for (const tabId of runningTabIdsUnderFolder) {
+    for (const tabId of tabIds) {
       onDiscardTab(tabId);
     }
   };
@@ -336,11 +336,12 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
     }
   };
 
-  const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
-
   const handleContextMenu = (e: React.MouseEvent) => {
     if (!onOpenContextMenu) return;
     e.preventDefault();
+
+    const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
+    const runningTabIdsUnderFolder = onDiscardTab ? getRunningTabIdsUnderFolder() : [];
 
     const items: ContextMenuItem[] = [
       ...(onBookmarkCurrentPage
@@ -410,7 +411,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
             {
               label: `Archive All Tabs in Folder (${runningTabIdsUnderFolder.length} open)`,
               icon: <Archive className="w-3.5 h-3.5" />,
-              action: () => handleArchiveAllTabs()
+              action: () => handleArchiveAllTabs(runningTabIdsUnderFolder)
             }
           ]
         : []),
@@ -512,6 +513,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
           onDrop={handleDrop}
           onClick={() => onToggleCollapse(node.id)}
           onDoubleClick={(e) => {
+            if ((e.target as HTMLElement).closest('button')) return;
             e.stopPropagation();
             if (onStartRename) {
               onStartRename('folder', node.id, node.title || '');
@@ -545,18 +547,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
               : 'text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5'
           }`}
         >
-          <div
-            className="flex items-center min-w-0 flex-1 space-x-2 mr-2"
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              if (onStartRename) {
-                onStartRename('folder', node.id, node.title || '');
-              } else {
-                setLocalRenameTitle(node.title || '');
-                setLocalIsRenaming(true);
-              }
-            }}
-          >
+          <div className="flex items-center min-w-0 flex-1 space-x-2 mr-2">
             <div className="relative w-4 h-4 flex items-center justify-center flex-shrink-0">
               {dropState === 'inside' ? (
                 <FolderOpen className="w-[18px] h-[18px] text-amber-500 dark:text-amber-400 scale-110 transition-transform duration-150 flex-shrink-0" />
@@ -772,7 +763,7 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
                   highlightQuote={highlightsByBookmarkId?.[child.id]?.quote}
                   isEditing={isEditing}
                   editTitle={isEditing && editingTarget ? editingTarget.title : (child.title || '')}
-                  onStartRename={() => onStartRename?.('bookmark', child.id, child.title || '')}
+                  onStartRename={onStartRename}
                   onChangeEditTitle={onChangeEditTitle}
                   onSaveRename={onSaveRename}
                   onCancelRename={onCancelRename}
@@ -784,4 +775,4 @@ export const FolderNode: React.FC<FolderNodeProps> = ({
       )}
     </div>
   );
-};
+});

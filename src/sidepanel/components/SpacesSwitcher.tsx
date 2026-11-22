@@ -64,7 +64,7 @@ export function renderSpaceIcon(iconName?: string, className: string = 'w-3.5 h-
   }
 }
 
-export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
+export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = React.memo(({
   spaces,
   activeSpaceId,
   onSelectSpace,
@@ -110,7 +110,7 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
           }
         }
       },
-      ...(spaces.length > 1
+      ...(spaces.length > 1 && space.id !== 'home'
         ? [
             {
               label: `Remove "${space.name}" Space`,
@@ -331,4 +331,4 @@ export const SpacesSwitcher: React.FC<SpacesSwitcherProps> = ({
       </div>
     </div>
   );
-};
+});
