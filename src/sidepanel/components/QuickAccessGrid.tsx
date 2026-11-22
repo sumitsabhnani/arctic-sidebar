@@ -20,10 +20,11 @@ import { markKeyboardRowActivation } from '../utils/tabPageFocus';
 import { useFlipAnimation } from '../hooks/useFlipAnimation';
 import {
   endDragSession,
+  getActiveDrag,
   parseDragPayload,
   startDragSession,
-  useActiveDrag,
-  useRecentlyMovedIds
+  useIsRecentlyMoved,
+  useResetOnDragEnd
 } from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -77,7 +78,7 @@ function getShortTitle(rawTitle?: string, rawUrl?: string): string {
   return 'Tab';
 }
 
-export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
+export const QuickAccessGrid: React.FC<QuickAccessGridProps> = React.memo(({
   bookmarks,
   bindingsByBookmarkId,
   tabsByTabId,
@@ -97,13 +98,17 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
   onReloadTab,
   onDuplicateTab
 }) => {
-  const items = bookmarks.filter((b) => Boolean(b.url));
+  const items = React.useMemo(
+    () => bookmarks.filter((b) => Boolean(b.url)),
+    [bookmarks]
+  );
   const gridRef = React.useRef<HTMLDivElement>(null);
   const gridOrderSignature = React.useMemo(
     () => items.map((b) => b.id).join(','),
     [items]
   );
-  useFlipAnimation(gridRef, gridOrderSignature);
+  const flipResetKey = `${items[0]?.parentId ?? ''}:${densityMode}`;
+  useFlipAnimation(gridRef, gridOrderSignature, flipResetKey);
 
   if (items.length === 0) {
     return (
@@ -118,13 +123,14 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
 
   return (
     <div ref={gridRef} className="grid grid-cols-4 gap-1.5 w-full">
-      {items.map((bookmark) => {
+      {items.map((bookmark, idx) => {
         const binding = bindingsByBookmarkId[bookmark.id];
         const boundTab = binding ? tabsByTabId[binding.tabId] : undefined;
         return (
           <QuickAccessTile
             key={bookmark.id}
             bookmark={bookmark}
+            fallbackIndex={idx}
             binding={binding}
             boundTab={boundTab}
             activeTabId={activeTabId}
@@ -147,10 +153,11 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = ({
       })}
     </div>
   );
-};
+});
 
 interface QuickAccessTileProps {
   bookmark: chrome.bookmarks.BookmarkTreeNode;
+  fallbackIndex: number;
   binding?: TabBinding;
   boundTab?: chrome.tabs.Tab;
   activeTabId: number | null;
@@ -173,8 +180,9 @@ interface QuickAccessTileProps {
   onDuplicateTab?: (tabId: number) => void;
 }
 
-const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
+const QuickAccessTile: React.FC<QuickAccessTileProps> = React.memo(({
   bookmark,
+  fallbackIndex,
   binding,
   boundTab,
   activeTabId,
@@ -196,9 +204,13 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'left' | 'right' | null>(null);
-  const activeDrag = useActiveDrag();
-  const recentlyMovedIds = useRecentlyMovedIds();
-  const isRecentlyMoved = recentlyMovedIds.has(bookmark.id);
+  const lastDragOverXRef = React.useRef<number | null>(null);
+  const isRecentlyMoved = useIsRecentlyMoved(bookmark.id);
+  useResetOnDragEnd(isDragging || dropPosition !== null, () => {
+    setIsDragging(false);
+    setDropPosition(null);
+    lastDragOverXRef.current = null;
+  });
 
   const isActive = Boolean(binding && binding.tabId === activeTabId);
   const isRunningInBackground = Boolean(binding && binding.tabId !== activeTabId);
@@ -232,7 +244,11 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         label: 'Open in New Tab',
         icon: <ExternalLink className="w-3.5 h-3.5" />,
         action: () => {
-          if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
+          if (bookmark.url) {
+            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+              () => {}
+            );
+          }
         }
       },
       {
@@ -243,10 +259,12 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
             if (onDuplicateTab) {
               onDuplicateTab(binding.tabId);
             } else {
-              chrome.tabs.duplicate(binding.tabId);
+              Promise.resolve(chrome.tabs.duplicate(binding.tabId)).catch(() => {});
             }
           } else if (bookmark.url) {
-            chrome.tabs.create({ url: bookmark.url, active: true });
+            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+              () => {}
+            );
           }
         }
       },
@@ -308,7 +326,9 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
         label: 'Copy Link',
         icon: <Link2 className="w-3.5 h-3.5" />,
         action: () => {
-          if (bookmark.url) navigator.clipboard.writeText(bookmark.url);
+          if (bookmark.url) {
+            Promise.resolve(navigator.clipboard?.writeText(bookmark.url)).catch(() => {});
+          }
         },
         dividerBefore: true
       },
@@ -356,10 +376,12 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
   const handleDragEnd = () => {
     setIsDragging(false);
     setDropPosition(null);
+    lastDragOverXRef.current = null;
     endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    const activeDrag = getActiveDrag();
     if (activeDrag?.type === 'folder') {
       if (dropPosition !== null) setDropPosition(null);
       return;
@@ -374,33 +396,40 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
+    if (lastDragOverXRef.current === e.clientX && dropPosition !== null) {
+      return;
+    }
+    lastDragOverXRef.current = e.clientX;
     const rect = e.currentTarget.getBoundingClientRect();
     const isLeft = e.clientX - rect.left < rect.width / 2;
-    setDropPosition(isLeft ? 'left' : 'right');
+    const nextPos = isLeft ? 'left' : 'right';
+    setDropPosition((prev) => (prev === nextPos ? prev : nextPos));
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    lastDragOverXRef.current = null;
     setDropPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    lastDragOverXRef.current = null;
     const rect = e.currentTarget.getBoundingClientRect();
     const pos =
       dropPosition || (e.clientX - rect.left < rect.width / 2 ? 'left' : 'right');
     setDropPosition(null);
-    endDragSession();
 
     const data = parseDragPayload(e);
+    endDragSession();
+
     if (!data || data.type === 'folder') return;
     if (data.id === bookmark.id && (!Array.isArray(data.ids) || data.ids.length <= 1)) {
       return;
     }
 
-    e.preventDefault();
-    e.stopPropagation();
-
-    let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : 0;
+    let targetIndex = typeof bookmark.index === 'number' ? bookmark.index : fallbackIndex;
     if (pos === 'right') {
       targetIndex += 1;
     }
@@ -472,6 +501,9 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
             e.stopPropagation();
             onToggleMuteTab?.(binding.tabId);
           }}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.stopPropagation();
@@ -542,4 +574,4 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = ({
       )}
     </button>
   );
-};
+});

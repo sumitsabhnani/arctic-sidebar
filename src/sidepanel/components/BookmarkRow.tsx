@@ -28,11 +28,13 @@ import { parseHighlightBookmarkDisplay, stripTextFragmentFromUrl } from '../util
 import {
   attachMultiDragPreview,
   endDragSession,
+  getActiveDrag,
   isFolderSelfOrDescendant,
   parseDragPayload,
   startDragSession,
-  useActiveDrag,
-  useRecentlyMovedIds
+  useIsDraggedBookmark,
+  useIsRecentlyMoved,
+  useResetOnDragEnd
 } from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -143,12 +145,15 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
   const [isHoveringFavicon, setIsHoveringFavicon] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
-  const activeDrag = useActiveDrag();
-  const recentlyMovedIds = useRecentlyMovedIds();
-  const isPartOfActiveDrag =
-    isDragging ||
-    Boolean(activeDrag?.type === 'bookmark' && activeDrag.ids?.includes(bookmark.id));
-  const isRecentlyMoved = recentlyMovedIds.has(bookmark.id);
+  const lastDragOverYRef = useRef<number | null>(null);
+  const isInActiveBookmarkDrag = useIsDraggedBookmark(bookmark.id);
+  const isPartOfActiveDrag = isDragging || isInActiveBookmarkDrag;
+  const isRecentlyMoved = useIsRecentlyMoved(bookmark.id);
+  useResetOnDragEnd(isDragging || dropPosition !== null, () => {
+    setIsDragging(false);
+    setDropPosition(null);
+    lastDragOverYRef.current = null;
+  });
   const [localIsEditing, setLocalIsEditing] = useState(false);
   const [localEditTitle, setLocalEditTitle] = useState(bookmark.title || '');
   const [isCopied, setIsCopied] = useState(false);
@@ -242,7 +247,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
         label: 'Open in New Tab',
         icon: <ExternalLink className="w-3.5 h-3.5" />,
         action: () => {
-          if (bookmark.url) chrome.tabs.create({ url: bookmark.url, active: true });
+          if (bookmark.url) {
+            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+              () => {}
+            );
+          }
         }
       },
       {
@@ -253,10 +262,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
             if (onDuplicateTab) {
               onDuplicateTab(binding.tabId);
             } else {
-              chrome.tabs.duplicate(binding.tabId);
+              Promise.resolve(chrome.tabs.duplicate(binding.tabId)).catch(() => {});
             }
           } else if (bookmark.url) {
-            chrome.tabs.create({ url: bookmark.url, active: true });
+            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+              () => {}
+            );
           }
         }
       },
@@ -424,10 +435,12 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
   const handleDragEnd = () => {
     setIsDragging(false);
     setDropPosition(null);
+    lastDragOverYRef.current = null;
     endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    const activeDrag = getActiveDrag();
     if (
       activeDrag?.type === 'bookmark' &&
       (!activeDrag.ids || activeDrag.ids.length <= 1) &&
@@ -438,8 +451,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
     }
     if (
       activeDrag?.type === 'folder' &&
-      treeRoots &&
-      isFolderSelfOrDescendant(treeRoots, activeDrag.id, bookmark.parentId)
+      (activeDrag.id === bookmark.parentId ||
+        Boolean(
+          treeRoots &&
+            isFolderSelfOrDescendant(treeRoots, activeDrag.id, bookmark.parentId)
+        ))
     ) {
       if (dropPosition !== null) setDropPosition(null);
       return;
@@ -448,27 +464,35 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
+    if (lastDragOverYRef.current === e.clientY && dropPosition !== null) {
+      return;
+    }
+    lastDragOverYRef.current = e.clientY;
     const rect = e.currentTarget.getBoundingClientRect();
     const isTop = e.clientY - rect.top < rect.height / 2;
-    setDropPosition(isTop ? 'top' : 'bottom');
+    const nextPos = isTop ? 'top' : 'bottom';
+    setDropPosition((prev) => (prev === nextPos ? prev : nextPos));
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     if (e.currentTarget.contains(e.relatedTarget as Node)) {
       return;
     }
+    lastDragOverYRef.current = null;
     setDropPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    lastDragOverYRef.current = null;
     const rect = e.currentTarget.getBoundingClientRect();
     const pos = dropPosition || (e.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom');
     setDropPosition(null);
-    endDragSession();
 
     const data = parseDragPayload(e);
+    endDragSession();
+
     if (!data) return;
 
     if (data.id === bookmark.id && (!Array.isArray(data.ids) || data.ids.length <= 1)) return;
@@ -478,8 +502,11 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
 
     if (
       data.type === 'folder' &&
-      treeRoots &&
-      isFolderSelfOrDescendant(treeRoots, String(data.id), targetParentId)
+      (String(data.id) === targetParentId ||
+        Boolean(
+          treeRoots &&
+            isFolderSelfOrDescendant(treeRoots, String(data.id), targetParentId)
+        ))
     ) {
       return;
     }

@@ -245,4 +245,117 @@ describe('useFlipAnimation', () => {
     expect(mock.animRecords[1].cancel).toHaveBeenCalledTimes(1);
     expect(mock.animRecords).toHaveLength(runningCount);
   });
+
+  it('does not poison stored positions when elements are temporarily zero-sized (hidden)', () => {
+    const { rerender, getByTestId } = render(
+      <FlipListHarness items={['A', 'B']} resetKey="s1" />
+    );
+    const container = getByTestId('flip-list');
+    const mock = setupMockFlipDom(container);
+    mock.attachRowMocks();
+
+    // Render while hidden (0x0 rects) on a new item C
+    const rowB = getByTestId('row-B');
+    const bSpy = vi.spyOn(rowB, 'getBoundingClientRect').mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    } as DOMRect);
+
+    rerender(<FlipListHarness items={['A', 'B']} resetKey="s2" />);
+
+    // Restore normal layout size for B on subsequent update -> B should NOT animate from (0, 0)
+    bSpy.mockImplementation(() => ({
+      left: 0,
+      top: 100 + ROW_HEIGHT,
+      right: 300,
+      bottom: 100 + ROW_HEIGHT * 2,
+      width: 300,
+      height: ROW_HEIGHT,
+      x: 0,
+      y: 100 + ROW_HEIGHT,
+      toJSON: () => ({})
+    } as DOMRect));
+
+    rerender(<FlipListHarness items={['A', 'B', 'C']} resetKey="s2" />);
+    mock.attachRowMocks();
+
+    const bAnims = mock.animRecords.filter((r) => r.el.dataset.flipId === 'B');
+    expect(bAnims).toHaveLength(0);
+  });
+
+  it('accounts for container scrollTop and skips stale animations after container width resize', () => {
+    const { rerender, getByTestId } = render(
+      <FlipListHarness items={['A', 'B', 'C']} resetKey="scroll:init" />
+    );
+    const container = getByTestId('flip-list');
+    const mock = setupMockFlipDom(container);
+    mock.attachRowMocks();
+
+    let scrollOffset = 0;
+    let containerWidth = 300;
+    Object.defineProperty(container, 'scrollTop', {
+      configurable: true,
+      get: () => scrollOffset
+    });
+
+    vi.spyOn(container, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          left: 0,
+          top: 100,
+          right: containerWidth,
+          bottom: 500,
+          width: containerWidth,
+          height: 400,
+          x: 0,
+          y: 100,
+          toJSON: () => ({})
+        }) as DOMRect
+    );
+
+    ['A', 'B', 'C'].forEach((id) => {
+      const row = getByTestId(`row-${id}`);
+      vi.spyOn(row, 'getBoundingClientRect').mockImplementation(() => {
+        const siblings = Array.from(container.querySelectorAll<HTMLElement>('[data-flip-id]'));
+        const idx = siblings.indexOf(row);
+        const top = 100 + idx * ROW_HEIGHT - scrollOffset;
+        return {
+          left: 0,
+          top,
+          right: containerWidth,
+          bottom: top + ROW_HEIGHT,
+          width: containerWidth,
+          height: ROW_HEIGHT,
+          x: 0,
+          y: top,
+          toJSON: () => ({})
+        } as DOMRect;
+      });
+    });
+
+    rerender(<FlipListHarness items={['A', 'B', 'C']} resetKey="scroll:ready" />);
+    expect(mock.animRecords).toHaveLength(0);
+
+    // Scroll container down by 80px and swap B <-> C: A did not move in content space, so A must NOT animate!
+    scrollOffset = 80;
+    rerender(<FlipListHarness items={['A', 'C', 'B']} resetKey="scroll:ready" />);
+    expect(mock.animRecords.find((r) => r.el.dataset.flipId === 'A')).toBeUndefined();
+    expect(mock.animRecords.find((r) => r.el.dataset.flipId === 'B')?.dy).toBe(-ROW_HEIGHT);
+    expect(mock.animRecords.find((r) => r.el.dataset.flipId === 'C')?.dy).toBe(ROW_HEIGHT);
+
+    mock.finishAllAnimations();
+
+    // Resize container width (300 -> 420) and reorder -> skips stale width jump and re-baselines cleanly
+    const countBeforeResize = mock.animRecords.length;
+    containerWidth = 420;
+    rerender(<FlipListHarness items={['C', 'A', 'B']} resetKey="scroll:ready" />);
+    expect(mock.animRecords).toHaveLength(countBeforeResize);
+  });
 });

@@ -1,7 +1,8 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { FolderNode } from './FolderNode';
+import { endDragSession, startDragSession } from '../utils/dnd';
 
 function createBaseFolderProps(overrides: Partial<React.ComponentProps<typeof FolderNode>> = {}) {
   const node: chrome.bookmarks.BookmarkTreeNode = {
@@ -246,5 +247,36 @@ describe('FolderNode Component', () => {
     fireEvent.doubleClick(newSubfolderBtn);
 
     expect(onStartRename).not.toHaveBeenCalled();
+  });
+
+  it('falls back to activeDrag session on drop when dataTransfer JSON is empty and clears stuck drop indicators on Escape', () => {
+    const onDropItemToFolder = vi.fn();
+    const props = createBaseFolderProps({ onDropItemToFolder });
+    render(<FolderNode {...props} />);
+
+    const folderRow = screen.getByText('Engineering').closest('[role="button"]') as HTMLElement;
+
+    // Hovering sets dropState, pressing Escape resets it immediately
+    startDragSession({ type: 'openTab', tabId: 42, url: 'https://vite.dev', title: 'Vite' });
+    fireEvent.dragOver(folderRow, { clientY: 16, dataTransfer: { dropEffect: 'move' } });
+    expect(folderRow.className).toContain('theme-drag-over-inside');
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(folderRow.className).not.toContain('theme-drag-over-inside');
+
+    // Dropping with empty dataTransfer.getData succeeds via in-memory activeDrag fallback
+    startDragSession({ type: 'openTab', tabId: 42, url: 'https://vite.dev', title: 'Vite' });
+    fireEvent.drop(folderRow, {
+      clientY: 16,
+      dataTransfer: { getData: () => '' }
+    });
+
+    expect(onDropItemToFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'openTab', tabId: 42, url: 'https://vite.dev' }),
+      'folder-1'
+    );
+    endDragSession();
   });
 });

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { QuickAccessGrid } from './QuickAccessGrid';
 import type { TabBinding, TabWithFaviconMeta } from '../../types';
 import { getFaviconCacheKey, upsertCachedFaviconEntries } from '../utils/faviconCache';
+import { endDragSession, startDragSession } from '../utils/dnd';
 
 describe('QuickAccessGrid component', () => {
   const mockBookmarks: chrome.bookmarks.BookmarkTreeNode[] = [
@@ -346,5 +347,102 @@ describe('QuickAccessGrid component', () => {
 
     expect(onTileClick).toHaveBeenCalledTimes(1);
     expect(onTileDoubleClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('reorders Quick Access tiles via drag-and-drop using activeDrag fallback when dataTransfer JSON is empty, and clears stuck indicators on Escape', () => {
+    const onReorderQuickAccess = vi.fn();
+    render(
+      <QuickAccessGrid
+        {...defaultProps}
+        onReorderQuickAccess={onReorderQuickAccess}
+      />
+    );
+
+    const githubTile = screen.getByTitle(/GitHub/i);
+    const youtubeTile = screen.getByTitle(/YouTube/i);
+
+    vi.spyOn(youtubeTile, 'getBoundingClientRect').mockReturnValue({
+      left: 60,
+      top: 0,
+      right: 120,
+      bottom: 58,
+      width: 60,
+      height: 58,
+      x: 60,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    // Start dragging GitHub (index 0), hover right half of YouTube (index 1), then press Escape -> resets opacity & drop line
+    fireEvent.dragStart(githubTile, {
+      dataTransfer: { setData: vi.fn(), effectAllowed: 'copyMove' }
+    });
+    expect(githubTile.className).toContain('opacity-35');
+
+    fireEvent.dragOver(youtubeTile, {
+      clientX: 110,
+      dataTransfer: { dropEffect: 'move' }
+    });
+    expect(youtubeTile.className).toContain('theme-drag-over-right');
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(githubTile.className).not.toContain('opacity-35');
+    expect(youtubeTile.className).not.toContain('theme-drag-over-right');
+
+    // Now drag GitHub onto right half of YouTube with empty dataTransfer.getData -> must fall back to activeDrag session!
+    startDragSession({ type: 'quickAccess', id: 'qa-1', index: 0 });
+    fireEvent.dragOver(youtubeTile, {
+      clientX: 112,
+      dataTransfer: { dropEffect: 'move' }
+    });
+    fireEvent.drop(youtubeTile, {
+      clientX: 112,
+      dataTransfer: { getData: () => '' }
+    });
+
+    expect(onReorderQuickAccess).toHaveBeenCalledWith('qa-1', 2);
+    endDragSession();
+  });
+
+  it('stops propagation on self-drop and folder-drop on a QuickAccessTile and prevents mute-badge double-click from reloading', () => {
+    const parentOnDrop = vi.fn();
+    const onTileDoubleClick = vi.fn();
+    const onToggleMuteTab = vi.fn();
+
+    render(
+      <div onDrop={parentOnDrop}>
+        <QuickAccessGrid
+          {...defaultProps}
+          onTileDoubleClick={onTileDoubleClick}
+          onToggleMuteTab={onToggleMuteTab}
+        />
+      </div>
+    );
+
+    const githubTile = screen.getByTitle(/GitHub/i);
+
+    // Self-drop must NOT bubble to parent container
+    startDragSession({ type: 'quickAccess', id: 'qa-1', index: 0 });
+    fireEvent.drop(githubTile, {
+      clientX: 10,
+      dataTransfer: { getData: () => '' }
+    });
+    expect(parentOnDrop).not.toHaveBeenCalled();
+
+    // Folder drop must NOT bubble to parent container
+    startDragSession({ type: 'folder', id: 'folder-1', index: 0 });
+    fireEvent.drop(githubTile, {
+      clientX: 10,
+      dataTransfer: { getData: () => '' }
+    });
+    expect(parentOnDrop).not.toHaveBeenCalled();
+
+    // Double-clicking mute badge on YouTube must NOT fire onTileDoubleClick
+    const muteBadge = screen.getByTitle('Mute tab');
+    fireEvent.doubleClick(muteBadge);
+    expect(onTileDoubleClick).not.toHaveBeenCalled();
+    endDragSession();
   });
 });

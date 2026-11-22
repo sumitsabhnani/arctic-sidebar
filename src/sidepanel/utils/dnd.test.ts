@@ -1,14 +1,20 @@
+import React from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
+import { render, act } from '@testing-library/react';
 import {
   endDragSession,
   getActiveDrag,
   getFolderDropZone,
   isFolderSelfOrDescendant,
+  markRecentlyMoved,
   optimisticallyInsertIntoTree,
   optimisticallyMoveInTree,
   parseDragPayload,
   stampBookmarkTreeIndices,
-  startDragSession
+  startDragSession,
+  useIsDraggedBookmark,
+  useIsDraggedFolderOrDescendant,
+  useIsRecentlyMoved
 } from './dnd';
 
 describe('dnd utilities', () => {
@@ -136,10 +142,36 @@ describe('dnd utilities', () => {
         title: 'Pinned Tab',
         url: 'https://pinned.com'
       };
-      const once = optimisticallyInsertIntoTree(root, [newBm], 'root', 2);
+      const once = optimisticallyInsertIntoTree(root, [newBm, newBm], 'root', 2);
       const twice = optimisticallyInsertIntoTree(once, [newBm], 'root', 2);
       expect(twice.children?.map((c) => c.id)).toEqual(['qa', 'f1', 'b-new', 'b1', 'f2']);
       expect(twice.children?.find((c) => c.id === 'b-new')?.parentId).toBe('root');
+    });
+
+    it('protects against circular folder moves into a descendant without deleting the subtree', () => {
+      const nestedRoot = stampBookmarkTreeIndices({
+        id: 'root',
+        title: 'Home',
+        children: [
+          {
+            id: 'f-parent',
+            title: 'Parent',
+            children: [
+              {
+                id: 'f-child',
+                title: 'Child',
+                children: [{ id: 'bm-inside', title: 'Doc', url: 'https://doc.example.com' }]
+              }
+            ]
+          }
+        ]
+      });
+
+      const fParent = nestedRoot.children![0];
+      const result = optimisticallyMoveInTree(nestedRoot, [fParent], 'f-child', 0);
+      expect(result.children?.map((c) => c.id)).toEqual(['f-parent']);
+      expect(result.children?.[0]?.children?.[0]?.id).toBe('f-child');
+      expect(result.children?.[0]?.children?.[0]?.children?.[0]?.id).toBe('bm-inside');
     });
   });
 
@@ -171,6 +203,85 @@ describe('dnd utilities', () => {
       endDragSession();
       expect(getActiveDrag()).toBeNull();
       expect(document.body.dataset.dragging).toBeUndefined();
+    });
+
+    it('terminates orphaned drag sessions on Escape keydown or subsequent pointerdown', () => {
+      startDragSession({ type: 'bookmark', id: 'bm-1', ids: ['bm-1'] });
+      expect(getActiveDrag()).not.toBeNull();
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(getActiveDrag()).toBeNull();
+      expect(document.body.dataset.dragging).toBeUndefined();
+
+      startDragSession({ type: 'quickAccess', id: 'qa-1' });
+      expect(getActiveDrag()).not.toBeNull();
+
+      window.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+      expect(getActiveDrag()).toBeNull();
+      expect(document.body.dataset.dragging).toBeUndefined();
+    });
+
+    it('only re-renders targeted items via selector hooks instead of unrelated siblings', () => {
+      const renderCounts: Record<string, number> = {};
+      const roots: chrome.bookmarks.BookmarkTreeNode[] = [
+        {
+          id: 'f-1',
+          title: 'F1',
+          children: [{ id: 'f-1-sub', title: 'Sub', children: [] }]
+        },
+        { id: 'f-2', title: 'F2', children: [] }
+      ];
+
+      function Probe({ bmId, folderId }: { bmId: string; folderId: string }) {
+        renderCounts[bmId] = (renderCounts[bmId] || 0) + 1;
+        const draggedBm = useIsDraggedBookmark(bmId);
+        const draggedFolder = useIsDraggedFolderOrDescendant(roots, folderId);
+        const moved = useIsRecentlyMoved(bmId);
+        return React.createElement(
+          'div',
+          { 'data-testid': bmId },
+          `${draggedBm}-${draggedFolder}-${moved}`
+        );
+      }
+
+      const { getByTestId, unmount } = render(
+        React.createElement(
+          React.Fragment,
+          null,
+          React.createElement(Probe, { bmId: 'bm-target', folderId: 'f-1-sub' }),
+          React.createElement(Probe, { bmId: 'bm-other', folderId: 'f-2' })
+        )
+      );
+
+      expect(renderCounts['bm-target']).toBe(1);
+      expect(renderCounts['bm-other']).toBe(1);
+
+      // Dragging bm-target must NOT re-render bm-other
+      act(() => {
+        startDragSession({ type: 'bookmark', id: 'bm-target', ids: ['bm-target'] });
+      });
+      expect(getByTestId('bm-target').textContent).toBe('true-false-false');
+      expect(renderCounts['bm-target']).toBe(2);
+      expect(renderCounts['bm-other']).toBe(1);
+
+      act(() => {
+        endDragSession();
+        markRecentlyMoved(['bm-target']);
+      });
+      expect(getByTestId('bm-target').textContent).toBe('false-false-true');
+      expect(renderCounts['bm-other']).toBe(1);
+
+      // Dragging f-1 updates its descendant f-1-sub without re-rendering unrelated f-2
+      act(() => {
+        startDragSession({ type: 'folder', id: 'f-1' });
+      });
+      expect(getByTestId('bm-target').textContent).toBe('false-true-true');
+      expect(renderCounts['bm-other']).toBe(1);
+
+      act(() => {
+        endDragSession();
+      });
+      unmount();
     });
   });
 });
