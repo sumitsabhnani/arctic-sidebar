@@ -1233,7 +1233,7 @@ export const App: React.FC = () => {
     walk(workspaceBookmarks);
     return parts.join(',');
   }, [workspaceBookmarks, collapsedFolderIds]);
-  useFlipAnimation(workspaceListRef, workspaceOrderSignature, activeSpaceId);
+  useFlipAnimation(workspaceListRef, workspaceOrderSignature, `${activeSpaceId}:${tabsDensity}`);
 
   // Global keyboard shortcuts & active-tab media/scroll keystroke bridge:
   // - Ctrl+T / Cmd+T: New Tab
