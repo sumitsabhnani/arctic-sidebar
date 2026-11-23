@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding, TabWithFaviconMeta } from '../../types';
+import { endDragSession, startDragSession } from '../utils/dnd';
 
 describe('BookmarkRow component', () => {
   const mockBookmark: chrome.bookmarks.BookmarkTreeNode = {
@@ -350,5 +351,51 @@ describe('BookmarkRow component', () => {
     fireEvent.blur(input, { relatedTarget: document.body });
     expect(onRenameBookmark).toHaveBeenCalledWith('b-101', 'Quarterly Docs');
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+
+  it('falls back to activeDrag session on drop when dataTransfer JSON is empty and resets stuck drop indicator on Escape', () => {
+    const onDropItemToFolder = vi.fn();
+    render(
+      <BookmarkRow
+        {...defaultProps}
+        bookmark={{ ...mockBookmark, parentId: 'folder-1', index: 2 }}
+        onDropItemToFolder={onDropItemToFolder}
+      />
+    );
+
+    const row = screen.getByText('Google Docs').closest('[role="button"]') as HTMLElement;
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    startDragSession({ type: 'openTab', tabId: 88, url: 'https://vitest.dev' });
+    fireEvent.dragOver(row, { clientY: 6, dataTransfer: { dropEffect: 'move' } });
+    expect(row.className).toContain('theme-drag-over-top');
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(row.className).not.toContain('theme-drag-over-top');
+
+    startDragSession({ type: 'openTab', tabId: 88, url: 'https://vitest.dev' });
+    fireEvent.drop(row, {
+      clientY: 6,
+      dataTransfer: { getData: () => '' }
+    });
+
+    expect(onDropItemToFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'openTab', tabId: 88 }),
+      'folder-1',
+      2
+    );
+    endDragSession();
   });
 });

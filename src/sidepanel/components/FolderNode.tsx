@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Folder,
   FolderOpen,
@@ -20,12 +20,14 @@ import { BookmarkRow } from './BookmarkRow';
 import type { TabBinding, SpaceItem, TabReminder, StoredHighlightMeta } from '../../types';
 import {
   endDragSession,
+  getActiveDrag,
   getFolderDropZone,
   isFolderSelfOrDescendant,
   parseDragPayload,
   startDragSession,
-  useActiveDrag,
-  useRecentlyMovedIds
+  useIsDraggedFolderOrDescendant,
+  useIsRecentlyMoved,
+  useResetOnDragEnd
 } from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
@@ -160,16 +162,16 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
   // Drop target & drag source state
   const [dropState, setDropState] = useState<'inside' | 'top' | 'bottom' | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const activeDrag = useActiveDrag();
-  const recentlyMovedIds = useRecentlyMovedIds();
+  const lastDragOverYRef = useRef<number | null>(null);
   const effectiveRoots = useMemo(() => treeRoots || [node], [treeRoots, node]);
-  const isSelfOrAncestorBeingDragged =
-    isDragging ||
-    Boolean(
-      activeDrag?.type === 'folder' &&
-        isFolderSelfOrDescendant(effectiveRoots, activeDrag.id, node.id)
-    );
-  const isRecentlyMoved = recentlyMovedIds.has(node.id);
+  const isAncestorOrSelfInActiveDrag = useIsDraggedFolderOrDescendant(effectiveRoots, node.id);
+  const isSelfOrAncestorBeingDragged = isDragging || isAncestorOrSelfInActiveDrag;
+  const isRecentlyMoved = useIsRecentlyMoved(node.id);
+  useResetOnDragEnd(isDragging || dropState !== null, () => {
+    setIsDragging(false);
+    setDropState(null);
+    lastDragOverYRef.current = null;
+  });
 
   // Lazily compute all open/running tab IDs under this folder and its subfolders only when needed (context menu)
   const getRunningTabIdsUnderFolder = () => {
@@ -257,10 +259,12 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
   const handleDragEnd = () => {
     setIsDragging(false);
     setDropState(null);
+    lastDragOverYRef.current = null;
     endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    const activeDrag = getActiveDrag();
     if (
       activeDrag?.type === 'folder' &&
       isFolderSelfOrDescendant(effectiveRoots, activeDrag.id, node.id)
@@ -273,10 +277,15 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
 
+    if (lastDragOverYRef.current === e.clientY && dropState !== null) {
+      return;
+    }
+    lastDragOverYRef.current = e.clientY;
+
     const rect = e.currentTarget.getBoundingClientRect();
     const relY = e.clientY - rect.top;
     const zone = getFolderDropZone(relY, rect.height, isCollapsed);
-    setDropState(zone);
+    setDropState((prev) => (prev === zone ? prev : zone));
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
@@ -285,19 +294,22 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
     if (e.currentTarget.contains(e.relatedTarget as Node)) {
       return;
     }
+    lastDragOverYRef.current = null;
     setDropState(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    lastDragOverYRef.current = null;
     const rect = e.currentTarget.getBoundingClientRect();
     const effectiveDrop =
       dropState ?? getFolderDropZone(e.clientY - rect.top, rect.height, isCollapsed);
     setDropState(null);
-    endDragSession();
 
     const data = parseDragPayload(e);
+    endDragSession();
+
     if (!data) return;
     if (data.id === node.id) return;
 
@@ -629,6 +641,7 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
           {children.length === 0 && !isCreatingSubfolder ? (
             <div
               onDragOver={(e) => {
+                const activeDrag = getActiveDrag();
                 if (
                   activeDrag?.type === 'folder' &&
                   isFolderSelfOrDescendant(effectiveRoots, activeDrag.id, node.id)
@@ -638,15 +651,16 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
                 e.preventDefault();
                 e.stopPropagation();
                 e.dataTransfer.dropEffect = 'move';
-                setDropState('inside');
+                setDropState((prev) => (prev === 'inside' ? prev : 'inside'));
               }}
               onDragLeave={handleDragLeave}
               onDrop={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                lastDragOverYRef.current = null;
                 setDropState(null);
-                endDragSession();
                 const data = parseDragPayload(e);
+                endDragSession();
                 if (!data || data.id === node.id) return;
                 if (
                   data.type === 'folder' &&

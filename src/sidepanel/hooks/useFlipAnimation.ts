@@ -20,6 +20,7 @@ export function useFlipAnimation(
 ): void {
   const prevPositionsRef = useRef<Map<string, RelativePos>>(new Map());
   const prevResetKeyRef = useRef<string | undefined>(resetKey);
+  const prevContainerWidthRef = useRef<number | null>(null);
   const activeAnimationsRef = useRef<Map<HTMLElement, Animation>>(new Map());
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export function useFlipAnimation(
       });
       activeAnimations.clear();
       prevPositionsRef.current = new Map();
+      prevContainerWidthRef.current = null;
       prevResetKeyRef.current = resetKey;
       return;
     }
@@ -58,7 +60,7 @@ export function useFlipAnimation(
       container.querySelectorAll<HTMLElement>('[data-flip-id]')
     );
 
-    const shouldSkipAnimation =
+    const isResetOrReducedMotion =
       prevResetKeyRef.current !== resetKey ||
       (typeof window !== 'undefined' &&
         typeof window.matchMedia === 'function' &&
@@ -66,18 +68,21 @@ export function useFlipAnimation(
 
     prevResetKeyRef.current = resetKey;
 
+    const scrollLeft = container.scrollLeft || 0;
+    const scrollTop = container.scrollTop || 0;
+
     // 1. Batch-read visual rects of elements that currently have an active FLIP animation
     //    so we can extract their in-flight transform offset before cancelling.
     const animatedRects = new Map<HTMLElement, RelativePos>();
-    if (!shouldSkipAnimation && activeAnimations.size > 0) {
+    if (!isResetOrReducedMotion && activeAnimations.size > 0) {
       const preCancelContainerRect = container.getBoundingClientRect();
       elements.forEach((el) => {
         const anim = activeAnimations.get(el);
         if (anim && anim.playState !== 'idle' && anim.playState !== 'finished') {
           const rect = el.getBoundingClientRect();
           animatedRects.set(el, {
-            left: rect.left - preCancelContainerRect.left,
-            top: rect.top - preCancelContainerRect.top
+            left: rect.left - preCancelContainerRect.left + scrollLeft,
+            top: rect.top - preCancelContainerRect.top + scrollTop
           });
         }
       });
@@ -95,8 +100,14 @@ export function useFlipAnimation(
       activeAnimations.clear();
     }
 
-    // 3. Batch-read true, untransformed resting layout positions relative to container.
+    // 3. Batch-read true, untransformed resting layout positions relative to container content box.
     const containerRect = container.getBoundingClientRect();
+    const hasContainerResized =
+      prevContainerWidthRef.current !== null &&
+      Math.abs(containerRect.width - prevContainerWidthRef.current) > 0.5;
+    prevContainerWidthRef.current = containerRect.width;
+
+    const shouldSkipAnimation = isResetOrReducedMotion || hasContainerResized;
     const nextPositions = new Map<string, RelativePos>();
     const pendingAnimations: Array<{ el: HTMLElement; dx: number; dy: number }> = [];
 
@@ -105,14 +116,15 @@ export function useFlipAnimation(
       if (!id) return;
 
       const rect = el.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return;
+
       const restingPos: RelativePos = {
-        left: rect.left - containerRect.left,
-        top: rect.top - containerRect.top
+        left: rect.left - containerRect.left + scrollLeft,
+        top: rect.top - containerRect.top + scrollTop
       };
       nextPositions.set(id, restingPos);
 
       if (shouldSkipAnimation || typeof el.animate !== 'function') return;
-      if (rect.width === 0 && rect.height === 0) return;
 
       const prevPos = prevPositionsRef.current.get(id);
       if (!prevPos) return;

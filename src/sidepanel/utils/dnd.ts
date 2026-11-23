@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react';
 
 export type DragItemType = 'openTab' | 'bookmark' | 'folder' | 'quickAccess';
 
@@ -17,6 +17,7 @@ export interface ActiveDragSession {
 
 let currentDragSession: ActiveDragSession | null = null;
 const dragListeners = new Set<() => void>();
+const dragEndListeners = new Set<() => void>();
 
 let recentlyMovedIds = new Set<string>();
 const emptySet = new Set<string>();
@@ -27,6 +28,12 @@ let globalListenersAttached = false;
 
 function emitDragChange() {
   for (const listener of dragListeners) {
+    listener();
+  }
+}
+
+function emitDragEnd() {
+  for (const listener of dragEndListeners) {
     listener();
   }
 }
@@ -58,11 +65,27 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
   }
 }
 
+function handleGlobalDrop() {
+  if (currentDragSession !== null) {
+    endDragSession();
+  }
+}
+
+function handleGlobalPointerDown() {
+  // A new pointerdown cannot occur mid-HTML5-drag; if currentDragSession is still set,
+  // a previous drag ended outside the Side Panel without firing dragend.
+  if (currentDragSession !== null) {
+    endDragSession();
+  }
+}
+
 function ensureGlobalCleanupListeners() {
   if (globalListenersAttached || typeof window === 'undefined') return;
   globalListenersAttached = true;
   window.addEventListener('dragend', handleGlobalDragEnd, true);
   window.addEventListener('keydown', handleGlobalKeyDown, true);
+  window.addEventListener('drop', handleGlobalDrop, false);
+  window.addEventListener('pointerdown', handleGlobalPointerDown, true);
 }
 
 export function startDragSession(session: ActiveDragSession): void {
@@ -73,13 +96,13 @@ export function startDragSession(session: ActiveDragSession): void {
 }
 
 export function endDragSession(): void {
-  if (currentDragSession === null) {
-    setBodyDraggingAttr(false);
-    return;
-  }
+  const hadSession = currentDragSession !== null;
   currentDragSession = null;
   setBodyDraggingAttr(false);
-  emitDragChange();
+  if (hadSession) {
+    emitDragChange();
+  }
+  emitDragEnd();
 }
 
 export function getActiveDrag(): ActiveDragSession | null {
@@ -95,6 +118,57 @@ function subscribeDrag(listener: () => void): () => void {
 
 export function useActiveDrag(): ActiveDragSession | null {
   return useSyncExternalStore(subscribeDrag, getActiveDrag, () => null);
+}
+
+/**
+ * Selector hook that only re-renders a BookmarkRow when its own ID enters or leaves an active bookmark drag.
+ */
+export function useIsDraggedBookmark(id: string): boolean {
+  const getSnapshot = useCallback(() => {
+    if (!currentDragSession || currentDragSession.type !== 'bookmark') {
+      return false;
+    }
+    if (currentDragSession.id === id) return true;
+    return Boolean(currentDragSession.ids?.includes(id));
+  }, [id]);
+  return useSyncExternalStore(subscribeDrag, getSnapshot, () => false);
+}
+
+/**
+ * Selector hook that only re-renders a FolderNode when it (or one of its ancestors) enters/leaves an active folder drag.
+ */
+export function useIsDraggedFolderOrDescendant(
+  roots: chrome.bookmarks.BookmarkTreeNode[],
+  folderId: string
+): boolean {
+  const getSnapshot = useCallback(() => {
+    if (!currentDragSession || currentDragSession.type !== 'folder' || !currentDragSession.id) {
+      return false;
+    }
+    return isFolderSelfOrDescendant(roots, currentDragSession.id, folderId);
+  }, [roots, folderId]);
+  return useSyncExternalStore(subscribeDrag, getSnapshot, () => false);
+}
+
+/**
+ * Subscribes to drag-session termination ONLY while `hasLocalDragState` is true,
+ * ensuring local `isDragging` / `dropPosition` / `dropState` never remain stuck if `dragend`/`dragleave` is skipped.
+ */
+export function useResetOnDragEnd(hasLocalDragState: boolean, onReset: () => void): void {
+  const onResetRef = useRef(onReset);
+  onResetRef.current = onReset;
+
+  useEffect(() => {
+    if (!hasLocalDragState) return;
+    ensureGlobalCleanupListeners();
+    const listener = () => {
+      onResetRef.current();
+    };
+    dragEndListeners.add(listener);
+    return () => {
+      dragEndListeners.delete(listener);
+    };
+  }, [hasLocalDragState]);
 }
 
 export function markRecentlyMoved(ids: Array<string | number>): void {
@@ -127,6 +201,14 @@ function subscribeMoved(listener: () => void): () => void {
 
 export function useRecentlyMovedIds(): Set<string> {
   return useSyncExternalStore(subscribeMoved, getRecentlyMovedSnapshot, () => emptySet);
+}
+
+/**
+ * Selector hook that only re-renders an item when its own ID enters or leaves `recentlyMovedIds`.
+ */
+export function useIsRecentlyMoved(id: string): boolean {
+  const getSnapshot = useCallback(() => recentlyMovedIds.has(id), [id]);
+  return useSyncExternalStore(subscribeMoved, getSnapshot, () => false);
 }
 
 /**
@@ -255,11 +337,18 @@ export function optimisticallyMoveInTree(
 
   let currentRoot = root;
   let curIndex = targetIndex;
+  const seenIds = new Set<string>();
 
   for (const movingNode of movingNodes) {
     const id = movingNode.id;
-    if (id === targetParentId) continue;
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
 
+    if (isFolderSelfOrDescendant([currentRoot], id, targetParentId)) {
+      continue;
+    }
+
+    const liveNode = findNodeInTrees([currentRoot], id) ?? movingNode;
     const targetParent = findNodeInTrees([currentRoot], targetParentId);
     if (!targetParent) {
       currentRoot = removeNodeFromTree(currentRoot, id);
@@ -278,7 +367,7 @@ export function optimisticallyMoveInTree(
 
       currentRoot = removeNodeFromTree(currentRoot, id);
       if (clampedSlot >= children.length) {
-        currentRoot = insertNodesAtParent(currentRoot, targetParentId, [movingNode]);
+        currentRoot = insertNodesAtParent(currentRoot, targetParentId, [liveNode]);
         curIndex = oldIndex !== -1 ? children.length : children.length + 1;
       } else {
         const postRemovalIndex =
@@ -286,14 +375,14 @@ export function optimisticallyMoveInTree(
         currentRoot = insertNodesAtParent(
           currentRoot,
           targetParentId,
-          [movingNode],
+          [liveNode],
           postRemovalIndex
         );
         curIndex = oldIndex !== -1 && oldIndex < clampedSlot ? clampedSlot : clampedSlot + 1;
       }
     } else {
       currentRoot = removeNodeFromTree(currentRoot, id);
-      currentRoot = insertNodesAtParent(currentRoot, targetParentId, [movingNode]);
+      currentRoot = insertNodesAtParent(currentRoot, targetParentId, [liveNode]);
     }
   }
 
@@ -311,13 +400,23 @@ export function optimisticallyInsertIntoTree(
 ): chrome.bookmarks.BookmarkTreeNode {
   if (newNodes.length === 0) return root;
 
-  let currentRoot = root;
+  const seenIds = new Set<string>();
+  const uniqueNodes: chrome.bookmarks.BookmarkTreeNode[] = [];
   for (const n of newNodes) {
+    if (!n.id || seenIds.has(n.id)) continue;
+    if (isFolderSelfOrDescendant([root], n.id, targetParentId)) continue;
+    seenIds.add(n.id);
+    uniqueNodes.push(n);
+  }
+  if (uniqueNodes.length === 0) return root;
+
+  let currentRoot = root;
+  for (const n of uniqueNodes) {
     currentRoot = removeNodeFromTree(currentRoot, n.id);
   }
 
   if (findNodeInTrees([currentRoot], targetParentId)) {
-    currentRoot = insertNodesAtParent(currentRoot, targetParentId, newNodes, targetIndex);
+    currentRoot = insertNodesAtParent(currentRoot, targetParentId, uniqueNodes, targetIndex);
   }
 
   return stampBookmarkTreeIndices(currentRoot);
