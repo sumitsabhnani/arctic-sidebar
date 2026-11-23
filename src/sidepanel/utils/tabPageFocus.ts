@@ -18,12 +18,26 @@ export function markKeyboardRowActivation(): void {
 }
 
 export function isEditableSidebarElement(el: Element | null): boolean {
-  if (!el || !(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
+  let target: Element | null = el;
+  while (target && (target as HTMLElement).shadowRoot?.activeElement) {
+    target = (target as HTMLElement).shadowRoot!.activeElement;
+  }
+  if (!target || !(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
-  if (el.isContentEditable) return true;
-  const ce = el.getAttribute('contenteditable');
-  return ce === '' || ce === 'true';
+  if (target.isContentEditable) return true;
+  const rawCe = target.getAttribute('contenteditable');
+  if (rawCe !== null) {
+    const ce = rawCe.toLowerCase();
+    if (ce === '' || ce === 'true' || ce === 'plaintext-only') return true;
+  }
+  const role = (target.getAttribute('role') || '').toLowerCase();
+  return (
+    role === 'textbox' ||
+    role === 'searchbox' ||
+    role === 'combobox' ||
+    role === 'spinbutton'
+  );
 }
 
 /**
@@ -50,13 +64,22 @@ export function blurSidebarActiveElementIfPointer(): void {
 
 export function isInjectableWebUrl(url?: string): boolean {
   if (!url || !/^https?:\/\//i.test(url)) return false;
-  if (
-    url.startsWith('https://chromewebstore.google.com/') ||
-    url.startsWith('https://chrome.google.com/webstore')
-  ) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'chromewebstore.google.com' || host === 'microsoftedge.microsoft.com') {
+      return false;
+    }
+    if (
+      host === 'chrome.google.com' &&
+      (parsed.pathname === '/webstore' || parsed.pathname.startsWith('/webstore/'))
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
     return false;
   }
-  return true;
 }
 
 export async function hasPageScriptingPermission(): Promise<boolean> {
@@ -169,6 +192,8 @@ export function focusPageOrPlayerInDocument(): boolean {
     }
   }
 
+  const viewportH = window.innerHeight || document.documentElement?.clientHeight || 0;
+  const viewportW = window.innerWidth || document.documentElement?.clientWidth || 0;
   const videos = Array.from(document.querySelectorAll('video'));
   const qualifyingVideos = videos
     .map((v) => {
@@ -177,6 +202,11 @@ export function focusPageOrPlayerInDocument(): boolean {
       if (rect.width < 200 || rect.height < 120) return null;
       // Ignore muted looping decorative hero/background videos without controls
       if (v.muted && v.loop && !v.controls) return null;
+      const isActivelyPlaying = !v.paused && !v.ended;
+      const isInViewport =
+        (viewportH <= 0 || (rect.bottom > 0 && rect.top < viewportH)) &&
+        (viewportW <= 0 || (rect.right > 0 && rect.left < viewportW));
+      if (!isActivelyPlaying && !isInViewport) return null;
       const hasPlayerWrapper = Boolean(
         v.closest('.html5-video-player, .video-js, .plyr, [data-player]')
       );
@@ -219,14 +249,28 @@ export function handleForwardedKeyInDocument(payload: ForwardedKeyPayload): bool
     active = document.activeElement as HTMLElement | null;
   }
 
+  while (active && active.shadowRoot && active.shadowRoot.activeElement) {
+    active = active.shadowRoot.activeElement as HTMLElement;
+  }
+
   if (active) {
     const tag = active.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return false;
     if (active.isContentEditable) return false;
-    const ce = active.getAttribute?.('contenteditable');
-    if (ce === '' || ce === 'true') return false;
+    const rawCe = active.getAttribute?.('contenteditable');
+    if (rawCe !== null && rawCe !== undefined) {
+      const ce = rawCe.toLowerCase();
+      if (ce === '' || ce === 'true' || ce === 'plaintext-only') return false;
+    }
     const role = (active.getAttribute?.('role') || '').toLowerCase();
-    if (role === 'textbox' || role === 'searchbox' || role === 'combobox') return false;
+    if (
+      role === 'textbox' ||
+      role === 'searchbox' ||
+      role === 'combobox' ||
+      role === 'spinbutton'
+    ) {
+      return false;
+    }
   }
 
   const host = (window.location?.hostname || '').toLowerCase();
@@ -246,6 +290,8 @@ export function handleForwardedKeyInDocument(payload: ForwardedKeyPayload): bool
     return true;
   };
 
+  const viewportH = window.innerHeight || document.documentElement?.clientHeight || 0;
+  const viewportW = window.innerWidth || document.documentElement?.clientWidth || 0;
   const allVideos = Array.from(document.querySelectorAll('video'));
   const videoCandidates = allVideos
     .map((v) => {
@@ -258,6 +304,11 @@ export function handleForwardedKeyInDocument(payload: ForwardedKeyPayload): bool
       }
       if (!isYouTubePlayerRoute) {
         if (v.muted && v.loop && !v.controls) return null;
+        const isActivelyPlaying = !v.paused && !v.ended;
+        const isInViewport =
+          (viewportH <= 0 || (rect.bottom > 0 && rect.top < viewportH)) &&
+          (viewportW <= 0 || (rect.right > 0 && rect.left < viewportW));
+        if (!isActivelyPlaying && active !== v && !isInViewport) return null;
         const hasPlayerWrapper = Boolean(
           v.closest('.html5-video-player, .video-js, .plyr, [data-player]')
         );
@@ -553,10 +604,24 @@ export async function forwardKeyToTab(
   if (typeof tabId !== 'number' || typeof chrome === 'undefined' || !chrome.scripting?.executeScript) {
     return false;
   }
-  if (!isInjectableWebUrl(tabUrl)) return false;
 
-  const hasPerm = await hasPageScriptingPermission();
-  if (!hasPerm) return false;
+  let resolvedUrl = tabUrl;
+  if (!resolvedUrl && chrome.tabs?.get) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      resolvedUrl = tab?.pendingUrl || tab?.url;
+    } catch {
+      return false;
+    }
+  }
+
+  if (!isInjectableWebUrl(resolvedUrl)) return false;
+
+  const [enabled, hasPerm] = await Promise.all([
+    isTabPageFocusSettingEnabled(),
+    hasPageScriptingPermission()
+  ]);
+  if (!enabled || !hasPerm) return false;
 
   try {
     const results = await chrome.scripting.executeScript({

@@ -52,7 +52,7 @@ interface OpenTabsSectionProps {
   revealRequest?: { tabId?: number; nonce: number } | null;
 }
 
-export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
+export const OpenTabsSection: React.FC<OpenTabsSectionProps> = React.memo(({
   unpinnedTabs,
   hasOpenActiveSpaceTabs = false,
   activeTabId,
@@ -111,6 +111,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   const prevSpaceIdRef = React.useRef<string | undefined>(activeSpaceId);
   const prevActiveTabIdRef = React.useRef<number | null | undefined>(undefined);
   const pendingScrollTabIdRef = React.useRef<number | null>(null);
+  const pendingFromRevealRef = React.useRef<boolean>(false);
   const lastHandledRevealNonceRef = React.useRef<number>(0);
   const justScrolledAddedTabIdRef = React.useRef<number | null>(null);
   const clearDropdownRef = React.useRef<HTMLDivElement>(null);
@@ -120,11 +121,30 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
     right: 8
   });
 
+  const unpinnedTabsRef = React.useRef<chrome.tabs.Tab[]>(unpinnedTabs);
+  unpinnedTabsRef.current = unpinnedTabs;
+  const selectedTabIdsRef = React.useRef<Set<number> | undefined>(selectedTabIds);
+  selectedTabIdsRef.current = selectedTabIds;
+  const localEditingTabIdRef = React.useRef<number | null>(localEditingTabId);
+  localEditingTabIdRef.current = localEditingTabId;
+  const localEditingTitleRef = React.useRef<string>(localEditingTitle);
+  localEditingTitleRef.current = localEditingTitle;
+  const onRenameTabRef = React.useRef(onRenameTab);
+  onRenameTabRef.current = onRenameTab;
+  const controlledOnStartRenameRef = React.useRef(controlledOnStartRename);
+  controlledOnStartRenameRef.current = controlledOnStartRename;
+  const controlledOnSaveRenameRef = React.useRef(controlledOnSaveRename);
+  controlledOnSaveRenameRef.current = controlledOnSaveRename;
+  const controlledOnCancelRenameRef = React.useRef(controlledOnCancelRename);
+  controlledOnCancelRenameRef.current = controlledOnCancelRename;
+  const controlledOnChangeEditTitleRef = React.useRef(controlledOnChangeEditTitle);
+  controlledOnChangeEditTitleRef.current = controlledOnChangeEditTitle;
+
   useLayoutEffect(() => {
     if (!isClearMenuOpen || !clearDropdownRef.current) return;
     const triggerRect = clearDropdownRef.current.getBoundingClientRect();
     const menuEl = dropdownMenuRef.current;
-    const menuHeight = menuEl ? menuEl.getBoundingClientRect().height : 84;
+    const menuHeight = menuEl ? menuEl.offsetHeight || menuEl.getBoundingClientRect().height : 84;
     const winW = typeof window !== 'undefined' ? window.innerWidth : 320;
     const winH = typeof window !== 'undefined' ? window.innerHeight : 600;
     // Leave at least 52px margin from the bottom so it never overlaps the bottom Spaces dock
@@ -251,61 +271,104 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
   }, [hasClearableTabs]);
 
   const isControlled = typeof controlledOnStartRename === 'function';
+  const canSectionRename = Boolean(onRenameTab || isControlled);
   const effectiveEditingTabId = isControlled ? controlledEditingTabId : localEditingTabId;
   const effectiveEditingTitle = isControlled && controlledEditingTitle !== undefined ? controlledEditingTitle : localEditingTitle;
 
-  const commitEdit = useCallback(
-    (tabId: number, newTitle: string) => {
-      const tab = unpinnedTabs.find((t) => t.id === tabId);
-      const originalTitle = tab?.title || '';
-      const trimmed = newTitle.trim();
-      if (trimmed && trimmed !== originalTitle && onRenameTab) {
-        onRenameTab(tabId, trimmed);
-      }
-    },
-    [unpinnedTabs, onRenameTab]
-  );
+  const commitEdit = useCallback((tabId: number, newTitle: string) => {
+    const tab = unpinnedTabsRef.current.find((t) => t.id === tabId);
+    const originalTitle = tab?.title || '';
+    const trimmed = newTitle.trim();
+    if (trimmed && trimmed !== originalTitle && onRenameTabRef.current) {
+      onRenameTabRef.current(tabId, trimmed);
+    }
+  }, []);
 
   const localHandleStartRename = useCallback(
     (tab: chrome.tabs.Tab) => {
       if (typeof tab.id !== 'number') return;
-      if (localEditingTabId !== null && localEditingTabId !== tab.id) {
-        commitEdit(localEditingTabId, localEditingTitle);
+      const currentEditingId = localEditingTabIdRef.current;
+      if (currentEditingId !== null && currentEditingId !== tab.id) {
+        commitEdit(currentEditingId, localEditingTitleRef.current);
       }
+      localEditingTabIdRef.current = tab.id;
+      localEditingTitleRef.current = tab.title || '';
       setLocalEditingTabId(tab.id);
       setLocalEditingTitle(tab.title || '');
     },
-    [localEditingTabId, localEditingTitle, commitEdit]
+    [commitEdit]
   );
 
   const localHandleSaveRename = useCallback(
     (tabId: number) => {
-      commitEdit(tabId, localEditingTitle);
+      if (localEditingTabIdRef.current !== tabId) return;
+      commitEdit(tabId, localEditingTitleRef.current);
+      localEditingTabIdRef.current = null;
+      localEditingTitleRef.current = '';
       setLocalEditingTabId(null);
       setLocalEditingTitle('');
     },
-    [commitEdit, localEditingTitle]
+    [commitEdit]
   );
 
   const localHandleCancelRename = useCallback(() => {
+    localEditingTabIdRef.current = null;
+    localEditingTitleRef.current = '';
     setLocalEditingTabId(null);
     setLocalEditingTitle('');
   }, []);
 
-  const handleStartRename = controlledOnStartRename || localHandleStartRename;
-  const handleSaveRename = (tabId: number) => {
-    if (controlledOnSaveRename) {
-      controlledOnSaveRename();
+  const handleStartRenameForTab = useCallback(
+    (tab: chrome.tabs.Tab) => {
+      if (controlledOnStartRenameRef.current) {
+        controlledOnStartRenameRef.current(tab);
+      } else {
+        localHandleStartRename(tab);
+      }
+    },
+    [localHandleStartRename]
+  );
+
+  const handleSaveRenameForTab = useCallback(
+    (tabId: number) => {
+      if (controlledOnSaveRenameRef.current) {
+        controlledOnSaveRenameRef.current();
+      } else {
+        localHandleSaveRename(tabId);
+      }
+    },
+    [localHandleSaveRename]
+  );
+
+  const handleCancelRenameStable = useCallback(() => {
+    if (controlledOnCancelRenameRef.current) {
+      controlledOnCancelRenameRef.current();
     } else {
-      localHandleSaveRename(tabId);
+      localHandleCancelRename();
     }
-  };
-  const handleCancelRename = controlledOnCancelRename || localHandleCancelRename;
-  const handleChangeEditTitle = controlledOnChangeEditTitle || setLocalEditingTitle;
+  }, [localHandleCancelRename]);
+
+  const handleChangeEditTitleStable = useCallback((newTitle: string) => {
+    if (controlledOnChangeEditTitleRef.current) {
+      controlledOnChangeEditTitleRef.current(newTitle);
+    } else {
+      localEditingTitleRef.current = newTitle;
+      setLocalEditingTitle(newTitle);
+    }
+  }, []);
+
+  const getSelectedTabIds = useCallback(() => selectedTabIdsRef.current, []);
+
+  const resolveSelectedTabs = useCallback((tabIds: number[]) => {
+    const idSet = new Set(tabIds);
+    return unpinnedTabsRef.current.filter((t) => typeof t.id === 'number' && idSet.has(t.id));
+  }, []);
 
   // Cleanup if edited tab is closed or removed
   useEffect(() => {
     if (localEditingTabId !== null && !unpinnedTabs.some((t) => t.id === localEditingTabId)) {
+      localEditingTabIdRef.current = null;
+      localEditingTitleRef.current = '';
       setLocalEditingTabId(null);
       setLocalEditingTitle('');
     }
@@ -331,28 +394,39 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
 
     if (addedIds.length > 0 && !isCollapsed) {
       const latestTabId = addedIds[addedIds.length - 1];
-      justScrolledAddedTabIdRef.current = latestTabId;
+      const isAppendedAtBottom = currentIds[currentIds.length - 1] === latestTabId;
       const sectionEl = sectionRef.current;
       if (sectionEl) {
-        const rowEl = sectionEl.querySelector(
-          `[data-tab-id="${latestTabId}"]`
-        ) as HTMLElement | null;
-        if (rowEl && typeof rowEl.scrollIntoView === 'function') {
-          rowEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
-        const scrollContainer = sectionEl.closest('.overflow-y-auto') as HTMLElement | null;
-        if (scrollContainer) {
-          if (typeof scrollContainer.scrollTo === 'function') {
-            scrollContainer.scrollTo({
-              top: scrollContainer.scrollHeight,
-              behavior: 'smooth'
-            });
+        if (isAppendedAtBottom) {
+          justScrolledAddedTabIdRef.current = latestTabId;
+          const rowEl = sectionEl.querySelector(
+            `[data-tab-id="${latestTabId}"]`
+          ) as HTMLElement | null;
+          if (rowEl && typeof rowEl.scrollIntoView === 'function') {
+            rowEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
           }
-          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+          const scrollContainer = sectionEl.closest('.overflow-y-auto') as HTMLElement | null;
+          if (scrollContainer) {
+            if (typeof scrollContainer.scrollTo === 'function') {
+              scrollContainer.scrollTo({
+                top: scrollContainer.scrollHeight,
+                behavior: 'smooth'
+              });
+            }
+            scrollContainer.scrollTop = scrollContainer.scrollHeight;
+          }
+        } else if (latestTabId === activeTabId) {
+          justScrolledAddedTabIdRef.current = latestTabId;
+          const rowEl = sectionEl.querySelector(
+            `[data-tab-id="${latestTabId}"]`
+          ) as HTMLElement | null;
+          if (rowEl) {
+            scrollElementIntoContainerView(rowEl);
+          }
         }
       }
     }
-  }, [unpinnedTabs, activeSpaceId, isInitialTabsLoaded, isCollapsed]);
+  }, [unpinnedTabs, activeSpaceId, activeTabId, isInitialTabsLoaded, isCollapsed]);
 
   // Automatically scroll an already-open Today's Tab into view when it becomes active
   // (e.g. switched via Command Bar, keyboard shortcut, or tab strip)
@@ -366,6 +440,7 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
       lastHandledRevealNonceRef.current = revealRequest.nonce;
       if (typeof revealRequest.tabId === 'number') {
         pendingScrollTabIdRef.current = revealRequest.tabId;
+        pendingFromRevealRef.current = true;
       }
     }
 
@@ -377,20 +452,32 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
       if (typeof activeTabId === 'number') {
         if (justScrolledAddedTabIdRef.current === activeTabId) {
           justScrolledAddedTabIdRef.current = null;
-          pendingScrollTabIdRef.current = null;
-          return;
+          if (!pendingFromRevealRef.current) {
+            pendingScrollTabIdRef.current = null;
+            return;
+          }
+        } else {
+          justScrolledAddedTabIdRef.current = null;
+          pendingScrollTabIdRef.current = activeTabId;
+          pendingFromRevealRef.current = Boolean(
+            revealRequest && revealRequest.tabId === activeTabId
+          );
         }
-        pendingScrollTabIdRef.current = activeTabId;
       } else {
+        justScrolledAddedTabIdRef.current = null;
         pendingScrollTabIdRef.current = null;
+        pendingFromRevealRef.current = false;
       }
     }
 
-    justScrolledAddedTabIdRef.current = null;
-
     const targetTabId = pendingScrollTabIdRef.current;
     if (typeof targetTabId !== 'number' || isCollapsed) return;
-    if (!unpinnedTabs.some((t) => t.id === targetTabId)) return;
+    if (!unpinnedTabs.some((t) => t.id === targetTabId)) {
+      if (!pendingFromRevealRef.current) {
+        pendingScrollTabIdRef.current = null;
+      }
+      return;
+    }
 
     const sectionEl = sectionRef.current;
     if (!sectionEl) return;
@@ -400,6 +487,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
     if (!rowEl) return;
 
     pendingScrollTabIdRef.current = null;
+    pendingFromRevealRef.current = false;
+    justScrolledAddedTabIdRef.current = null;
     scrollElementIntoContainerView(rowEl);
   }, [
     activeTabId,
@@ -506,11 +595,12 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   >
                     <button
                       type="button"
+                      disabled={unpinnedTabs.length === 0}
                       onClick={() => {
                         onCloseAll();
                         setIsClearMenuOpen(false);
                       }}
-                      className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                      className="w-full flex items-center space-x-2 px-2.5 py-1.5 rounded-lg text-left text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-45 disabled:pointer-events-none transition-colors"
                     >
                       <Trash2 className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
                       <span>Clear unpinned tabs</span>
@@ -591,7 +681,8 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   onOpenReminderPopover={onOpenReminderPopover}
                   densityMode={densityMode}
                   isSelected={typeof tab.id === 'number' && Boolean(selectedTabIds?.has(tab.id))}
-                  selectedTabIds={selectedTabIds}
+                  getSelectedTabIds={getSelectedTabIds}
+                  resolveSelectedTabs={resolveSelectedTabs}
                   onSelectTab={onSelectTab}
                   onCloseMultipleTabs={onCloseMultipleTabs}
                   onPinMultipleTabsToWorkspace={onPinMultipleTabsToWorkspace}
@@ -601,10 +692,10 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
                   onDiscardMultipleTabs={onDiscardMultipleTabs}
                   isEditing={isEditing}
                   editTitle={isEditing ? (effectiveEditingTitle || '') : (tab.title || '')}
-                  onStartRename={() => handleStartRename(tab)}
-                  onChangeEditTitle={handleChangeEditTitle}
-                  onSaveRename={() => typeof tab.id === 'number' && handleSaveRename(tab.id)}
-                  onCancelRename={handleCancelRename}
+                  onStartRenameTab={canSectionRename ? handleStartRenameForTab : undefined}
+                  onChangeEditTitle={handleChangeEditTitleStable}
+                  onSaveRenameTab={handleSaveRenameForTab}
+                  onCancelRename={handleCancelRenameStable}
                 />
               );
             })
@@ -613,4 +704,4 @@ export const OpenTabsSection: React.FC<OpenTabsSectionProps> = ({
       )}
     </div>
   );
-};
+});

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Globe,
   X,
@@ -23,22 +23,66 @@ import { markKeyboardRowActivation } from '../utils/tabPageFocus';
 import {
   attachMultiDragPreview,
   endDragSession,
+  getActiveDrag,
   parseDragPayload,
   startDragSession,
-  useActiveDrag,
-  useRecentlyMovedIds
+  useIsDraggedOpenTab,
+  useIsRecentlyMoved,
+  useResetOnDragEnd
 } from '../utils/dnd';
 import type { ContextMenuItem } from './ContextMenu';
 
+function isNewTabUrl(rawUrl?: string): boolean {
+  return (
+    !rawUrl ||
+    rawUrl.startsWith('chrome://newtab') ||
+    rawUrl === 'about:blank' ||
+    rawUrl.includes('/newtab.html') ||
+    rawUrl.includes('/command.html')
+  );
+}
+
 function formatSubdomain(rawUrl?: string): string {
-  if (!rawUrl || rawUrl === 'about:blank' || rawUrl.startsWith('chrome://')) return '';
+  if (
+    !rawUrl ||
+    rawUrl === 'about:blank' ||
+    rawUrl.startsWith('chrome://') ||
+    rawUrl.startsWith('chrome-extension://') ||
+    rawUrl.startsWith('edge://') ||
+    rawUrl.startsWith('about:')
+  ) {
+    return '';
+  }
+  if (/^data:/i.test(rawUrl)) {
+    const semi = rawUrl.indexOf(';');
+    const comma = rawUrl.indexOf(',');
+    const end = semi !== -1 && (comma === -1 || semi < comma) ? semi : comma;
+    return end > 5 && end <= 48 ? rawUrl.slice(0, end) : 'data:';
+  }
   try {
     const u = new URL(rawUrl);
-    let host = u.hostname.replace(/^www\./, '');
+    const host = u.hostname.replace(/^www\./, '');
     const path = u.pathname === '/' ? '' : u.pathname;
-    return `${host}${path}`;
+    const formatted = `${host}${path}`;
+    return formatted.length > 160 ? `${formatted.slice(0, 160)}…` : formatted;
   } catch {
-    return rawUrl;
+    return rawUrl.length > 160 ? `${rawUrl.slice(0, 160)}…` : rawUrl;
+  }
+}
+
+function formatTooltipUrl(rawUrl?: string): string {
+  if (!rawUrl) return '';
+  return rawUrl.length > 300 ? `${rawUrl.slice(0, 300)}…` : rawUrl;
+}
+
+function copyUrlToClipboard(url: string): void {
+  try {
+    const res = navigator.clipboard?.writeText?.(url);
+    if (res && typeof res.catch === 'function') {
+      res.catch(() => {});
+    }
+  } catch {
+    // Ignore clipboard write errors when panel lacks focus
   }
 }
 
@@ -64,6 +108,8 @@ interface OpenTabRowProps {
   onOpenReminderPopover?: (target: { type: 'tab'; tabId: number; url: string; title: string }, anchorRect: DOMRect) => void;
   isSelected?: boolean;
   selectedTabIds?: Set<number>;
+  getSelectedTabIds?: () => Set<number> | undefined;
+  resolveSelectedTabs?: (tabIds: number[]) => chrome.tabs.Tab[];
   onSelectTab?: (tab: chrome.tabs.Tab, e: React.MouseEvent) => void;
   onCloseMultipleTabs?: (tabIds: number[]) => void;
   onPinMultipleTabsToWorkspace?: (tabs: chrome.tabs.Tab[]) => void;
@@ -74,12 +120,14 @@ interface OpenTabRowProps {
   isEditing?: boolean;
   editTitle?: string;
   onStartRename?: () => void;
+  onStartRenameTab?: (tab: chrome.tabs.Tab) => void;
   onChangeEditTitle?: (newTitle: string) => void;
   onSaveRename?: () => void;
+  onSaveRenameTab?: (tabId: number) => void;
   onCancelRename?: () => void;
 }
 
-export const OpenTabRow: React.FC<OpenTabRowProps> = ({
+const OpenTabRowComponent: React.FC<OpenTabRowProps> = ({
   tab,
   isActive,
   spaces = [],
@@ -101,6 +149,8 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   onOpenReminderPopover,
   isSelected = false,
   selectedTabIds,
+  getSelectedTabIds,
+  resolveSelectedTabs,
   onSelectTab,
   onCloseMultipleTabs,
   onPinMultipleTabsToWorkspace,
@@ -111,38 +161,53 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   isEditing: controlledIsEditing,
   editTitle: controlledEditTitle,
   onStartRename,
+  onStartRenameTab,
   onChangeEditTitle,
   onSaveRename,
+  onSaveRenameTab,
   onCancelRename
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dropPosition, setDropPosition] = useState<'top' | 'bottom' | null>(null);
-  const activeDrag = useActiveDrag();
-  const recentlyMovedIds = useRecentlyMovedIds();
-  const isPartOfActiveDrag =
-    isDragging ||
-    Boolean(
-      typeof tab.id === 'number' &&
-        activeDrag?.type === 'openTab' &&
-        activeDrag.tabIds?.includes(tab.id)
-    );
-  const isRecentlyMoved =
-    typeof tab.id === 'number' && recentlyMovedIds.has(`tab-${tab.id}`);
+  const lastDragOverYRef = useRef<number | null>(null);
+  const isDraggedOpenTab = useIsDraggedOpenTab(tab.id);
+  const isPartOfActiveDrag = isDragging || isDraggedOpenTab;
+  const isRecentlyMoved = useIsRecentlyMoved(typeof tab.id === 'number' ? `tab-${tab.id}` : '');
   const [localIsEditing, setLocalIsEditing] = useState(false);
   const [localEditTitle, setLocalEditTitle] = useState(tab.title || '');
   const [isCopied, setIsCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const renameHandledRef = useRef(false);
 
-  const isControlled = typeof onStartRename === 'function';
+  const resetDragState = useCallback(() => {
+    setIsDragging(false);
+    setDropPosition(null);
+    lastDragOverYRef.current = null;
+  }, []);
+  useResetOnDragEnd(isDragging || dropPosition !== null, resetDragState);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current !== null) {
+        clearTimeout(copyTimeoutRef.current);
+        copyTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const isControlled =
+    typeof onStartRename === 'function' || typeof onStartRenameTab === 'function';
+  const canRename = Boolean(onRenameTab || isControlled);
   const effectiveIsEditing = isControlled ? Boolean(controlledIsEditing) : localIsEditing;
-  const effectiveEditTitle = isControlled && typeof controlledEditTitle === 'string' ? controlledEditTitle : localEditTitle;
+  const effectiveEditTitle =
+    isControlled && typeof controlledEditTitle === 'string' ? controlledEditTitle : localEditTitle;
+
+  if (!effectiveIsEditing) {
+    renameHandledRef.current = false;
+  }
 
   const tabId = tab.id;
-  const isNewTab =
-    !tab.url ||
-    tab.url.startsWith('chrome://newtab') ||
-    tab.url === 'about:blank' ||
-    tab.url.includes('/newtab.html') ||
-    tab.url.includes('/command.html');
+  const isNewTab = isNewTabUrl(tab.url);
   const titleText = tab.title || (isNewTab ? 'New Tab' : tab.url || 'Untitled Tab');
   const { faviconSrc, handleFaviconError, handleFaviconLoad } = useResolvedFavicon({
     pageUrl: tab.url,
@@ -155,14 +220,64 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   const isDiscarded = Boolean(tab.discarded);
   const isLoading = tab.status === 'loading';
 
+  const triggerStartRename = () => {
+    renameHandledRef.current = false;
+    if (onStartRenameTab) {
+      onStartRenameTab(tab);
+    } else if (onStartRename) {
+      onStartRename();
+    } else {
+      setLocalEditTitle(tab.title || '');
+      setLocalIsEditing(true);
+    }
+  };
+
+  const commitRename = () => {
+    if (renameHandledRef.current) return;
+    renameHandledRef.current = true;
+    if (onSaveRenameTab && typeof tabId === 'number') {
+      onSaveRenameTab(tabId);
+    } else if (onSaveRename) {
+      onSaveRename();
+    } else {
+      const trimmed = effectiveEditTitle.trim();
+      const original = (tab.title || '').trim();
+      if (trimmed && trimmed !== original && onRenameTab && typeof tabId === 'number') {
+        onRenameTab(tabId, trimmed);
+      }
+      setLocalIsEditing(false);
+    }
+  };
+
+  const cancelRename = () => {
+    if (renameHandledRef.current) return;
+    renameHandledRef.current = true;
+    if (onCancelRename) {
+      onCancelRename();
+    } else {
+      setLocalIsEditing(false);
+      setLocalEditTitle(tab.title || '');
+    }
+  };
+
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     if (typeof tabId !== 'number') return;
 
-    const isMultiSelected = Boolean(selectedTabIds && selectedTabIds.has(tabId) && selectedTabIds.size > 1);
+    const effectiveSelectedIds = getSelectedTabIds ? getSelectedTabIds() : selectedTabIds;
+    const isMultiSelected = Boolean(
+      effectiveSelectedIds && effectiveSelectedIds.has(tabId) && effectiveSelectedIds.size > 1
+    );
 
     if (isMultiSelected) {
-      const selectedIds = Array.from(selectedTabIds!);
+      const selectedIds = Array.from(effectiveSelectedIds!);
+      const resolvedTabs = resolveSelectedTabs
+        ? resolveSelectedTabs(selectedIds)
+        : selectedIds.includes(tabId)
+        ? [tab]
+        : [];
+      const pinnableTabs = resolvedTabs.filter((t) => Boolean(t.url && !isNewTabUrl(t.url)));
+
       const multiItems: ContextMenuItem[] = [
         ...(onMoveMultipleTabsToSpace && spaces.length > 1
           ? [
@@ -182,20 +297,25 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               {
                 label: `Pin ${selectedIds.length} Tabs to Active Space`,
                 icon: <FolderPlus className="w-3.5 h-3.5" />,
-                action: () => onPinMultipleTabsToWorkspace([])
+                action: () => onPinMultipleTabsToWorkspace(pinnableTabs),
+                disabled: pinnableTabs.length === 0
               }
             ]
           : []),
         ...(onPinMultipleTabsToSpace && spaces.length > 0
           ? [
               {
-                label: `Move ${selectedIds.length} Tabs to Space`,
-                icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
-                submenu: spaces.map((sp) => ({
-                  label: sp.name,
-                  icon: <Folder className="w-3.5 h-3.5" />,
-                  action: () => onPinMultipleTabsToSpace([], sp.folderId)
-                }))
+                label: `Pin ${selectedIds.length} Tabs to Space`,
+                icon: <FolderPlus className="w-3.5 h-3.5" />,
+                disabled: pinnableTabs.length === 0,
+                submenu:
+                  pinnableTabs.length > 0
+                    ? spaces.map((sp) => ({
+                        label: sp.name,
+                        icon: <Folder className="w-3.5 h-3.5" />,
+                        action: () => onPinMultipleTabsToSpace(pinnableTabs, sp.folderId)
+                      }))
+                    : undefined
               }
             ]
           : []),
@@ -253,8 +373,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       ...(onPinToSpace && spaces.length > 0 && tab.url && !isNewTab
         ? [
             {
-              label: 'Move to Space',
-              icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
+              label: onMoveTabToSpace && spaces.length > 1 ? 'Pin to Space' : 'Move to Space',
+              icon:
+                onMoveTabToSpace && spaces.length > 1 ? (
+                  <FolderPlus className="w-3.5 h-3.5" />
+                ) : (
+                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                ),
               submenu: spaces.map((sp) => ({
                 label: sp.name,
                 icon: <Folder className="w-3.5 h-3.5" />,
@@ -276,7 +401,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         label: 'Copy Link',
         icon: <Link2 className="w-3.5 h-3.5" />,
         action: () => {
-          if (tab.url) navigator.clipboard.writeText(tab.url);
+          if (tab.url) copyUrlToClipboard(tab.url);
         },
         disabled: !tab.url || isNewTab,
         dividerBefore: true
@@ -296,19 +421,12 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         icon: <CopyPlus className="w-3.5 h-3.5" />,
         action: () => onDuplicate(tabId)
       },
-      ...(onRenameTab && typeof tabId === 'number'
+      ...(canRename && typeof tabId === 'number'
         ? [
             {
               label: 'Rename Tab',
               icon: <Edit2 className="w-3.5 h-3.5" />,
-              action: () => {
-                if (onStartRename) {
-                  onStartRename();
-                } else {
-                  setLocalEditTitle(tab.title || '');
-                  setLocalIsEditing(true);
-                }
-              }
+              action: () => triggerStartRename()
             }
           ]
         : []),
@@ -328,11 +446,12 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     if (typeof tabId !== 'number') return;
     e.stopPropagation();
     setIsDragging(true);
+    const effectiveSelectedIds = getSelectedTabIds ? getSelectedTabIds() : selectedTabIds;
     let tabIdsToDrag: number[] = [tabId];
-    if (selectedTabIds && selectedTabIds.has(tabId)) {
-      tabIdsToDrag = Array.from(selectedTabIds);
-    } else if (selectedTabIds && selectedTabIds.size > 0 && (e.metaKey || e.ctrlKey)) {
-      tabIdsToDrag = Array.from(new Set([...Array.from(selectedTabIds), tabId]));
+    if (effectiveSelectedIds && effectiveSelectedIds.has(tabId)) {
+      tabIdsToDrag = Array.from(effectiveSelectedIds);
+    } else if (effectiveSelectedIds && effectiveSelectedIds.size > 0 && (e.metaKey || e.ctrlKey)) {
+      tabIdsToDrag = Array.from(new Set([...Array.from(effectiveSelectedIds), tabId]));
     }
     const payload = {
       type: 'openTab' as const,
@@ -349,12 +468,12 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
   };
 
   const handleDragEnd = () => {
-    setIsDragging(false);
-    setDropPosition(null);
+    resetDragState();
     endDragSession();
   };
 
   const handleDragOver = (e: React.DragEvent) => {
+    const activeDrag = getActiveDrag();
     if (activeDrag && activeDrag.type !== 'openTab') {
       if (dropPosition !== null) setDropPosition(null);
       return;
@@ -371,30 +490,39 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
+    if (lastDragOverYRef.current === e.clientY && dropPosition !== null) {
+      return;
+    }
+    lastDragOverYRef.current = e.clientY;
     const rect = e.currentTarget.getBoundingClientRect();
-    const isTop = e.clientY - rect.top < rect.height / 2;
-    setDropPosition(isTop ? 'top' : 'bottom');
+    const nextPos = e.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom';
+    if (nextPos !== dropPosition) {
+      setDropPosition(nextPos);
+    }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    lastDragOverYRef.current = null;
     setDropPosition(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
+    lastDragOverYRef.current = null;
     const rect = e.currentTarget.getBoundingClientRect();
     const pos =
       dropPosition || (e.clientY - rect.top < rect.height / 2 ? 'top' : 'bottom');
     setDropPosition(null);
-    endDragSession();
 
     const data = parseDragPayload(e);
     if (!data || data.type !== 'openTab') return;
 
+    endDragSession();
     e.preventDefault();
     e.stopPropagation();
 
-    const targetSlotIndex = tab.index + (pos === 'bottom' ? 1 : 0);
+    const baseIndex = typeof tab.index === 'number' ? tab.index : 0;
+    const targetSlotIndex = baseIndex + (pos === 'bottom' ? 1 : 0);
     const idsToMove: number[] =
       Array.isArray(data.tabIds) && data.tabIds.length > 0
         ? (data.tabIds as number[])
@@ -417,8 +545,13 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
             : targetSlotIndex;
         onMoveOpenTab(idsToMove[0], effectiveIndex);
       } else {
+        const draggedIdx = typeof data.index === 'number' ? data.index : -1;
+        const movingDown = draggedIdx !== -1 && draggedIdx < targetSlotIndex;
+        const startSlot = movingDown
+          ? Math.max(0, targetSlotIndex - idsToMove.length)
+          : targetSlotIndex;
         for (let i = 0; i < idsToMove.length; i++) {
-          onMoveOpenTab(idsToMove[i], targetSlotIndex + i);
+          onMoveOpenTab(idsToMove[i], startSlot + i);
         }
       }
     }
@@ -430,15 +563,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         data-tab-id={tabId}
         onSubmit={(e) => {
           e.preventDefault();
-          if (onSaveRename) {
-            onSaveRename();
-          } else {
-            const trimmed = effectiveEditTitle.trim();
-            if (trimmed && onRenameTab && typeof tabId === 'number') {
-              onRenameTab(tabId, trimmed);
-            }
-            setLocalIsEditing(false);
-          }
+          commitRename();
         }}
         className="flex items-center h-[34px] px-2.5 my-[1px] space-x-1.5 bg-zinc-200/50 dark:bg-white/[0.06] rounded-lg border border-cyan-500/60"
       >
@@ -452,14 +577,11 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               setLocalEditTitle(e.target.value);
             }
           }}
+          onBlur={() => commitRename()}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
-              if (onCancelRename) {
-                onCancelRename();
-              } else {
-                setLocalIsEditing(false);
-                setLocalEditTitle(tab.title || '');
-              }
+              e.stopPropagation();
+              cancelRename();
             }
           }}
           autoFocus
@@ -478,14 +600,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           type="button"
           title="Cancel"
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => {
-            if (onCancelRename) {
-              onCancelRename();
-            } else {
-              setLocalIsEditing(false);
-              setLocalEditTitle(tab.title || '');
-            }
-          }}
+          onClick={() => cancelRename()}
           className="p-1 rounded text-zinc-400 hover:text-zinc-900 dark:hover:text-white"
         >
           <X className="w-3.5 h-3.5" />
@@ -507,7 +622,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      title={`${titleText}\n${tab.url || ''}${isDiscarded ? '\n(Sleeping to save memory - click to wake)' : ''}`}
+      title={`${titleText}\n${formatTooltipUrl(tab.url)}${isDiscarded ? '\n(Sleeping to save memory - click to wake)' : ''}`}
       onMouseDown={(e) => {
         if (e.shiftKey) e.preventDefault();
       }}
@@ -519,15 +634,16 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
           return;
         }
         onSelectTab?.(tab, e);
-        if (tabId) onFocus(tabId);
+        if (typeof tabId === 'number') onFocus(tabId);
       }}
       onDoubleClick={(e) => {
         if ((e.target as HTMLElement).closest('button')) return;
-        if (tabId) onReload(tabId);
+        if (typeof tabId === 'number') onReload(tabId);
       }}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
-        if ((e.key === 'Enter' || e.key === ' ') && tabId) {
+        if (e.target !== e.currentTarget) return;
+        if ((e.key === 'Enter' || e.key === ' ') && typeof tabId === 'number') {
           e.preventDefault();
           markKeyboardRowActivation();
           onFocus(tabId);
@@ -566,12 +682,10 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
       {/* Left: Favicon & Title */}
       <div className="flex items-center min-w-0 flex-1 space-x-2 mr-2">
         <div
-          role="button"
-          tabIndex={0}
           title={`${titleText} (Double-click to reload)`}
           onDoubleClick={(e) => {
             e.stopPropagation();
-            if (tabId) onReload(tabId);
+            if (typeof tabId === 'number') onReload(tabId);
           }}
           className="relative flex-shrink-0 w-4 h-4 flex items-center justify-center rounded transition-transform active:scale-90"
         >
@@ -604,13 +718,9 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
         <div
           className="flex flex-col min-w-0 flex-1 justify-center py-0.5"
           onDoubleClick={(e) => {
+            if (!canRename) return;
             e.stopPropagation();
-            if (onStartRename) {
-              onStartRename();
-            } else {
-              setLocalEditTitle(tab.title || '');
-              setLocalIsEditing(true);
-            }
+            triggerStartRename();
           }}
         >
           <div className="flex items-center space-x-1.5 min-w-0">
@@ -651,6 +761,7 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
               e.stopPropagation();
               onToggleMute(tab);
             }}
+            onDoubleClick={(e) => e.stopPropagation()}
             className={`flex items-center justify-center w-5 h-5 rounded-md transition-colors ${
               isMuted
                 ? 'text-rose-500 dark:text-rose-400 bg-rose-500/15 hover:bg-rose-500/25'
@@ -690,9 +801,15 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
             onClick={(e) => {
               e.stopPropagation();
               if (tab.url) {
-                navigator.clipboard.writeText(tab.url);
+                copyUrlToClipboard(tab.url);
                 setIsCopied(true);
-                setTimeout(() => setIsCopied(false), 1500);
+                if (copyTimeoutRef.current !== null) {
+                  clearTimeout(copyTimeoutRef.current);
+                }
+                copyTimeoutRef.current = setTimeout(() => {
+                  copyTimeoutRef.current = null;
+                  setIsCopied(false);
+                }, 1500);
               }
             }}
             className={`hidden group-hover:flex items-center justify-center w-5 h-5 rounded-md transition-colors ${
@@ -760,3 +877,5 @@ export const OpenTabRow: React.FC<OpenTabRowProps> = ({
     </div>
   );
 };
+
+export const OpenTabRow = React.memo(OpenTabRowComponent);

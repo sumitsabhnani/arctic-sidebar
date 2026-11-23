@@ -1,7 +1,8 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { OpenTabRow } from './OpenTabRow';
+import { endDragSession, getActiveDrag, parseDragPayload, startDragSession } from '../utils/dnd';
 import type { TabWithFaviconMeta } from '../../types';
 
 function createBaseProps(overrides: Partial<React.ComponentProps<typeof OpenTabRow>> = {}) {
@@ -39,6 +40,10 @@ function createBaseProps(overrides: Partial<React.ComponentProps<typeof OpenTabR
 }
 
 describe('OpenTabRow Component', () => {
+  afterEach(() => {
+    endDragSession();
+  });
+
   it('renders tab title, active badge and formatted subdomain in relaxed mode, and focuses on click', () => {
     const props = createBaseProps({
       isActive: true,
@@ -270,5 +275,154 @@ describe('OpenTabRow Component', () => {
     img = container.querySelector('img');
     expect(img).toBeInTheDocument();
     expect(img?.getAttribute('src')).toBe(iconUrl);
+  });
+
+  it('falls back to in-memory drag session when dataTransfer JSON is empty and preserves non-openTab sessions for parent drop zones', () => {
+    const onMoveOpenTabs = vi.fn();
+    let parentReceivedId: unknown = null;
+    const props = createBaseProps({
+      tab: {
+        id: 42,
+        index: 2,
+        windowId: 10,
+        url: 'https://github.com/facebook/react',
+        title: 'React'
+      } as chrome.tabs.Tab,
+      onMoveOpenTabs
+    });
+
+    render(
+      <div
+        onDrop={(e) => {
+          parentReceivedId = parseDragPayload(e)?.id ?? null;
+        }}
+      >
+        <OpenTabRow {...props} />
+      </div>
+    );
+    const row = screen.getByText('React').closest('[role="button"]') as HTMLElement;
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 34,
+      left: 0,
+      right: 260,
+      width: 260,
+      height: 34,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+
+    // 1. Non-openTab active drag session bubbles intact to parent drop zone before window cleanup
+    startDragSession({ type: 'bookmark', id: 'bm-1', url: 'https://example.com' });
+    fireEvent.drop(row, {
+      clientY: 20,
+      dataTransfer: { getData: () => '' }
+    });
+    expect(onMoveOpenTabs).not.toHaveBeenCalled();
+    expect(parentReceivedId).toBe('bm-1');
+    expect(getActiveDrag()).toBeNull();
+
+    // 2. openTab active drag session succeeds even when dataTransfer.getData returns '' and stops bubbling
+    parentReceivedId = null;
+    startDragSession({ type: 'openTab', tabId: 15, tabIds: [15], index: 0 });
+    fireEvent.drop(row, {
+      clientY: 28,
+      dataTransfer: { getData: () => '' }
+    });
+    expect(onMoveOpenTabs).toHaveBeenCalledWith([15], 3);
+    expect(parentReceivedId).toBeNull();
+    expect(getActiveDrag()).toBeNull();
+  });
+
+  it('does not hijack Enter/Space keydown from focused child action buttons or create a nested favicon tab stop', () => {
+    const props = createBaseProps({
+      tab: {
+        id: 42,
+        index: 0,
+        windowId: 10,
+        url: 'https://youtube.com/watch?v=123',
+        title: 'YouTube Video',
+        audible: true,
+        mutedInfo: { muted: false }
+      } as chrome.tabs.Tab
+    });
+
+    const { container } = render(<OpenTabRow {...props} />);
+
+    // Only the outer row has role="button" + tabIndex=0 (no duplicate favicon tabIndex=0)
+    const tabbableRoleButtons = container.querySelectorAll('[role="button"][tabindex="0"]');
+    expect(tabbableRoleButtons.length).toBe(1);
+
+    const muteBtn = container.querySelector(
+      '[data-tooltip="Tab is playing audio (Click to mute)"]'
+    ) as HTMLButtonElement;
+    muteBtn.focus();
+
+    const enterPrevented = !fireEvent.keyDown(muteBtn, { key: 'Enter' });
+    const spacePrevented = !fireEvent.keyDown(muteBtn, { key: ' ' });
+    expect(enterPrevented).toBe(false);
+    expect(spacePrevented).toBe(false);
+    expect(props.onFocus).not.toHaveBeenCalled();
+  });
+
+  it('commits inline rename on blur, skips no-op renames, and reloads on title double-click when rename is unsupported', () => {
+    const onRenameTab = vi.fn();
+    const { rerender } = render(<OpenTabRow {...createBaseProps({ onRenameTab })} />);
+
+    // 1. Blur without changing title exits edit mode without calling onRenameTab
+    fireEvent.doubleClick(screen.getByText('facebook/react: A JavaScript library'));
+    let input = screen.getByDisplayValue('facebook/react: A JavaScript library');
+    fireEvent.blur(input);
+    expect(onRenameTab).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+
+    // 2. Blur after editing commits updated title and exits edit mode
+    fireEvent.doubleClick(screen.getByText('facebook/react: A JavaScript library'));
+    input = screen.getByDisplayValue('facebook/react: A JavaScript library');
+    fireEvent.change(input, { target: { value: 'Custom Title' } });
+    fireEvent.blur(input);
+    expect(onRenameTab).toHaveBeenCalledTimes(1);
+    expect(onRenameTab).toHaveBeenCalledWith(42, 'Custom Title');
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+
+    // 3. When onRenameTab is omitted, double-clicking the title reloads instead of opening a dead input
+    const noRenameProps = createBaseProps({ onRenameTab: undefined });
+    rerender(<OpenTabRow {...noRenameProps} />);
+    fireEvent.doubleClick(screen.getByText('facebook/react: A JavaScript library'));
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(noRenameProps.onReload).toHaveBeenCalledWith(42);
+  });
+
+  it('handles clipboard rejections cleanly, clears copy timer on unmount, and truncates huge data: URLs', async () => {
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn().mockRejectedValue(new Error('Document is not focused'))
+      }
+    });
+
+    const hugeDataUrl = `data:text/html;base64,${'A'.repeat(2000)}`;
+    const props = createBaseProps({
+      densityMode: 'relaxed',
+      tab: {
+        id: 42,
+        index: 0,
+        windowId: 10,
+        url: hugeDataUrl,
+        title: 'Inline Preview'
+      } as chrome.tabs.Tab
+    });
+
+    const { container, unmount } = render(<OpenTabRow {...props} />);
+    const row = screen.getByText('Inline Preview').closest('[role="button"]')!;
+    expect(row.getAttribute('title')!.length).toBeLessThan(350);
+    expect(screen.getByText('data:text/html')).toBeInTheDocument();
+
+    const copyBtn = container.querySelector('button[data-tooltip="Copy link"]')!;
+    fireEvent.click(copyBtn);
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(hugeDataUrl);
+
+    // Unmounting before 1500ms cleans up timer cleanly
+    unmount();
   });
 });
