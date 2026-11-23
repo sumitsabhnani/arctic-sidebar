@@ -572,4 +572,170 @@ describe('OpenTabsSection component', () => {
       HTMLElement.prototype.scrollIntoView = originalScrollIntoView;
     }
   });
+
+  it('passes resolved selected Tab objects to multi-select Pin actions and renders distinct Move vs Pin labels', () => {
+    const onPinMultipleTabsToWorkspace = vi.fn();
+    const onPinMultipleTabsToSpace = vi.fn();
+    const onMoveMultipleTabsToSpace = vi.fn();
+    const mockSpaces = [
+      { id: 'home', name: 'Home', folderId: 'f-home', colorTheme: 'glacier-blue' },
+      { id: 'work', name: 'Work', folderId: 'f-work', colorTheme: 'emerald' }
+    ];
+    const tabsWithNewTab: chrome.tabs.Tab[] = [
+      ...mockTabs,
+      {
+        id: 103,
+        index: 2,
+        windowId: 1,
+        highlighted: false,
+        active: false,
+        pinned: false,
+        incognito: false,
+        url: 'chrome://newtab/',
+        title: 'New Tab'
+      } as chrome.tabs.Tab
+    ];
+    const onOpenContextMenu = vi.fn();
+
+    render(
+      <OpenTabsSection
+        {...defaultProps}
+        unpinnedTabs={tabsWithNewTab}
+        spaces={mockSpaces}
+        selectedTabIds={new Set([101, 102, 103])}
+        onOpenContextMenu={onOpenContextMenu}
+        onPinMultipleTabsToWorkspace={onPinMultipleTabsToWorkspace}
+        onPinMultipleTabsToSpace={onPinMultipleTabsToSpace}
+        onMoveMultipleTabsToSpace={onMoveMultipleTabsToSpace}
+      />
+    );
+
+    const firstRow = screen.getByText('Hacker News').closest('[role="button"]')!;
+    fireEvent.contextMenu(firstRow);
+
+    const menuItems = onOpenContextMenu.mock.calls[0][1];
+    const labels = menuItems.map((i: { label: string }) => i.label);
+    expect(labels).toContain('Move 3 Tabs to Space');
+    expect(labels).toContain('Pin 3 Tabs to Active Space');
+    expect(labels).toContain('Pin 3 Tabs to Space');
+
+    const pinActiveItem = menuItems.find(
+      (i: { label: string }) => i.label === 'Pin 3 Tabs to Active Space'
+    );
+    pinActiveItem.action();
+    // Excludes chrome://newtab/ and passes actual Tab objects for 101 & 102
+    expect(onPinMultipleTabsToWorkspace).toHaveBeenCalledWith([mockTabs[0], mockTabs[1]]);
+
+    const pinSpaceItem = menuItems.find(
+      (i: { label: string }) => i.label === 'Pin 3 Tabs to Space'
+    );
+    pinSpaceItem.submenu[1].action();
+    expect(onPinMultipleTabsToSpace).toHaveBeenCalledWith([mockTabs[0], mockTabs[1]], 'f-work');
+  });
+
+  it('does not yank scroll to bottom when an inactive tab enters unpinnedTabs at the top or after switching to a bound tab', () => {
+    const scrollToMock = vi.fn();
+    const { rerender } = render(
+      <div
+        data-testid="scroll-container"
+        className="overflow-y-auto"
+        style={{ height: '200px' }}
+      >
+        <OpenTabsSection {...defaultProps} unpinnedTabs={mockTabs} activeTabId={101} />
+      </div>
+    );
+
+    const scrollContainer = screen.getByTestId('scroll-container');
+    Object.defineProperty(scrollContainer, 'scrollHeight', {
+      value: 900,
+      configurable: true
+    });
+    scrollContainer.scrollTop = 40;
+    scrollContainer.scrollTo = scrollToMock;
+
+    // 1. User switches to a bound bookmark tab (id 500, not in unpinnedTabs)
+    rerender(
+      <div
+        data-testid="scroll-container"
+        className="overflow-y-auto"
+        style={{ height: '200px' }}
+      >
+        <OpenTabsSection {...defaultProps} unpinnedTabs={mockTabs} activeTabId={500} />
+      </div>
+    );
+    expect(scrollToMock).not.toHaveBeenCalled();
+
+    // 2. Later, user deletes that bookmark (or another top bookmark) so tab 500 enters unpinnedTabs at index 0
+    const unpinnedAtTop: chrome.tabs.Tab = {
+      id: 500,
+      index: 0,
+      windowId: 1,
+      highlighted: false,
+      active: true,
+      pinned: false,
+      incognito: false,
+      url: 'https://docs.example.com',
+      title: 'Docs'
+    } as chrome.tabs.Tab;
+    const inactiveUnpinnedAtTop: chrome.tabs.Tab = {
+      id: 600,
+      index: 0,
+      windowId: 1,
+      highlighted: false,
+      active: false,
+      pinned: false,
+      incognito: false,
+      url: 'https://bg.example.com',
+      title: 'Background Tab'
+    } as chrome.tabs.Tab;
+
+    rerender(
+      <div
+        data-testid="scroll-container"
+        className="overflow-y-auto"
+        style={{ height: '200px' }}
+      >
+        <OpenTabsSection
+          {...defaultProps}
+          unpinnedTabs={[inactiveUnpinnedAtTop, ...mockTabs]}
+          activeTabId={500}
+        />
+      </div>
+    );
+    // Inactive tab unpinned at top never snaps scrollTop to scrollHeight (900)
+    expect(scrollContainer.scrollTop).toBe(40);
+    expect(scrollToMock).not.toHaveBeenCalled();
+
+    // Even when previously activated bound tab 500 becomes unpinned later without activeTabId changing,
+    // stale pendingScrollTabIdRef was cleared and scrollTop is not yanked to 900
+    rerender(
+      <div
+        data-testid="scroll-container"
+        className="overflow-y-auto"
+        style={{ height: '200px' }}
+      >
+        <OpenTabsSection
+          {...defaultProps}
+          unpinnedTabs={[unpinnedAtTop, inactiveUnpinnedAtTop, ...mockTabs]}
+          activeTabId={500}
+        />
+      </div>
+    );
+    expect(scrollContainer.scrollTop).toBe(40);
+  });
+
+  it('disables Clear unpinned tabs item inside Clear dropdown when unpinnedTabs is empty', () => {
+    render(
+      <OpenTabsSection
+        {...defaultProps}
+        unpinnedTabs={[]}
+        hasOpenActiveSpaceTabs={true}
+        onCloseAllWindowTabs={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByTitle('Clear options'));
+    const clearUnpinnedBtn = screen.getByText('Clear unpinned tabs').closest('button')!;
+    expect(clearUnpinnedBtn).toBeDisabled();
+  });
 });

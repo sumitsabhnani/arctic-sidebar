@@ -7,6 +7,7 @@ import {
   forwardKeyToTab,
   handleForwardedKeyInDocument,
   isBridgedTabKey,
+  isEditableSidebarElement,
   isInjectableWebUrl,
   markKeyboardRowActivation
 } from './tabPageFocus';
@@ -61,8 +62,10 @@ describe('tabPageFocus utilities', () => {
     expect(isInjectableWebUrl('http://localhost:3000/app')).toBe(true);
     expect(isInjectableWebUrl('chrome://extensions')).toBe(false);
     expect(isInjectableWebUrl('about:blank')).toBe(false);
+    expect(isInjectableWebUrl('https://chromewebstore.google.com')).toBe(false);
     expect(isInjectableWebUrl('https://chromewebstore.google.com/detail/xyz')).toBe(false);
     expect(isInjectableWebUrl('https://chrome.google.com/webstore/detail/xyz')).toBe(false);
+    expect(isInjectableWebUrl('https://microsoftedge.microsoft.com/addons/detail/xyz')).toBe(false);
     expect(isInjectableWebUrl(undefined)).toBe(false);
   });
 
@@ -406,6 +409,113 @@ describe('tabPageFocus utilities', () => {
           target: { tabId: 1 },
           func: focusPageOrPlayerInDocument
         })
+      );
+    });
+
+    it('enforces tabPageFocusEnabled setting and resolves omitted tabUrl in forwardKeyToTab', async () => {
+      mockChrome.__setHostPermissionsGranted(true);
+      mockChrome.__setLocalStorage({ tabPageFocusEnabled: false });
+
+      expect(
+        await forwardKeyToTab(
+          1,
+          { key: ' ', code: 'Space', shiftKey: false },
+          'https://www.youtube.com/watch?v=123'
+        )
+      ).toBe(false);
+      expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
+
+      // Enable setting and omit tabUrl -> resolves via chrome.tabs.get(tabId)
+      mockChrome.__setLocalStorage({ tabPageFocusEnabled: true });
+      vi.mocked(chrome.tabs.get).mockResolvedValueOnce({
+        id: 7,
+        url: 'https://www.youtube.com/watch?v=resolved'
+      } as chrome.tabs.Tab);
+
+      await forwardKeyToTab(7, { key: 'k', code: 'KeyK', shiftKey: false });
+      expect(chrome.tabs.get).toHaveBeenCalledWith(7);
+      expect(chrome.scripting.executeScript).toHaveBeenCalledWith(
+        expect.objectContaining({
+          target: { tabId: 7 },
+          func: handleForwardedKeyInDocument
+        })
+      );
+    });
+  });
+
+  describe('off-screen videos and Shadow DOM editable elements', () => {
+    it('ignores paused off-screen <video controls> on non-YouTube pages so Space scrolls the article, while still controlling actively playing off-screen videos', () => {
+      setMockLocation('https://github.com/org/repo/pull/42');
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+      const scrollBySpy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+
+      const offscreenVideo = document.createElement('video');
+      offscreenVideo.controls = true;
+      let pausedState = true;
+      Object.defineProperty(offscreenVideo, 'paused', {
+        configurable: true,
+        get: () => pausedState
+      });
+      offscreenVideo.play = vi.fn(async () => {
+        pausedState = false;
+      });
+      offscreenVideo.pause = vi.fn(() => {
+        pausedState = true;
+      });
+      vi.spyOn(offscreenVideo, 'getBoundingClientRect').mockReturnValue({
+        width: 800,
+        height: 450,
+        top: 2400,
+        bottom: 2850,
+        left: 20,
+        right: 820,
+        x: 20,
+        y: 2400,
+        toJSON: () => ({})
+      } as DOMRect);
+      document.body.appendChild(offscreenVideo);
+
+      // Paused off-screen video neither steals focus nor hijacks Space
+      expect(focusPageOrPlayerInDocument()).toBe(false);
+      expect(handleForwardedKeyInDocument({ key: ' ', code: 'Space', shiftKey: false })).toBe(true);
+      expect(offscreenVideo.play).not.toHaveBeenCalled();
+      expect(scrollBySpy).toHaveBeenCalled();
+
+      // Once that video IS actively playing, Space pauses it even if scrolled off-screen
+      pausedState = false;
+      scrollBySpy.mockClear();
+      expect(handleForwardedKeyInDocument({ key: ' ', code: 'Space', shiftKey: false })).toBe(true);
+      expect(offscreenVideo.pause).toHaveBeenCalledTimes(1);
+      expect(scrollBySpy).not.toHaveBeenCalled();
+    });
+
+    it('recognizes focused inputs inside open Shadow DOM and contenteditable="plaintext-only"', () => {
+      setMockLocation('https://www.reddit.com/r/reactjs');
+      const scrollBySpy = vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+
+      const host = document.createElement('div');
+      host.tabIndex = 0;
+      const shadow = host.attachShadow({ mode: 'open' });
+      const shadowInput = document.createElement('input');
+      shadow.appendChild(shadowInput);
+      document.body.appendChild(host);
+
+      shadowInput.focus();
+      expect(isEditableSidebarElement(host)).toBe(true);
+      expect(handleForwardedKeyInDocument({ key: ' ', code: 'Space', shiftKey: false })).toBe(
+        false
+      );
+      expect(scrollBySpy).not.toHaveBeenCalled();
+
+      const plainTextEditor = document.createElement('div');
+      plainTextEditor.setAttribute('contenteditable', 'plaintext-only');
+      plainTextEditor.tabIndex = 0;
+      document.body.appendChild(plainTextEditor);
+      plainTextEditor.focus();
+      expect(isEditableSidebarElement(plainTextEditor)).toBe(true);
+      expect(handleForwardedKeyInDocument({ key: ' ', code: 'Space', shiftKey: false })).toBe(
+        false
       );
     });
   });

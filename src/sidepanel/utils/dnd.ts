@@ -135,6 +135,20 @@ export function useIsDraggedBookmark(id: string): boolean {
 }
 
 /**
+ * Selector hook that only re-renders an OpenTabRow when its own tabId enters or leaves an active openTab drag.
+ */
+export function useIsDraggedOpenTab(tabId?: number): boolean {
+  const getSnapshot = useCallback(() => {
+    if (typeof tabId !== 'number' || !currentDragSession || currentDragSession.type !== 'openTab') {
+      return false;
+    }
+    if (currentDragSession.tabId === tabId) return true;
+    return Boolean(currentDragSession.tabIds?.includes(tabId));
+  }, [tabId]);
+  return useSyncExternalStore(subscribeDrag, getSnapshot, () => false);
+}
+
+/**
  * Selector hook that only re-renders a FolderNode when it (or one of its ancestors) enters/leaves an active folder drag.
  */
 export function useIsDraggedFolderOrDescendant(
