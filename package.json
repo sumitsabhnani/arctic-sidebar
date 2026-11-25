@@ -1,6 +1,6 @@
 {
   "name": "arctic-sidebar",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "description": "Arctic: Vertical Sidebar & Tabs Chrome Extension",
   "type": "module",
   "scripts": {
