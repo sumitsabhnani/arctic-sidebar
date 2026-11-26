@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   buildHighlightUrl,
   buildTextFragmentDirective,
+  collectBookmarkSubtreeIds,
   encodeTextFragmentToken,
   extractHighlightFromUrl,
   formatHighlightBookmarkTitle,
@@ -258,5 +259,95 @@ describe('Highlight URL & Text Fragment utilities', () => {
         args: [{ textStart: 'Target highlighted quote', textEnd: undefined }]
       })
     );
+  });
+
+  it('uses CSS Custom Highlight API without mutating DOM nodes when supported and skips hidden/script subtrees', () => {
+    const setHighlightSpy = vi.fn();
+    const origCSS = (window as unknown as { CSS?: unknown }).CSS;
+    const origHighlight = (window as unknown as { Highlight?: unknown }).Highlight;
+    (window as unknown as { CSS: unknown }).CSS = {
+      highlights: { set: setHighlightSpy }
+    };
+    (window as unknown as { Highlight: unknown }).Highlight = class MockHighlight {
+      ranges: Range[];
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    };
+
+    try {
+      const hiddenDiv = document.createElement('div');
+      hiddenDiv.setAttribute('hidden', '');
+      hiddenDiv.innerHTML = '<p>Skip this target passage inside hidden subtree</p>';
+      const scriptEl = document.createElement('script');
+      scriptEl.textContent = 'const s = "Skip this target passage inside hidden subtree";';
+      const visiblePara = document.createElement('p');
+      const textNode = document.createTextNode('Keep DOM intact around skip this target passage here.');
+      visiblePara.appendChild(textNode);
+      visiblePara.scrollIntoView = vi.fn();
+
+      document.body.appendChild(hiddenDiv);
+      document.body.appendChild(scriptEl);
+      document.body.appendChild(visiblePara);
+
+      const found = scrollToHighlightInDocument({
+        textStart: 'skip this target passage'
+      });
+      expect(found).toBe(true);
+      // Visible paragraph's single Text node was NOT split or wrapped in <mark>
+      expect(visiblePara.querySelector('mark')).toBeNull();
+      expect(visiblePara.childNodes.length).toBe(1);
+      expect(visiblePara.firstChild).toBe(textNode);
+      expect(setHighlightSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      (window as unknown as { CSS?: unknown }).CSS = origCSS;
+      (window as unknown as { Highlight?: unknown }).Highlight = origHighlight;
+    }
+  });
+
+  it('serializes concurrent highlight storage writes and collects nested folder subtree IDs', async () => {
+    mockChrome.__setLocalStorage({});
+
+    // Concurrent upserts must not clobber one another
+    await Promise.all([
+      upsertStoredHighlight({
+        bookmarkId: 'bm-a',
+        quote: 'Quote A',
+        createdAt: 1
+      }),
+      upsertStoredHighlight({
+        bookmarkId: 'bm-b',
+        quote: 'Quote B',
+        createdAt: 2
+      }),
+      upsertStoredHighlight({
+        bookmarkId: 'bm-c',
+        quote: 'Quote C',
+        createdAt: 3
+      })
+    ]);
+
+    const afterUpsert = await getStoredHighlights();
+    expect(Object.keys(afterUpsert).sort()).toEqual(['bm-a', 'bm-b', 'bm-c']);
+
+    const folderTree = {
+      id: 'folder-1',
+      title: 'Reading',
+      children: [
+        { id: 'bm-a', title: 'A', url: 'https://example.com/a' },
+        {
+          id: 'subfolder-1',
+          title: 'Deep',
+          children: [{ id: 'bm-b', title: 'B', url: 'https://example.com/b' }]
+        }
+      ]
+    } as chrome.bookmarks.BookmarkTreeNode;
+
+    const subtreeIds = collectBookmarkSubtreeIds(folderTree, 'folder-1');
+    expect(subtreeIds).toEqual(['folder-1', 'bm-a', 'subfolder-1', 'bm-b']);
+
+    await removeStoredHighlights(subtreeIds);
+    const remaining = await getStoredHighlights();
+    expect(Object.keys(remaining)).toEqual(['bm-c']);
   });
 });

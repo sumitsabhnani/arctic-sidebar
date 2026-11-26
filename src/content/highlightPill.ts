@@ -122,6 +122,68 @@
     return { textStart, ...(textEnd ? { textEnd } : {}) };
   }
 
+  const STYLE_ID = 'arctic-text-highlight-style';
+
+  function ensureHighlightStylesheet(): void {
+    if (typeof document === 'undefined' || document.getElementById(STYLE_ID)) return;
+    try {
+      const style = document.createElement('style');
+      style.id = STYLE_ID;
+      style.textContent = `
+        ::highlight(arctic-text-highlight) {
+          background-color: rgba(250, 204, 21, 0.45);
+          color: inherit;
+        }
+        mark[data-arctic-highlight="true"] {
+          background-color: rgba(250, 204, 21, 0.42) !important;
+          color: inherit !important;
+          border-radius: 3px;
+          padding: 1px 0;
+          box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.22);
+        }
+      `;
+      (document.head || document.documentElement).appendChild(style);
+    } catch {
+      // ignore
+    }
+  }
+
+  function applyNonMutatingRangeHighlight(range: Range | null): boolean {
+    if (!range) return false;
+    ensureHighlightStylesheet();
+    try {
+      const winAny = window as unknown as {
+        CSS?: { highlights?: { set: (name: string, hl: unknown) => void } };
+        Highlight?: new (...ranges: Range[]) => unknown;
+      };
+      if (winAny.CSS?.highlights && typeof winAny.Highlight === 'function') {
+        winAny.CSS.highlights.set(
+          'arctic-text-highlight',
+          new winAny.Highlight(range)
+        );
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  }
+
+  function isWhitespaceCode(code: number): boolean {
+    if (code <= 0x20) {
+      return (
+        code === 0x20 ||
+        code === 0x09 ||
+        code === 0x0a ||
+        code === 0x0d ||
+        code === 0x0c ||
+        code === 0x0b
+      );
+    }
+    if (code === 0x00a0) return true;
+    return code >= 0x1680 && /\s/.test(String.fromCharCode(code));
+  }
+
   function scrollToHighlightInDocument(payload: {
     textStart: string;
     textEnd?: string;
@@ -141,118 +203,180 @@
       ? payload.textEnd.replace(/\s+/g, ' ').trim().toLowerCase()
       : '';
 
-    const STYLE_ID = 'arctic-text-highlight-style';
-    if (!document.getElementById(STYLE_ID)) {
-      try {
-        const style = document.createElement('style');
-        style.id = STYLE_ID;
-        style.textContent = `
-          ::highlight(arctic-text-highlight) {
-            background-color: rgba(250, 204, 21, 0.45);
-            color: inherit;
-          }
-          mark[data-arctic-highlight="true"] {
-            background-color: rgba(250, 204, 21, 0.42) !important;
-            color: inherit !important;
-            border-radius: 3px;
-            padding: 1px 0;
-            box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.22);
-          }
-        `;
-        (document.head || document.documentElement).appendChild(style);
-      } catch {
-        // ignore
-      }
-    }
+    ensureHighlightStylesheet();
 
     const runFindAndHighlight = (): boolean => {
       try {
-        const oldMarks = document.querySelectorAll('mark[data-arctic-highlight="true"]');
-        oldMarks.forEach((mark) => {
-          const parent = mark.parentNode;
-          if (parent) {
-            while (mark.firstChild) {
-              parent.insertBefore(mark.firstChild, mark);
+        if (document.querySelector('mark[data-arctic-highlight="true"]')) {
+          const oldMarks = document.querySelectorAll('mark[data-arctic-highlight="true"]');
+          oldMarks.forEach((mark) => {
+            const parent = mark.parentNode;
+            if (parent) {
+              while (mark.firstChild) {
+                parent.insertBefore(mark.firstChild, mark);
+              }
+              parent.removeChild(mark);
+              parent.normalize();
             }
-            parent.removeChild(mark);
-            parent.normalize();
-          }
-        });
+          });
+        }
       } catch {
         // ignore
       }
 
-      interface CharPos {
-        node: Text;
-        offset: number;
-      }
-
-      const charMap: CharPos[] = [];
-      const normChars: string[] = [];
       const MAX_CHARS = 400000;
+      const textNodes: Text[] = [];
+      let capacity = 4096;
+      let nodeIndices = new Int32Array(capacity);
+      let charOffsets = new Int32Array(capacity);
+      let normLen = 0;
+      let lastWasSpace = true;
+      const normParts: string[] = [];
 
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const pushChar = (ch: string, nodeIdx: number, offset: number) => {
+        if (normLen >= MAX_CHARS) return;
+        if (normLen >= capacity) {
+          const nextCap = Math.min(MAX_CHARS, capacity * 2);
+          const nextNodes = new Int32Array(nextCap);
+          const nextOffsets = new Int32Array(nextCap);
+          nextNodes.set(nodeIndices);
+          nextOffsets.set(charOffsets);
+          nodeIndices = nextNodes;
+          charOffsets = nextOffsets;
+          capacity = nextCap;
+        }
+        nodeIndices[normLen] = nodeIdx;
+        charOffsets[normLen] = offset;
+        normLen += 1;
+        lastWasSpace = ch === ' ';
+        normParts.push(ch);
+      };
+
+      const walker = document.createTreeWalker(
+        document.body,
+        NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+        {
+          acceptNode(node: Node): number {
+            if (node.nodeType === 1) {
+              const el = node as Element;
+              const id = el.id;
+              if (
+                id === 'arctic-edge-trigger-host' ||
+                id === 'arctic-highlight-pill-host' ||
+                el.hasAttribute('hidden')
+              ) {
+                return NodeFilter.FILTER_REJECT;
+              }
+              const tag = el.tagName;
+              if (
+                tag === 'SCRIPT' ||
+                tag === 'STYLE' ||
+                tag === 'NOSCRIPT' ||
+                tag === 'TEMPLATE'
+              ) {
+                return NodeFilter.FILTER_REJECT;
+              }
+              return NodeFilter.FILTER_SKIP;
+            }
+            const val = node.nodeValue;
+            return val && val.length > 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+          }
+        }
+      );
+
       let currentNode: Node | null = walker.nextNode();
+      let lastParent: Element | null = null;
       let lastBlockParent: Element | null = null;
+      let cachedBlockForLastParent: Element | null = null;
 
-      while (currentNode && normChars.length < MAX_CHARS) {
+      while (currentNode && normLen < MAX_CHARS) {
         const textNode = currentNode as Text;
         const parent = textNode.parentElement;
-        if (
-          parent &&
-          parent.id !== 'arctic-edge-trigger-host' &&
-          parent.id !== 'arctic-highlight-pill-host'
-        ) {
-          const tag = parent.tagName;
-          if (
-            tag !== 'SCRIPT' &&
-            tag !== 'STYLE' &&
-            tag !== 'NOSCRIPT' &&
-            tag !== 'TEMPLATE' &&
-            !parent.closest('#arctic-edge-trigger-host, #arctic-highlight-pill-host, [hidden]')
-          ) {
-            const raw = textNode.nodeValue || '';
-            if (raw.length > 0) {
-              const blockParent =
+        if (parent) {
+          const raw = textNode.nodeValue || '';
+          if (raw.length > 0) {
+            const nodeIdx = textNodes.length;
+            textNodes.push(textNode);
+
+            let blockParent: Element;
+            if (parent === lastParent && cachedBlockForLastParent) {
+              blockParent = cachedBlockForLastParent;
+            } else {
+              blockParent =
                 parent.closest(
                   'p, li, blockquote, h1, h2, h3, h4, h5, h6, div, section, article, td, th, pre'
                 ) || parent;
-              if (
-                lastBlockParent &&
-                blockParent !== lastBlockParent &&
-                normChars.length > 0 &&
-                normChars[normChars.length - 1] !== ' '
-              ) {
-                normChars.push(' ');
-                charMap.push({ node: textNode, offset: 0 });
-              }
-              lastBlockParent = blockParent;
+              lastParent = parent;
+              cachedBlockForLastParent = blockParent;
+            }
 
-              for (let i = 0; i < raw.length && normChars.length < MAX_CHARS; i++) {
-                const ch = raw[i];
-                if (/\s/.test(ch)) {
-                  if (normChars.length === 0 || normChars[normChars.length - 1] !== ' ') {
-                    normChars.push(' ');
-                    charMap.push({ node: textNode, offset: i });
+            if (lastBlockParent && blockParent !== lastBlockParent && normLen > 0 && !lastWasSpace) {
+              pushChar(' ', nodeIdx, 0);
+            }
+            lastBlockParent = blockParent;
+
+            let nodeChunk = '';
+            for (let i = 0; i < raw.length && normLen < MAX_CHARS; i++) {
+              const code = raw.charCodeAt(i);
+              if (isWhitespaceCode(code)) {
+                if (!lastWasSpace) {
+                  if (normLen >= capacity) {
+                    const nextCap = Math.min(MAX_CHARS, capacity * 2);
+                    const nextNodes = new Int32Array(nextCap);
+                    const nextOffsets = new Int32Array(nextCap);
+                    nextNodes.set(nodeIndices);
+                    nextOffsets.set(charOffsets);
+                    nodeIndices = nextNodes;
+                    charOffsets = nextOffsets;
+                    capacity = nextCap;
                   }
-                } else {
-                  normChars.push(ch.toLowerCase());
-                  charMap.push({ node: textNode, offset: i });
+                  nodeIndices[normLen] = nodeIdx;
+                  charOffsets[normLen] = i;
+                  normLen += 1;
+                  lastWasSpace = true;
+                  nodeChunk += ' ';
+                }
+              } else {
+                const lower =
+                  code >= 0x41 && code <= 0x5a
+                    ? String.fromCharCode(code + 32)
+                    : code < 0x80
+                      ? raw[i]
+                      : raw[i].toLowerCase();
+                for (let j = 0; j < lower.length && normLen < MAX_CHARS; j++) {
+                  if (normLen >= capacity) {
+                    const nextCap = Math.min(MAX_CHARS, capacity * 2);
+                    const nextNodes = new Int32Array(nextCap);
+                    const nextOffsets = new Int32Array(nextCap);
+                    nextNodes.set(nodeIndices);
+                    nextOffsets.set(charOffsets);
+                    nodeIndices = nextNodes;
+                    charOffsets = nextOffsets;
+                    capacity = nextCap;
+                  }
+                  nodeIndices[normLen] = nodeIdx;
+                  charOffsets[normLen] = i;
+                  normLen += 1;
+                  lastWasSpace = false;
+                  nodeChunk += lower[j];
                 }
               }
+            }
+            if (nodeChunk) {
+              normParts.push(nodeChunk);
             }
           }
         }
         currentNode = walker.nextNode();
       }
 
-      const fullNormText = normChars.join('');
+      const fullNormText = normParts.join('');
       const startIdx = fullNormText.indexOf(needleStart);
 
       let matchedRange: Range | null = null;
       let matchedElement: HTMLElement | null = null;
 
-      if (startIdx !== -1) {
+      if (startIdx !== -1 && normLen > 0) {
         let endIdx = startIdx + needleStart.length - 1;
         if (needleEnd) {
           const searchFrom = startIdx + needleStart.length;
@@ -261,16 +385,16 @@
             endIdx = foundEnd + needleEnd.length - 1;
           }
         }
-        endIdx = Math.min(endIdx, charMap.length - 1);
+        endIdx = Math.min(endIdx, normLen - 1);
 
-        const startPos = charMap[startIdx];
-        const endPos = charMap[endIdx];
-        if (startPos && endPos) {
-          matchedElement = startPos.node.parentElement;
+        const startNode = textNodes[nodeIndices[startIdx]];
+        const endNode = textNodes[nodeIndices[endIdx]];
+        if (startNode && endNode) {
+          matchedElement = startNode.parentElement;
           try {
             const range = document.createRange();
-            range.setStart(startPos.node, startPos.offset);
-            range.setEnd(endPos.node, endPos.offset + 1);
+            range.setStart(startNode, charOffsets[startIdx]);
+            range.setEnd(endNode, charOffsets[endIdx] + 1);
             matchedRange = range;
           } catch {
             // fallback
@@ -283,22 +407,10 @@
       let scrollTarget: HTMLElement = matchedElement;
 
       if (matchedRange) {
-        try {
-          const winAny = window as unknown as {
-            CSS?: { highlights?: { set: (name: string, hl: unknown) => void } };
-            Highlight?: new (...ranges: Range[]) => unknown;
-          };
-          if (winAny.CSS?.highlights && typeof winAny.Highlight === 'function') {
-            winAny.CSS.highlights.set(
-              'arctic-text-highlight',
-              new winAny.Highlight(matchedRange)
-            );
-          }
-        } catch {
-          // ignore
-        }
+        const usedCustomHighlight = applyNonMutatingRangeHighlight(matchedRange);
 
-        if (matchedRange.startContainer === matchedRange.endContainer) {
+        // Only fall back to <mark> DOM mutation when CSS Custom Highlight API is unavailable (e.g. JSDOM)
+        if (!usedCustomHighlight && matchedRange.startContainer === matchedRange.endContainer) {
           try {
             const mark = document.createElement('mark');
             mark.setAttribute('data-arctic-highlight', 'true');
@@ -568,30 +680,106 @@
     }
   }
 
-  function copyTextToClipboard(text: string): Promise<void> {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      return navigator.clipboard.writeText(text).catch(() => {
-        fallbackCopyText(text);
-      });
-    }
-    fallbackCopyText(text);
-    return Promise.resolve();
+  function setButtonContent(btn: HTMLButtonElement, iconSvg: string, label: string): void {
+    btn.innerHTML = iconSvg;
+    const span = document.createElement('span');
+    span.textContent = label;
+    btn.appendChild(span);
   }
 
-  function fallbackCopyText(text: string): void {
+  function fallbackCopyText(text: string): boolean {
+    if (typeof document === 'undefined' || !document.body) return false;
+    const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+    const savedRanges: Range[] = [];
+    if (sel) {
+      for (let i = 0; i < sel.rangeCount; i++) {
+        try {
+          savedRanges.push(sel.getRangeAt(i).cloneRange());
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    let copied = false;
     try {
       const ta = document.createElement('textarea');
       ta.value = text;
+      ta.setAttribute('readonly', '');
       ta.style.position = 'fixed';
       ta.style.opacity = '0';
       ta.style.pointerEvents = 'none';
       document.body.appendChild(ta);
       ta.select();
-      document.execCommand('copy');
+      copied = Boolean(document.execCommand('copy'));
       ta.remove();
     } catch {
-      // ignore
+      copied = false;
     }
+
+    if (sel && savedRanges.length > 0) {
+      try {
+        sel.removeAllRanges();
+        for (const r of savedRanges) {
+          sel.addRange(r);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return copied;
+  }
+
+  function copyWithButtonFeedback(
+    text: string,
+    getBtn: () => HTMLButtonElement | null,
+    defaultIconSvg: string,
+    defaultLabel: string,
+    successLabel: string
+  ): boolean {
+    const scheduleAutoHide = () => {
+      if (autoHideTimer) clearTimeout(autoHideTimer);
+      autoHideTimer = setTimeout(() => {
+        unmountPill();
+      }, 1100);
+    };
+
+    const markSuccess = () => {
+      const btn = getBtn();
+      if (btn) {
+        btn.setAttribute('data-success', 'true');
+        setButtonContent(btn, CHECK_SVG, successLabel);
+      }
+      scheduleAutoHide();
+    };
+
+    const revertSuccess = () => {
+      const btn = getBtn();
+      if (btn) {
+        btn.removeAttribute('data-success');
+        setButtonContent(btn, defaultIconSvg, defaultLabel);
+      }
+      if (autoHideTimer) {
+        clearTimeout(autoHideTimer);
+        autoHideTimer = null;
+      }
+    };
+
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      markSuccess();
+      void navigator.clipboard.writeText(text).catch(() => {
+        if (!fallbackCopyText(text)) {
+          revertSuccess();
+        }
+      });
+      return true;
+    }
+
+    if (fallbackCopyText(text)) {
+      markSuccess();
+      return true;
+    }
+    return false;
   }
 
   function mountOrUpdatePill(
@@ -765,15 +953,13 @@
         e.stopPropagation();
         if (!currentSelectedText) return;
 
-        void copyTextToClipboard(currentSelectedText);
-        if (copyTextBtnEl) {
-          copyTextBtnEl.setAttribute('data-success', 'true');
-          copyTextBtnEl.innerHTML = `${CHECK_SVG}<span>Copied Text!</span>`;
-        }
-        if (autoHideTimer) clearTimeout(autoHideTimer);
-        autoHideTimer = setTimeout(() => {
-          unmountPill();
-        }, 1100);
+        copyWithButtonFeedback(
+          currentSelectedText,
+          () => copyTextBtnEl,
+          COPY_TEXT_SVG,
+          'Copy Text',
+          'Copied Text!'
+        );
       });
 
       const sep1 = document.createElement('div');
@@ -793,19 +979,23 @@
         );
         if (!highlightUrl) return;
 
-        void copyTextToClipboard(highlightUrl);
-        const extracted = extractHighlightFromUrl(highlightUrl);
-        if (extracted) {
-          scrollToHighlightInDocument(extracted);
+        // Capture the user's exact live selection range before any clipboard operations
+        const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+        const selectedRange =
+          sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
+
+        const copied = copyWithButtonFeedback(
+          highlightUrl,
+          () => copyBtnEl,
+          LINK_SVG,
+          'Copy Link',
+          'Copied Link!'
+        );
+        if (copied) {
+          // Highlight the user's selected range in-place via CSS Custom Highlight API
+          // without scrolling the page or mutating/normalizing host DOM nodes.
+          applyNonMutatingRangeHighlight(selectedRange);
         }
-        if (copyBtnEl) {
-          copyBtnEl.setAttribute('data-success', 'true');
-          copyBtnEl.innerHTML = `${CHECK_SVG}<span>Copied Link!</span>`;
-        }
-        if (autoHideTimer) clearTimeout(autoHideTimer);
-        autoHideTimer = setTimeout(() => {
-          unmountPill();
-        }, 1100);
       });
 
       const sep2 = document.createElement('div');
@@ -835,10 +1025,11 @@
           },
           (resp: { ok?: boolean; spaceName?: string } | undefined) => {
             void chrome.runtime.lastError;
+            if (resp && resp.ok === false) return;
             if (saveBtnEl) {
               const targetLabel = resp?.spaceName ? `Saved to ${resp.spaceName}!` : 'Saved Highlight!';
               saveBtnEl.setAttribute('data-success', 'true');
-              saveBtnEl.innerHTML = `${CHECK_SVG}<span>${targetLabel}</span>`;
+              setButtonContent(saveBtnEl, CHECK_SVG, targetLabel);
             }
             if (autoHideTimer) clearTimeout(autoHideTimer);
             autoHideTimer = setTimeout(() => {
@@ -867,18 +1058,18 @@
     if (detectedLinkUrl) {
       actionBtnEl.setAttribute('data-action', 'open-link');
       actionBtnEl.setAttribute('aria-label', 'Open Link');
-      actionBtnEl.innerHTML = `${OPEN_LINK_SVG}<span>Open Link</span>`;
+      setButtonContent(actionBtnEl, OPEN_LINK_SVG, 'Open Link');
     } else {
       actionBtnEl.setAttribute('data-action', 'search-web');
       actionBtnEl.setAttribute('aria-label', 'Search Web');
-      actionBtnEl.innerHTML = `${SEARCH_WEB_SVG}<span>Search Web</span>`;
+      setButtonContent(actionBtnEl, SEARCH_WEB_SVG, 'Search Web');
     }
     copyTextBtnEl.removeAttribute('data-success');
-    copyTextBtnEl.innerHTML = `${COPY_TEXT_SVG}<span>Copy Text</span>`;
+    setButtonContent(copyTextBtnEl, COPY_TEXT_SVG, 'Copy Text');
     copyBtnEl.removeAttribute('data-success');
-    copyBtnEl.innerHTML = `${LINK_SVG}<span>Copy Link</span>`;
+    setButtonContent(copyBtnEl, LINK_SVG, 'Copy Link');
     saveBtnEl.removeAttribute('data-success');
-    saveBtnEl.innerHTML = `${BOOKMARK_SVG}<span>Save Highlight</span>`;
+    setButtonContent(saveBtnEl, BOOKMARK_SVG, 'Save Highlight');
 
     const measuredRect = pillEl.getBoundingClientRect();
     const estimatedWidth = measuredRect.width > 0 ? Math.ceil(measuredRect.width) : 316;
@@ -1022,6 +1213,8 @@
     }
   };
 
+  let pageListenersAttached = false;
+
   const handleStorageChanged = (
     changes: { [key: string]: chrome.storage.StorageChange },
     areaName: string
@@ -1033,7 +1226,12 @@
     if (areaName === 'local') {
       if (changes.highlightPillEnabled !== undefined) {
         isEnabled = changes.highlightPillEnabled.newValue !== false;
-        if (!isEnabled) unmountPill();
+        if (isEnabled) {
+          attachPageListeners();
+        } else {
+          unmountPill();
+          detachPageListeners();
+        }
       }
       if (
         changes.theme?.newValue === 'light' ||
@@ -1052,6 +1250,7 @@
     if (message && message.type === 'ARCTIC_REMOVE_HIGHLIGHT_PILL') {
       isEnabled = false;
       unmountPill();
+      detachPageListeners();
     }
   };
 
@@ -1059,10 +1258,14 @@
     cleanupAll();
   };
 
-  function checkAndScrollToUrlHighlight(): void {
+  function checkAndScrollToUrlHighlight(allowNavigationFallback = false): void {
     try {
       let candidateUrl = window.location?.href || '';
-      if (!candidateUrl.includes(':~:text=') && typeof performance !== 'undefined') {
+      if (
+        allowNavigationFallback &&
+        !candidateUrl.includes(':~:text=') &&
+        typeof performance !== 'undefined'
+      ) {
         const navEntries = performance.getEntriesByType?.('navigation');
         const navName = (navEntries?.[0] as { name?: string } | undefined)?.name;
         if (navName && navName.includes(':~:text=')) {
@@ -1079,11 +1282,24 @@
   }
 
   const handleHashChange = () => {
-    checkAndScrollToUrlHighlight();
+    checkAndScrollToUrlHighlight(false);
   };
 
-  function cleanupAll(): void {
-    unmountPill();
+  function attachPageListeners(): void {
+    if (pageListenersAttached) return;
+    pageListenersAttached = true;
+    document.addEventListener('mouseup', handleMouseUp);
+    document.addEventListener('pointerdown', handlePointerDown, true);
+    document.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('scroll', handleScrollOrResize, { capture: true, passive: true });
+    window.addEventListener('resize', handleScrollOrResize, { passive: true });
+    window.addEventListener('hashchange', handleHashChange);
+  }
+
+  function detachPageListeners(): void {
+    if (!pageListenersAttached) return;
+    pageListenersAttached = false;
     document.removeEventListener('mouseup', handleMouseUp);
     document.removeEventListener('pointerdown', handlePointerDown, true);
     document.removeEventListener('keyup', handleKeyUp);
@@ -1091,6 +1307,11 @@
     window.removeEventListener('scroll', handleScrollOrResize, true);
     window.removeEventListener('resize', handleScrollOrResize);
     window.removeEventListener('hashchange', handleHashChange);
+  }
+
+  function cleanupAll(): void {
+    unmountPill();
+    detachPageListeners();
     document.removeEventListener(SUPERSEDE_EVENT, handleSupersede);
     try {
       chrome.storage?.onChanged?.removeListener(handleStorageChanged);
@@ -1102,17 +1323,11 @@
 
   win.__arcticHighlightPillCleanup = cleanupAll;
 
-  document.addEventListener('mouseup', handleMouseUp);
-  document.addEventListener('pointerdown', handlePointerDown, true);
-  document.addEventListener('keyup', handleKeyUp);
-  document.addEventListener('keydown', handleKeyDown, true);
-  window.addEventListener('scroll', handleScrollOrResize, { capture: true, passive: true });
-  window.addEventListener('resize', handleScrollOrResize, { passive: true });
-  window.addEventListener('hashchange', handleHashChange);
+  attachPageListeners();
   document.addEventListener(SUPERSEDE_EVENT, handleSupersede);
 
   // If the page was opened with a #:~:text=... highlight URL, scroll to and highlight the passage
-  checkAndScrollToUrlHighlight();
+  checkAndScrollToUrlHighlight(true);
 
   if (isExtensionContextValid()) {
     try {
@@ -1123,6 +1338,10 @@
         if (!isExtensionContextValid()) return;
         if (typeof res?.highlightPillEnabled === 'boolean') {
           isEnabled = res.highlightPillEnabled;
+          if (!isEnabled) {
+            unmountPill();
+            detachPageListeners();
+          }
         }
         if (
           res?.theme === 'light' ||

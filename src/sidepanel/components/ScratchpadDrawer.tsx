@@ -7,7 +7,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import type { ScratchpadSyncStatus } from '../hooks/useScratchpad';
-import { MAX_CHARS } from '../hooks/useScratchpad';
+import { MAX_CHARS, useScratchpad } from '../hooks/useScratchpad';
 
 interface ScratchpadDrawerProps {
   isOpen: boolean;
@@ -21,7 +21,7 @@ interface ScratchpadDrawerProps {
   placeholder?: string;
 }
 
-export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
+const ScratchpadDrawerComponent: React.FC<ScratchpadDrawerProps> = ({
   isOpen,
   onClose,
   text,
@@ -47,7 +47,7 @@ export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
   }, [isOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Escape') {
+    if (e.key === 'Escape' && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       onClose();
     }
@@ -160,3 +160,44 @@ export const ScratchpadDrawer: React.FC<ScratchpadDrawerProps> = ({
     </div>
   );
 };
+
+export const ScratchpadDrawer = React.memo(ScratchpadDrawerComponent);
+ScratchpadDrawer.displayName = 'ScratchpadDrawer';
+
+export interface ScratchpadPanelProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onHasTextChange?: (hasText: boolean) => void;
+}
+
+/**
+ * Self-contained Scratchpad container that owns `useScratchpad()` state so typing in the
+ * scratchpad never re-renders `App` or the sidebar's bookmark/tab lists.
+ */
+const ScratchpadPanelComponent: React.FC<ScratchpadPanelProps> = ({
+  isOpen,
+  onClose,
+  onHasTextChange
+}) => {
+  const { text, setText, syncStatus, clearScratchpad, maxChars } = useScratchpad();
+  const hasText = Boolean(text.trim());
+
+  useEffect(() => {
+    onHasTextChange?.(hasText);
+  }, [hasText, onHasTextChange]);
+
+  return (
+    <ScratchpadDrawer
+      isOpen={isOpen}
+      onClose={onClose}
+      text={text}
+      onChange={setText}
+      syncStatus={syncStatus}
+      onClear={clearScratchpad}
+      maxChars={maxChars}
+    />
+  );
+};
+
+export const ScratchpadPanel = React.memo(ScratchpadPanelComponent);
+ScratchpadPanel.displayName = 'ScratchpadPanel';

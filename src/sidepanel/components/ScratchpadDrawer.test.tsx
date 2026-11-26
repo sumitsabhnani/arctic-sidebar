@@ -1,6 +1,7 @@
+import React, { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { ScratchpadDrawer } from './ScratchpadDrawer';
+import { ScratchpadDrawer, ScratchpadPanel } from './ScratchpadDrawer';
 
 describe('ScratchpadDrawer component', () => {
   const defaultProps = {
@@ -72,5 +73,50 @@ describe('ScratchpadDrawer component', () => {
 
     expect(window.confirm).toHaveBeenCalled();
     expect(defaultProps.onClear).toHaveBeenCalled();
+  });
+
+  it('ignores Escape key while IME composition is active', () => {
+    const onClose = vi.fn();
+    render(<ScratchpadDrawer {...defaultProps} onClose={onClose} />);
+
+    const textarea = screen.getByPlaceholderText(/Quick notes, URLs, or snippets/i);
+    fireEvent.keyDown(textarea, { key: 'Escape', isComposing: true });
+    fireEvent.keyDown(textarea, { key: 'Escape', keyCode: 229 });
+    expect(onClose).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(textarea, { key: 'Escape', isComposing: false });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('ScratchpadPanel isolates keystroke re-renders from parent once non-empty', () => {
+    let parentRenderCount = 0;
+    const onClose = vi.fn();
+
+    const ParentHost: React.FC = () => {
+      parentRenderCount += 1;
+      const [hasText, setHasText] = useState(false);
+      return (
+        <div>
+          <span data-testid="has-text">{String(hasText)}</span>
+          <ScratchpadPanel isOpen={true} onClose={onClose} onHasTextChange={setHasText} />
+        </div>
+      );
+    };
+
+    render(<ParentHost />);
+    const textarea = screen.getByPlaceholderText(/Quick notes, URLs, or snippets/i);
+    expect(screen.getByTestId('has-text')).toHaveTextContent('false');
+
+    // Transition empty -> non-empty updates parent once
+    fireEvent.change(textarea, { target: { value: 'a' } });
+    expect(screen.getByTestId('has-text')).toHaveTextContent('true');
+    const rendersAfterFirstChar = parentRenderCount;
+
+    // Subsequent keystrokes keep hasText === true and never re-render ParentHost
+    fireEvent.change(textarea, { target: { value: 'ab' } });
+    fireEvent.change(textarea, { target: { value: 'abc' } });
+    fireEvent.change(textarea, { target: { value: 'abcd' } });
+    expect(textarea).toHaveValue('abcd');
+    expect(parentRenderCount).toBe(rendersAfterFirstChar);
   });
 });

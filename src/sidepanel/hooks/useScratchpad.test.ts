@@ -11,7 +11,9 @@ import {
   classifySyncError,
   hashText,
   jsonByteLength,
+  sanitizeScratchpadText,
   ScratchpadTooLargeError,
+  BOOKMARK_MIRROR_MIN_INTERVAL_MS,
   MAX_CHARS,
   MAX_CHUNKS,
   SYNC_DEBOUNCE_MS,
@@ -91,6 +93,46 @@ describe('useScratchpad and chunking helpers', () => {
       expect(chunkCount).toBe(4);
       const totalLen = chunks.reduce((acc, c) => acc + c.length, 0);
       expect(totalLen).toBe(MAX_CHARS);
+    });
+
+    it('accounts for Chromium JSONWriter 6-byte escapes (<, U+2028, U+2029) so HTML/code notes never exceed QUOTA_BYTES_PER_ITEM', () => {
+      // Simulate Chromium's base::JSONWriter byte sizing, which escapes '<', U+2028, and U+2029 as \uXXXX
+      const chromiumJsonBytes = (value: string) =>
+        new TextEncoder().encode(
+          JSON.stringify(value)
+            .replace(/</g, '\\u003C')
+            .replace(/\u2028/g, '\\u2028')
+            .replace(/\u2029/g, '\\u2029')
+        ).length;
+
+      const htmlAndSeparators = '<div class="item">a <- b</div>\u2028\u2029'.repeat(450);
+      const { chunks, chunkCount } = splitIntoChunks(htmlAndSeparators);
+
+      expect(chunkCount).toBeGreaterThan(2);
+      expect(chunks.join('')).toBe(htmlAndSeparators);
+      chunks.forEach((chunk, idx) => {
+        const actualChromiumBytes = chromiumJsonBytes(chunk);
+        expect(jsonByteLength(chunk)).toBe(actualChromiumBytes);
+        expect(actualChromiumBytes + `${SCRATCHPAD_CHUNK_PREFIX}${idx}`.length).toBeLessThanOrEqual(
+          SYNC_ITEM_QUOTA_BYTES
+        );
+      });
+    });
+
+    it('never splits a surrogate pair at MAX_CHARS and normalizes lone surrogates so hashText matches UTF-8 round-trip', () => {
+      // Emoji at indices 27999..28000 must not leave a trailing high surrogate at index 27999
+      const boundaryEmojiText = 'A'.repeat(MAX_CHARS - 1) + '🚀';
+      const sanitizedBoundary = sanitizeScratchpadText(boundaryEmojiText);
+      expect(sanitizedBoundary.length).toBe(MAX_CHARS - 1);
+      expect(sanitizedBoundary).toBe('A'.repeat(MAX_CHARS - 1));
+      expect(/[\uD800-\uDFFF]/.test(sanitizedBoundary)).toBe(false);
+
+      // Lone surrogates mid-string are normalized to U+FFFD prior to hashing so UTF-8 storage matches meta.hash
+      const malformed = 'Prefix \uD800 middle \uDC00 suffix';
+      const { chunks } = splitIntoChunks(malformed);
+      const utf8RoundTripped = new TextDecoder().decode(new TextEncoder().encode(chunks.join('')));
+      expect(chunks.join('')).toBe('Prefix \uFFFD middle \uFFFD suffix');
+      expect(hashText(utf8RoundTripped)).toBe(hashText(chunks.join('')));
     });
   });
 
@@ -660,6 +702,117 @@ describe('useScratchpad and chunking helpers', () => {
         await flush();
       });
       expect(result.current.text).toBe('Latest real note');
+    });
+
+    it('flushes pending debounced sync write immediately when the Side Panel becomes hidden', async () => {
+      const { result } = await renderLoaded();
+
+      await act(async () => {
+        result.current.setText('Typed right before closing sidepanel');
+      });
+      expect(chrome.storage.sync.set).not.toHaveBeenCalled();
+
+      const origDescriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+      Object.defineProperty(document, 'visibilityState', {
+        configurable: true,
+        get: () => 'hidden'
+      });
+
+      try {
+        await act(async () => {
+          document.dispatchEvent(new Event('visibilitychange'));
+          await flush();
+        });
+
+        expect(chrome.storage.sync.set).toHaveBeenCalledWith(
+          expect.objectContaining({
+            [`${SCRATCHPAD_CHUNK_PREFIX}0`]: 'Typed right before closing sidepanel'
+          })
+        );
+        expect(result.current.syncStatus).toBe('Synced');
+      } finally {
+        if (origDescriptor) {
+          Object.defineProperty(document, 'visibilityState', origDescriptor);
+        } else {
+          delete (document as unknown as { visibilityState?: string }).visibilityState;
+        }
+      }
+    });
+
+    it('throttles Scratchpad Backup bookmark updates during rapid typing bursts and reuses cached bookmark ID', async () => {
+      const { result } = await renderLoaded();
+      vi.mocked(chrome.bookmarks.search).mockClear();
+
+      // First edit pause mirrors immediately and caches the created backup bookmark ID
+      await act(async () => {
+        result.current.setText('First burst');
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(SYNC_DEBOUNCE_MS);
+        await flush();
+      });
+      expect(chrome.bookmarks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Scratchpad Backup',
+          url: 'https://arctic.local/scratchpad#First%20burst'
+        })
+      );
+      const initialSearchCalls = vi.mocked(chrome.bookmarks.search).mock.calls.length;
+
+      // Second edit 3s later writes to storage.sync at 2s, but defers bookmark.update until the 30s window
+      await act(async () => {
+        vi.advanceTimersByTime(1000);
+        result.current.setText('Second burst within 30s');
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(SYNC_DEBOUNCE_MS);
+        await flush();
+      });
+      expect(mockChrome.__getSyncStorage()[`${SCRATCHPAD_CHUNK_PREFIX}0`]).toBe(
+        'Second burst within 30s'
+      );
+      expect(chrome.bookmarks.update).not.toHaveBeenCalled();
+
+      // Once the throttle window elapses, bookmark.update runs using the cached ID without re-searching
+      await act(async () => {
+        vi.advanceTimersByTime(BOOKMARK_MIRROR_MIN_INTERVAL_MS);
+        await flush();
+      });
+      expect(chrome.bookmarks.update).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          url: 'https://arctic.local/scratchpad#Second%20burst%20within%2030s'
+        })
+      );
+      expect(vi.mocked(chrome.bookmarks.search).mock.calls.length).toBe(initialSearchCalls);
+    });
+
+    it('does not overwrite early user keystrokes if initial readLocalDraft resolves late', async () => {
+      let resolveSlowLocalGet: ((val: Record<string, unknown>) => void) | null = null;
+      vi.mocked(chrome.storage.local.get).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSlowLocalGet = resolve;
+          }) as unknown as Promise<Record<string, unknown>>
+      );
+
+      const { result } = renderHook(() => useScratchpad());
+
+      // User starts typing before readLocalDraft finishes
+      await act(async () => {
+        result.current.setText('Fresh user typing');
+      });
+      expect(result.current.text).toBe('Fresh user typing');
+
+      // Late storage.local.get resolves with an older draft
+      await act(async () => {
+        resolveSlowLocalGet?.({
+          [SCRATCHPAD_LOCAL_DRAFT_KEY]: { text: 'Stale slow draft', updatedAt: 50 }
+        });
+        await flush();
+      });
+
+      expect(result.current.text).toBe('Fresh user typing');
     });
   });
 });
