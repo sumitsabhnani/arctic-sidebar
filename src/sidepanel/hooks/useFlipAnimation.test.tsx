@@ -358,4 +358,86 @@ describe('useFlipAnimation', () => {
     rerender(<FlipListHarness items={['C', 'A', 'B']} resetKey="scroll:ready" />);
     expect(mock.animRecords).toHaveLength(countBeforeResize);
   });
+
+  it('renders a non-interactive exit ghost and smoothly contracts container height when a tab row is deleted', () => {
+    const { rerender, getByTestId } = render(
+      <FlipListHarness items={['A', 'B', 'C']} resetKey="del:init" />
+    );
+    const container = getByTestId('flip-list');
+    const mock = setupMockFlipDom(container);
+    mock.attachRowMocks();
+
+    let currentRowCount = 3;
+    vi.spyOn(container, 'getBoundingClientRect').mockImplementation(
+      () =>
+        ({
+          left: 0,
+          top: 100,
+          right: 300,
+          bottom: 100 + currentRowCount * ROW_HEIGHT,
+          width: 300,
+          height: currentRowCount * ROW_HEIGHT,
+          x: 0,
+          y: 100,
+          toJSON: () => ({})
+        }) as DOMRect
+    );
+
+    const containerHeightKeyframes: Keyframe[][] = [];
+    container.animate = vi.fn((keyframes: Keyframe[] | PropertyIndexedKeyframes | null) => {
+      if (Array.isArray(keyframes)) {
+        containerHeightKeyframes.push(keyframes);
+      }
+      return {
+        playState: 'running',
+        cancel: vi.fn(),
+        onfinish: null,
+        oncancel: null
+      } as unknown as Animation;
+    });
+
+    const ghostCtrl: { finish?: () => void } = {};
+    const origProtoAnimate = HTMLElement.prototype.animate;
+    HTMLElement.prototype.animate = vi.fn(() => {
+      const anim = {
+        playState: 'running',
+        cancel: vi.fn(),
+        onfinish: null as (() => void) | null,
+        oncancel: null as (() => void) | null
+      };
+      ghostCtrl.finish = () => anim.onfinish?.();
+      return anim as unknown as Animation;
+    });
+
+    try {
+      rerender(<FlipListHarness items={['A', 'B', 'C']} resetKey="del:ready" />);
+      mock.attachRowMocks();
+
+      // Delete middle row B -> container shrinks from 108px to 72px
+      currentRowCount = 2;
+      rerender(<FlipListHarness items={['A', 'C']} resetKey="del:ready" />);
+
+      // Exit ghost for B is mounted with pointer-events: none and aria-hidden
+      const ghost = container.querySelector('[data-flip-exit-ghost="true"]') as HTMLElement | null;
+      expect(ghost).not.toBeNull();
+      expect(ghost?.textContent).toBe('B');
+      expect(ghost?.getAttribute('aria-hidden')).toBe('true');
+      expect(ghost?.style.pointerEvents).toBe('none');
+      expect(ghost?.style.top).toBe(`${ROW_HEIGHT}px`);
+
+      // Row C translates smoothly upward from +36px -> 0
+      expect(mock.animRecords.find((r) => r.el.dataset.flipId === 'C')?.dy).toBe(ROW_HEIGHT);
+
+      // Container contracts smoothly from 108px -> 72px so sections below glide instead of snapping
+      expect(containerHeightKeyframes).toHaveLength(1);
+      expect(containerHeightKeyframes[0][0].height).toBe(`${3 * ROW_HEIGHT}px`);
+      expect(containerHeightKeyframes[0][1].height).toBe(`${2 * ROW_HEIGHT}px`);
+
+      // Completing exit animation removes ghost cleanly
+      ghostCtrl.finish?.();
+      expect(container.querySelector('[data-flip-exit-ghost="true"]')).toBeNull();
+    } finally {
+      HTMLElement.prototype.animate = origProtoAnimate;
+    }
+  });
 });

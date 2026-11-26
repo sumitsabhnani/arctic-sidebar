@@ -370,14 +370,131 @@
     return false;
   }
 
+  const OPEN_LINK_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>`;
+  const SEARCH_WEB_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`;
   const COPY_TEXT_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
   const LINK_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" x2="16" y1="12" y2="12"/></svg>`;
   const BOOKMARK_SVG = `<svg class="arctic-hl-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>`;
   const CHECK_SVG = `<svg class="arctic-hl-icon arctic-hl-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
 
+  const COMMON_BARE_LINK_TLDS = new Set([
+    'com', 'org', 'net', 'edu', 'gov', 'mil', 'int',
+    'io', 'co', 'ai', 'app', 'dev', 'me', 'us', 'uk', 'ca', 'au', 'de', 'fr',
+    'jp', 'in', 'nl', 'se', 'no', 'fi', 'dk', 'ch', 'at', 'be', 'es', 'it',
+    'pt', 'pl', 'cz', 'br', 'mx', 'ar', 'kr', 'tw', 'hk', 'sg', 'nz', 'za',
+    'il', 'xyz', 'info', 'biz', 'tech', 'cloud', 'gg', 'tv', 'fm', 'ly', 'to',
+    'sh', 'rs', 'so', 'new', 'page', 'site', 'online', 'store', 'blog',
+    'design', 'news', 'world', 'live', 'pro', 'tools', 'build', 'run'
+  ]);
+
+  const NON_DOMAIN_FILE_EXTS = new Set([
+    'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'py', 'rb', 'java', 'cpp', 'c',
+    'h', 'hpp', 'cs', 'php', 'swift', 'kt', 'scala', 'lua', 'r', 'sql',
+    'css', 'scss', 'less', 'sass', 'json', 'xml', 'yml', 'yaml', 'toml',
+    'ini', 'env', 'lock', 'log', 'txt', 'csv', 'tsv', 'pdf', 'png', 'jpg',
+    'jpeg', 'gif', 'webp', 'svg', 'ico', 'mp3', 'mp4', 'wav', 'mov', 'zip',
+    'tar', 'gz', 'dmg', 'exe', 'pkg', 'deb', 'rpm'
+  ]);
+
+  function resolveSelectedLinkUrl(rawText: string, range: Range | null): string | null {
+    if (!rawText) return null;
+
+    let candidate = rawText.trim().replace(/^[\s'"“”‘’(\[<]+/, '');
+    candidate = candidate.replace(/[.,;:!?\s'"“”‘’\]>]+$/, '');
+    while (candidate.endsWith(')')) {
+      const openCount = (candidate.match(/\(/g) || []).length;
+      const closeCount = (candidate.match(/\)/g) || []).length;
+      if (closeCount > openCount) {
+        candidate = candidate.slice(0, -1).replace(/[.,;:!?]+$/, '');
+      } else {
+        break;
+      }
+    }
+
+    if (candidate.length >= 4 && !/\s/.test(candidate)) {
+      if (/^https?:\/\//i.test(candidate)) {
+        try {
+          const parsed = new URL(candidate);
+          if (
+            (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+            (parsed.hostname.includes('.') ||
+              parsed.hostname === 'localhost' ||
+              /^(?:\d{1,3}\.){3}\d{1,3}$/.test(parsed.hostname))
+          ) {
+            return parsed.href;
+          }
+        } catch {
+          // fall through
+        }
+      } else if (
+        /^localhost(?::\d{1,5})?(?:[/?#].*)?$/i.test(candidate) ||
+        /^(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?:[/?#].*)?$/.test(candidate)
+      ) {
+        try {
+          return new URL(`http://${candidate}`).href;
+        } catch {
+          // fall through
+        }
+      } else {
+        const domainMatch = candidate.match(
+          /^((?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+([a-zA-Z]{2,24}))(?::\d{1,5})?([/?#].*)?$/
+        );
+        if (domainMatch) {
+          const hostPart = domainMatch[1];
+          const tld = domainMatch[2].toLowerCase();
+          const rest = domainMatch[3] || '';
+          const hasCamelCaseHost = /[a-z][A-Z]/.test(hostPart);
+          const isValidUnschemedDomain =
+            !hasCamelCaseHost &&
+            (/^www\./i.test(hostPart) ||
+              (rest.length > 0 && !NON_DOMAIN_FILE_EXTS.has(tld)) ||
+              COMMON_BARE_LINK_TLDS.has(tld));
+
+          if (isValidUnschemedDomain) {
+            try {
+              return new URL(`https://${candidate}`).href;
+            } catch {
+              // fall through
+            }
+          }
+        }
+      }
+    }
+
+    if (range) {
+      try {
+        const startNode = range.startContainer;
+        const endNode = range.endContainer;
+        const startEl =
+          startNode instanceof Element ? startNode : startNode?.parentElement;
+        const endEl =
+          endNode instanceof Element ? endNode : endNode?.parentElement;
+        const anchor = startEl?.closest?.('a[href]') as HTMLAnchorElement | null;
+        if (anchor && endEl?.closest?.('a[href]') === anchor) {
+          const rawHref = (anchor.getAttribute('href') || '').trim();
+          if (rawHref && !rawHref.startsWith('#') && !/^javascript:/i.test(rawHref)) {
+            const normAnchorText = (anchor.textContent || '').replace(/\s+/g, ' ').trim();
+            const normSelectedText = rawText.replace(/\s+/g, ' ').trim();
+            if (normAnchorText && normAnchorText === normSelectedText) {
+              const resolved = new URL(anchor.href || rawHref, window.location.href);
+              if (resolved.protocol === 'http:' || resolved.protocol === 'https:') {
+                return resolved.href;
+              }
+            }
+          }
+        }
+      } catch {
+        // ignore invalid href or detached selection node
+      }
+    }
+
+    return null;
+  }
+
   let isEnabled = true;
   let themeMode: 'light' | 'dark' | 'system' = 'system';
   let currentSelectedText = '';
+  let currentDetectedLinkUrl: string | null = null;
   let lastPointerX = 160;
   let lastPointerY = 120;
   let selectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -386,6 +503,7 @@
   let hostEl: HTMLDivElement | null = null;
   let shadowRootRef: ShadowRoot | null = null;
   let pillEl: HTMLDivElement | null = null;
+  let actionBtnEl: HTMLButtonElement | null = null;
   let copyTextBtnEl: HTMLButtonElement | null = null;
   let copyBtnEl: HTMLButtonElement | null = null;
   let saveBtnEl: HTMLButtonElement | null = null;
@@ -437,11 +555,13 @@
       autoHideTimer = null;
     }
     currentSelectedText = '';
+    currentDetectedLinkUrl = null;
     if (hostEl) {
       hostEl.remove();
       hostEl = null;
       shadowRootRef = null;
       pillEl = null;
+      actionBtnEl = null;
       copyTextBtnEl = null;
       copyBtnEl = null;
       saveBtnEl = null;
@@ -476,10 +596,12 @@
 
   function mountOrUpdatePill(
     selectedText: string,
-    anchorRect: { top: number; bottom: number; left: number; width: number; height: number }
+    anchorRect: { top: number; bottom: number; left: number; width: number; height: number },
+    detectedLinkUrl: string | null = null
   ): void {
     if (!document.body) return;
     currentSelectedText = selectedText;
+    currentDetectedLinkUrl = detectedLinkUrl;
 
     if (autoHideTimer) {
       clearTimeout(autoHideTimer);
@@ -597,6 +719,43 @@
         e.stopPropagation();
       });
 
+      actionBtnEl = document.createElement('button');
+      actionBtnEl.type = 'button';
+      actionBtnEl.className = 'arctic-hl-btn arctic-hl-action-btn';
+      actionBtnEl.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!currentSelectedText || !isExtensionContextValid()) return;
+        const linkTarget = currentDetectedLinkUrl;
+        const queryText = currentSelectedText;
+        unmountPill();
+
+        if (linkTarget) {
+          chrome.runtime.sendMessage(
+            {
+              type: 'OPEN_SELECTED_LINK',
+              url: linkTarget
+            },
+            () => {
+              void chrome.runtime.lastError;
+            }
+          );
+        } else {
+          chrome.runtime.sendMessage(
+            {
+              type: 'SEARCH_SELECTED_TEXT',
+              query: queryText
+            },
+            () => {
+              void chrome.runtime.lastError;
+            }
+          );
+        }
+      });
+
+      const sep0 = document.createElement('div');
+      sep0.className = 'arctic-hl-sep';
+
       copyTextBtnEl = document.createElement('button');
       copyTextBtnEl.type = 'button';
       copyTextBtnEl.className = 'arctic-hl-btn arctic-hl-copy-text-btn';
@@ -689,6 +848,8 @@
         );
       });
 
+      pillEl.appendChild(actionBtnEl);
+      pillEl.appendChild(sep0);
       pillEl.appendChild(copyTextBtnEl);
       pillEl.appendChild(sep1);
       pillEl.appendChild(copyBtnEl);
@@ -699,9 +860,19 @@
       document.body.appendChild(hostEl);
     }
 
-    if (!pillEl || !copyTextBtnEl || !copyBtnEl || !saveBtnEl) return;
+    if (!pillEl || !actionBtnEl || !copyTextBtnEl || !copyBtnEl || !saveBtnEl) return;
 
     pillEl.setAttribute('data-theme', resolveEffectiveTheme());
+    actionBtnEl.removeAttribute('data-success');
+    if (detectedLinkUrl) {
+      actionBtnEl.setAttribute('data-action', 'open-link');
+      actionBtnEl.setAttribute('aria-label', 'Open Link');
+      actionBtnEl.innerHTML = `${OPEN_LINK_SVG}<span>Open Link</span>`;
+    } else {
+      actionBtnEl.setAttribute('data-action', 'search-web');
+      actionBtnEl.setAttribute('aria-label', 'Search Web');
+      actionBtnEl.innerHTML = `${SEARCH_WEB_SVG}<span>Search Web</span>`;
+    }
     copyTextBtnEl.removeAttribute('data-success');
     copyTextBtnEl.innerHTML = `${COPY_TEXT_SVG}<span>Copy Text</span>`;
     copyBtnEl.removeAttribute('data-success');
@@ -761,14 +932,15 @@
     }
 
     const rawText = sel.toString().trim();
-    if (rawText.length < 3 || rawText.length > 2500) {
+    if (rawText.length < 2 || rawText.length > 2500) {
       unmountPill();
       return;
     }
 
+    let range: Range | null = null;
     let rect = { top: 0, bottom: 0, left: 0, width: 0, height: 0 };
     try {
-      const range = sel.getRangeAt(0);
+      range = sel.getRangeAt(0);
       const r = range.getBoundingClientRect();
       rect = {
         top: r.top,
@@ -781,7 +953,8 @@
       // use pointer fallback
     }
 
-    mountOrUpdatePill(rawText, rect);
+    const detectedLinkUrl = resolveSelectedLinkUrl(rawText, range);
+    mountOrUpdatePill(rawText, rect, detectedLinkUrl);
   }
 
   const handleMouseUp = (e: MouseEvent) => {

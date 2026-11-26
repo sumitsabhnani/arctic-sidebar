@@ -62,6 +62,7 @@ interface FolderNodeProps {
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDuplicateTab?: (tabId: number) => void;
+  onOpenInNewTab?: (url: string) => void;
   onDiscardTab?: (tabId: number) => void;
   onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
@@ -110,6 +111,7 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
   onCloseTab,
   onReloadTab,
   onDuplicateTab,
+  onOpenInNewTab,
   onDiscardTab,
   onToggleMuteTab,
   onMoveToSpace,
@@ -696,6 +698,7 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
                     onCloseTab={onCloseTab}
                     onReloadTab={onReloadTab}
                     onDuplicateTab={onDuplicateTab}
+                    onOpenInNewTab={onOpenInNewTab}
                     onDiscardTab={onDiscardTab}
                     onToggleMuteTab={onToggleMuteTab}
                     onMoveToSpace={onMoveToSpace}
@@ -754,6 +757,7 @@ export const FolderNode: React.FC<FolderNodeProps> = React.memo(({
                   onCloseTab={onCloseTab}
                   onReloadTab={onReloadTab}
                   onDuplicateTab={onDuplicateTab}
+                  onOpenInNewTab={onOpenInNewTab}
                   onDiscardTab={onDiscardTab}
                   onToggleMuteTab={onToggleMuteTab}
                   onMoveToSpace={onMoveToSpace}

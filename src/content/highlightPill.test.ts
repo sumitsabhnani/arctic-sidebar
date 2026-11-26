@@ -77,6 +77,9 @@ describe('highlightPill content script (on-page floating selection pill)', () =>
     expect(host).not.toBeNull();
     expect(capturedShadowRoots.length).toBe(1);
 
+    const actionBtn = capturedShadowRoots[0].querySelector(
+      'button.arctic-hl-action-btn'
+    ) as HTMLButtonElement;
     const copyTextBtn = capturedShadowRoots[0].querySelector(
       'button.arctic-hl-copy-text-btn'
     ) as HTMLButtonElement;
@@ -86,6 +89,9 @@ describe('highlightPill content script (on-page floating selection pill)', () =>
     const saveBtn = capturedShadowRoots[0].querySelector(
       'button.arctic-hl-save-btn'
     ) as HTMLButtonElement;
+    expect(actionBtn).not.toBeNull();
+    expect(actionBtn.getAttribute('data-action')).toBe('search-web');
+    expect(actionBtn.textContent).toContain('Search Web');
     expect(copyTextBtn).not.toBeNull();
     expect(copyTextBtn.textContent).toContain('Copy Text');
     expect(copyBtn).not.toBeNull();
@@ -182,5 +188,107 @@ describe('highlightPill content script (on-page floating selection pill)', () =>
     } finally {
       window.history.replaceState(null, '', origHref);
     }
+  });
+
+  it('shows Open Link when selected text is a URL/domain or inline anchor link, and Search Web for regular text or code identifiers', async () => {
+    mockChrome.__setLocalStorage({ highlightPillEnabled: true, theme: 'dark' });
+    await import('./highlightPill');
+    await new Promise((r) => setTimeout(r, 10));
+
+    const selectElementContents = async (el: HTMLElement) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.dispatchEvent(
+        new MouseEvent('mouseup', { bubbles: true, clientX: 180, clientY: 120 })
+      );
+      await new Promise((r) => setTimeout(r, 25));
+    };
+
+    // 1. Plain-text URL wrapped in parentheses + punctuation -> shows Open Link & preserves balanced URL parens
+    const urlSpan = document.createElement('span');
+    urlSpan.textContent = '(https://en.wikipedia.org/wiki/Rust_(programming_language)).';
+    document.body.appendChild(urlSpan);
+    await selectElementContents(urlSpan);
+
+    let root = capturedShadowRoots[capturedShadowRoots.length - 1];
+    let actionBtn = root.querySelector('button.arctic-hl-action-btn') as HTMLButtonElement;
+    expect(actionBtn.getAttribute('data-action')).toBe('open-link');
+    expect(actionBtn.textContent).toContain('Open Link');
+
+    mockChrome.runtime.sendMessage.mockClear();
+    actionBtn.click();
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
+      {
+        type: 'OPEN_SELECTED_LINK',
+        url: 'https://en.wikipedia.org/wiki/Rust_(programming_language)'
+      },
+      expect.any(Function)
+    );
+    expect(document.getElementById('arctic-highlight-pill-host')).toBeNull();
+
+    // 2. Unschemed domain with path -> shows Open Link with https://
+    const domainSpan = document.createElement('span');
+    domainSpan.textContent = 'github.com/vitejs/vite';
+    document.body.appendChild(domainSpan);
+    await selectElementContents(domainSpan);
+
+    root = capturedShadowRoots[capturedShadowRoots.length - 1];
+    actionBtn = root.querySelector('button.arctic-hl-action-btn') as HTMLButtonElement;
+    expect(actionBtn.getAttribute('data-action')).toBe('open-link');
+
+    mockChrome.runtime.sendMessage.mockClear();
+    actionBtn.click();
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
+      {
+        type: 'OPEN_SELECTED_LINK',
+        url: 'https://github.com/vitejs/vite'
+      },
+      expect.any(Function)
+    );
+
+    // 3. Inline <a href="..."> anchor text -> shows Open Link resolving anchor href
+    const linkEl = document.createElement('a');
+    linkEl.href = 'https://docs.example.com/getting-started';
+    linkEl.textContent = 'Read Getting Started';
+    document.body.appendChild(linkEl);
+    await selectElementContents(linkEl);
+
+    root = capturedShadowRoots[capturedShadowRoots.length - 1];
+    actionBtn = root.querySelector('button.arctic-hl-action-btn') as HTMLButtonElement;
+    expect(actionBtn.getAttribute('data-action')).toBe('open-link');
+
+    mockChrome.runtime.sendMessage.mockClear();
+    actionBtn.click();
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
+      {
+        type: 'OPEN_SELECTED_LINK',
+        url: 'https://docs.example.com/getting-started'
+      },
+      expect.any(Function)
+    );
+
+    // 4. Code identifier / filename like "App.tsx" or plain phrase -> shows Search Web (not false-positive link)
+    const codeSpan = document.createElement('span');
+    codeSpan.textContent = 'App.tsx';
+    document.body.appendChild(codeSpan);
+    await selectElementContents(codeSpan);
+
+    root = capturedShadowRoots[capturedShadowRoots.length - 1];
+    actionBtn = root.querySelector('button.arctic-hl-action-btn') as HTMLButtonElement;
+    expect(actionBtn.getAttribute('data-action')).toBe('search-web');
+    expect(actionBtn.textContent).toContain('Search Web');
+
+    mockChrome.runtime.sendMessage.mockClear();
+    actionBtn.click();
+    expect(mockChrome.runtime.sendMessage).toHaveBeenCalledWith(
+      {
+        type: 'SEARCH_SELECTED_TEXT',
+        query: 'App.tsx'
+      },
+      expect.any(Function)
+    );
   });
 });

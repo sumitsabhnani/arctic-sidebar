@@ -727,4 +727,366 @@ describe('Sidepanel App Integration', () => {
     });
     expect(screen.queryByTestId('page-focus-permission-hint')).not.toBeInTheDocument();
   });
+
+  it('collapses and expands Active Space saved tabs via the chevron button near Home while keeping temporary tabs visible', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: '111', title: 'Gmail', url: 'https://mail.google.com' }]
+                      },
+                      {
+                        id: '13',
+                        title: 'Saved Project Doc',
+                        url: 'https://docs.example.com/project'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setTabs([
+      {
+        id: 201,
+        index: 0,
+        windowId: 10,
+        active: true,
+        url: 'https://news.ycombinator.com',
+        title: 'Temporary Tab',
+        status: 'complete'
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+
+    render(<App />);
+
+    // Both saved tabs and temporary tabs are visible initially
+    expect(await screen.findByText('Saved Project Doc')).toBeInTheDocument();
+    expect(await screen.findByText('Temporary Tab')).toBeInTheDocument();
+    expect(screen.getByTestId('workspace-list-card')).toBeInTheDocument();
+
+    // Click collapse button near Home
+    const collapseBtn = screen.getByRole('button', { name: 'Collapse Home' });
+    expect(collapseBtn).toHaveAttribute('aria-expanded', 'true');
+    await act(async () => {
+      fireEvent.click(collapseBtn);
+    });
+
+    // Saved tabs collapse away, temporary tabs remain visible, and state persists
+    expect(screen.queryByTestId('workspace-list-card')).not.toBeInTheDocument();
+    expect(screen.queryByText('Saved Project Doc')).not.toBeInTheDocument();
+    expect(screen.getByText('Temporary Tab')).toBeInTheDocument();
+    expect(
+      (mockChrome.__getLocalStorage().collapsedSections as { workspace?: boolean })?.workspace
+    ).toBe(true);
+
+    // Clicking "New folder" while collapsed auto-expands Active Space to show the inline input
+    const newFolderBtn = screen.getByRole('button', { name: 'New folder' });
+    await act(async () => {
+      fireEvent.click(newFolderBtn);
+    });
+
+    expect(screen.getByTestId('workspace-list-card')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('New folder name...')).toBeInTheDocument();
+    expect(screen.getByText('Saved Project Doc')).toBeInTheDocument();
+
+    // Collapse again and expand via the chevron button
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Collapse Home' }));
+    });
+    expect(screen.queryByText('Saved Project Doc')).not.toBeInTheDocument();
+
+    const expandBtn = screen.getByRole('button', { name: 'Expand Home' });
+    expect(expandBtn).toHaveAttribute('aria-expanded', 'false');
+    await act(async () => {
+      fireEvent.click(expandBtn);
+    });
+    expect(screen.getByText('Saved Project Doc')).toBeInTheDocument();
+  });
+
+  it('allows moving a Quick Access link to another space via its right-click context menu', async () => {
+    const { fireEvent } = await import('@testing-library/react');
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      {
+                        id: '11',
+                        title: 'Quick Access',
+                        children: [{ id: '111', title: 'Gmail', url: 'https://mail.google.com' }]
+                      }
+                    ]
+                  },
+                  {
+                    id: '20',
+                    title: 'Work',
+                    children: [
+                      {
+                        id: '21',
+                        title: 'Quick Access',
+                        children: [{ id: '211', title: 'Linear', url: 'https://linear.app' }]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+
+    render(<App />);
+
+    const gmailTile = (await screen.findByText('Gmail')).closest('button')!;
+
+    // Right-click Gmail Quick Access tile -> Move to Space -> Work
+    await act(async () => {
+      fireEvent.contextMenu(gmailTile);
+    });
+
+    const moveToSpaceBtn = await screen.findByText('Move to Space');
+    await act(async () => {
+      fireEvent.click(moveToSpaceBtn);
+    });
+
+    const workButtons = await screen.findAllByRole('button', { name: 'Work' });
+    const workSubmenuBtn = workButtons.find((btn) => !btn.getAttribute('title'))!;
+    expect(workSubmenuBtn).toBeDefined();
+    await act(async () => {
+      fireEvent.click(workSubmenuBtn);
+    });
+
+    expect(chrome.bookmarks.move).toHaveBeenCalledWith('111', { parentId: '20' });
+
+    // Switch to Work space -> Gmail is now present inside Work
+    const workSpaceBtn = await screen.findByTitle(/^Work Space/i);
+    await act(async () => {
+      fireEvent.click(workSpaceBtn);
+    });
+    expect(await screen.findByText('Gmail')).toBeInTheDocument();
+  });
+
+  it('batch-deletes multiple selected saved tabs and closes all their bound browser tabs without leaking into temporary tabs', async () => {
+    const { fireEvent, waitFor } = await import('@testing-library/react');
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: '11', title: 'Quick Access', children: [] },
+                      { id: '301', title: 'Docs Spec', url: 'https://docs.example.com' },
+                      { id: '302', title: 'API Spec', url: 'https://api.example.com' }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setTabs([
+      {
+        id: 71,
+        index: 0,
+        windowId: 10,
+        active: true,
+        pinned: false,
+        url: 'https://docs.example.com',
+        title: 'Docs Spec',
+        status: 'complete'
+      } as chrome.tabs.Tab,
+      {
+        id: 72,
+        index: 1,
+        windowId: 10,
+        active: false,
+        pinned: false,
+        url: 'https://api.example.com',
+        title: 'API Spec',
+        status: 'complete'
+      } as chrome.tabs.Tab,
+      {
+        id: 73,
+        index: 2,
+        windowId: 10,
+        active: false,
+        pinned: false,
+        url: 'https://news.ycombinator.com',
+        title: 'Hacker News',
+        status: 'complete'
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+
+    const removeTabsSpy = vi.spyOn(chrome.tabs, 'remove');
+
+    const { container } = render(<App />);
+
+    // Wait for initial bookmark-to-tab reconciliation so both BookmarkRows are bound to tabs 71 & 72
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-bookmark-id="301"][data-bound-tab-id="71"]')
+      ).not.toBeNull();
+      expect(
+        container.querySelector('[data-bookmark-id="302"][data-bound-tab-id="72"]')
+      ).not.toBeNull();
+    });
+    expect(await screen.findByText('Hacker News')).toBeInTheDocument();
+
+    const docsRow = container.querySelector('[data-bookmark-id="301"]') as HTMLElement;
+    const apiRow = container.querySelector('[data-bookmark-id="302"]') as HTMLElement;
+
+    // Multi-select both saved tabs via metaKey click
+    await act(async () => {
+      fireEvent.click(docsRow, { metaKey: true });
+    });
+    await act(async () => {
+      fireEvent.click(apiRow, { metaKey: true });
+    });
+
+    // Right-click selection -> Delete 2 Selected Tabs
+    await act(async () => {
+      fireEvent.contextMenu(apiRow);
+    });
+
+    const deleteMultiBtn = await screen.findByText('Delete 2 Selected Tabs');
+    await act(async () => {
+      fireEvent.click(deleteMultiBtn);
+    });
+
+    // Both saved tabs are optimistically pruned immediately and both bound browser tabs (71, 72) are closed in one batch
+    expect(screen.queryByText('Docs Spec')).not.toBeInTheDocument();
+    expect(screen.queryByText('API Spec')).not.toBeInTheDocument();
+    expect(removeTabsSpy).toHaveBeenCalledWith([71, 72]);
+    expect(screen.getByText('Hacker News')).toBeInTheDocument();
+  });
+
+  it('opens a separate copy in Temporary Tabs when clicking Duplicate Tab on an unopened saved tab while keeping the saved tab untouched', async () => {
+    const { fireEvent, waitFor } = await import('@testing-library/react');
+    mockChrome.__setBookmarksTree([
+      {
+        id: '0',
+        title: 'Root',
+        children: [
+          {
+            id: '2',
+            title: 'Other Bookmarks',
+            children: [
+              {
+                id: '10',
+                title: 'Arctic',
+                children: [
+                  {
+                    id: '12',
+                    title: 'Home',
+                    children: [
+                      { id: '11', title: 'Quick Access', children: [] },
+                      { id: '401', title: 'Unopened Design Spec', url: 'https://figma.example.com/spec' }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        index: 0,
+        windowId: 10,
+        active: true,
+        pinned: false,
+        url: 'https://news.ycombinator.com',
+        title: 'Hacker News',
+        status: 'complete'
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setLocalStorage({ hasDismissedLeftSideTip: true });
+    mockChrome.__setSyncStorage({});
+    mockChrome.__setSessionStorage({});
+
+    const { container } = render(<App />);
+
+    const savedRow = await waitFor(() => {
+      const el = container.querySelector('[data-bookmark-id="401"]') as HTMLElement | null;
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(savedRow.getAttribute('data-bound-tab-id')).toBeNull();
+
+    // Right-click the unopened saved tab -> click Duplicate Tab
+    await act(async () => {
+      fireEvent.contextMenu(savedRow);
+    });
+    const duplicateBtn = await screen.findByText('Duplicate Tab');
+    await act(async () => {
+      fireEvent.click(duplicateBtn);
+    });
+
+    // Saved tab in Home remains untouched (unbound), while a new temporary tab opens in Temporary Tabs!
+    await waitFor(() => {
+      const openTabRows = container.querySelectorAll('[data-tab-id]');
+      expect(openTabRows.length).toBe(2);
+    });
+    expect(savedRow.getAttribute('data-bound-tab-id')).toBeNull();
+    const createdTabs = mockChrome
+      .__getTabs()
+      .filter((t) => t.url === 'https://figma.example.com/spec');
+    expect(createdTabs).toHaveLength(1);
+    expect(container.querySelector(`[data-tab-id="${createdTabs[0].id}"]`)).not.toBeNull();
+  });
 });

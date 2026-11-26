@@ -6,6 +6,8 @@ import {
   CopyPlus,
   ExternalLink,
   FolderPlus,
+  Folder,
+  ArrowRightLeft,
   Link2,
   Trash2,
   X,
@@ -14,7 +16,7 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react';
-import type { TabBinding, TabWithFaviconMeta } from '../../types';
+import type { SpaceItem, TabBinding, TabWithFaviconMeta } from '../../types';
 import { useResolvedFavicon } from '../utils/faviconCache';
 import { markKeyboardRowActivation } from '../utils/tabPageFocus';
 import { useFlipAnimation } from '../hooks/useFlipAnimation';
@@ -33,6 +35,8 @@ interface QuickAccessGridProps {
   bindingsByBookmarkId: Record<string, TabBinding>;
   tabsByTabId: Record<number, chrome.tabs.Tab>;
   activeTabId: number | null;
+  spaces?: SpaceItem[];
+  activeSpaceId?: string;
   densityMode?: 'relaxed' | 'compact';
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onTileDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
@@ -40,6 +44,7 @@ interface QuickAccessGridProps {
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
   onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
   onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
@@ -50,6 +55,7 @@ interface QuickAccessGridProps {
   ) => void;
   onReloadTab?: (tabId: number) => void;
   onDuplicateTab?: (tabId: number) => void;
+  onOpenInNewTab?: (url: string) => void;
 }
 
 function getShortTitle(rawTitle?: string, rawUrl?: string): string {
@@ -83,6 +89,8 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = React.memo(({
   bindingsByBookmarkId,
   tabsByTabId,
   activeTabId,
+  spaces = [],
+  activeSpaceId,
   densityMode = 'relaxed',
   onTileClick,
   onTileDoubleClick,
@@ -90,13 +98,15 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = React.memo(({
   onCloseTab,
   onToggleMuteTab,
   onMoveToWorkspace,
+  onMoveToSpace,
   onReplaceUrl,
   onRenameBookmark,
   onRemoveBookmark,
   onReorderQuickAccess,
   onDropItemToQuickAccess,
   onReloadTab,
-  onDuplicateTab
+  onDuplicateTab,
+  onOpenInNewTab
 }) => {
   const items = React.useMemo(
     () => bookmarks.filter((b) => Boolean(b.url)),
@@ -134,6 +144,8 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = React.memo(({
             binding={binding}
             boundTab={boundTab}
             activeTabId={activeTabId}
+            spaces={spaces}
+            activeSpaceId={activeSpaceId}
             densityMode={densityMode}
             onTileClick={onTileClick}
             onTileDoubleClick={onTileDoubleClick}
@@ -141,6 +153,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = React.memo(({
             onCloseTab={onCloseTab}
             onToggleMuteTab={onToggleMuteTab}
             onMoveToWorkspace={onMoveToWorkspace}
+            onMoveToSpace={onMoveToSpace}
             onReplaceUrl={onReplaceUrl}
             onRenameBookmark={onRenameBookmark}
             onRemoveBookmark={onRemoveBookmark}
@@ -148,6 +161,7 @@ export const QuickAccessGrid: React.FC<QuickAccessGridProps> = React.memo(({
             onDropItemToQuickAccess={onDropItemToQuickAccess}
             onReloadTab={onReloadTab}
             onDuplicateTab={onDuplicateTab}
+            onOpenInNewTab={onOpenInNewTab}
           />
         );
       })}
@@ -161,6 +175,8 @@ interface QuickAccessTileProps {
   binding?: TabBinding;
   boundTab?: chrome.tabs.Tab;
   activeTabId: number | null;
+  spaces?: SpaceItem[];
+  activeSpaceId?: string;
   densityMode?: 'relaxed' | 'compact';
   onTileClick: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
   onTileDoubleClick?: (bookmark: chrome.bookmarks.BookmarkTreeNode, e: React.MouseEvent) => void;
@@ -168,6 +184,7 @@ interface QuickAccessTileProps {
   onCloseTab?: (tabId: number, e: React.MouseEvent) => void;
   onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToWorkspace?: (bookmark: chrome.bookmarks.BookmarkTreeNode) => void;
+  onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
   onReplaceUrl?: (bookmarkId: string) => void;
   onRenameBookmark?: (id: string, title: string) => void;
   onRemoveBookmark?: (id: string) => void;
@@ -178,6 +195,7 @@ interface QuickAccessTileProps {
   ) => void;
   onReloadTab?: (tabId: number) => void;
   onDuplicateTab?: (tabId: number) => void;
+  onOpenInNewTab?: (url: string) => void;
 }
 
 const QuickAccessTile: React.FC<QuickAccessTileProps> = React.memo(({
@@ -186,6 +204,8 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = React.memo(({
   binding,
   boundTab,
   activeTabId,
+  spaces = [],
+  activeSpaceId,
   densityMode = 'relaxed',
   onTileClick,
   onTileDoubleClick,
@@ -193,13 +213,15 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = React.memo(({
   onCloseTab,
   onToggleMuteTab,
   onMoveToWorkspace,
+  onMoveToSpace,
   onReplaceUrl,
   onRenameBookmark,
   onRemoveBookmark,
   onReorderQuickAccess,
   onDropItemToQuickAccess,
   onReloadTab,
-  onDuplicateTab
+  onDuplicateTab,
+  onOpenInNewTab
 }) => {
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -239,15 +261,21 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = React.memo(({
     if (!onOpenContextMenu) return;
     e.preventDefault();
 
+    const otherSpaces = spaces.filter((s) => s.id !== activeSpaceId);
+
     const items: ContextMenuItem[] = [
       {
         label: 'Open in New Tab',
         icon: <ExternalLink className="w-3.5 h-3.5" />,
         action: () => {
           if (bookmark.url) {
-            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
-              () => {}
-            );
+            if (onOpenInNewTab) {
+              onOpenInNewTab(bookmark.url);
+            } else {
+              Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+                () => {}
+              );
+            }
           }
         }
       },
@@ -262,9 +290,13 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = React.memo(({
               Promise.resolve(chrome.tabs.duplicate(binding.tabId)).catch(() => {});
             }
           } else if (bookmark.url) {
-            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
-              () => {}
-            );
+            if (onOpenInNewTab) {
+              onOpenInNewTab(bookmark.url);
+            } else {
+              Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+                () => {}
+              );
+            }
           }
         }
       },
@@ -296,6 +328,19 @@ const QuickAccessTile: React.FC<QuickAccessTileProps> = React.memo(({
               label: 'Move to Active Space',
               icon: <FolderPlus className="w-3.5 h-3.5" />,
               action: () => onMoveToWorkspace(bookmark)
+            }
+          ]
+        : []),
+      ...(onMoveToSpace && otherSpaces.length > 0
+        ? [
+            {
+              label: 'Move to Space',
+              icon: <ArrowRightLeft className="w-3.5 h-3.5" />,
+              submenu: otherSpaces.map((sp) => ({
+                label: sp.name,
+                icon: <Folder className="w-3.5 h-3.5" />,
+                action: () => onMoveToSpace(bookmark.id, sp.folderId)
+              }))
             }
           ]
         : []),

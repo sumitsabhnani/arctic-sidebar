@@ -1728,5 +1728,74 @@ describe('Background service worker reminder lifecycle', () => {
         402: 'Keep Me'
       });
     });
+
+    it('handles OPEN_SELECTED_LINK and SEARCH_SELECTED_TEXT from on-page selection pill', async () => {
+      const sender = {
+        tab: { id: 88, index: 2, windowId: 10, url: 'https://example.com' } as chrome.tabs.Tab
+      } as chrome.runtime.MessageSender;
+
+      // 1. Valid https link opens adjacent active tab
+      const createSpy = vi.spyOn(chrome.tabs, 'create');
+      const linkResp = await new Promise<{ ok?: boolean }>((resolve) => {
+        handleRuntimeMessage(
+          { type: 'OPEN_SELECTED_LINK', url: 'https://vite.dev/guide/' },
+          sender,
+          (r) => resolve((r as { ok?: boolean }) || {})
+        );
+      });
+      expect(linkResp.ok).toBe(true);
+      expect(createSpy).toHaveBeenCalledWith({
+        url: 'https://vite.dev/guide/',
+        active: true,
+        windowId: 10,
+        index: 3,
+        openerTabId: 88
+      });
+
+      // 2. Unsafe javascript: scheme is rejected
+      createSpy.mockClear();
+      const unsafeResp = await new Promise<{ ok?: boolean }>((resolve) => {
+        handleRuntimeMessage(
+          { type: 'OPEN_SELECTED_LINK', url: 'javascript:alert(1)' },
+          sender,
+          (r) => resolve((r as { ok?: boolean }) || {})
+        );
+      });
+      expect(unsafeResp.ok).toBe(false);
+      expect(createSpy).not.toHaveBeenCalled();
+
+      // 3. SEARCH_SELECTED_TEXT delegates to chrome.search.query (respecting user's default search engine)
+      const searchResp = await new Promise<{ ok?: boolean }>((resolve) => {
+        handleRuntimeMessage(
+          { type: 'SEARCH_SELECTED_TEXT', query: 'arctic vertical tabs' },
+          sender,
+          (r) => resolve((r as { ok?: boolean }) || {})
+        );
+      });
+      expect(searchResp.ok).toBe(true);
+      expect(mockChrome.search.query).toHaveBeenCalledWith({
+        text: 'arctic vertical tabs',
+        disposition: 'NEW_TAB'
+      });
+
+      // 4. Falls back to Google search tab if chrome.search.query rejects
+      mockChrome.search.query.mockRejectedValueOnce(new Error('search unavailable'));
+      createSpy.mockClear();
+      const fallbackResp = await new Promise<{ ok?: boolean }>((resolve) => {
+        handleRuntimeMessage(
+          { type: 'SEARCH_SELECTED_TEXT', query: 'fallback search query' },
+          sender,
+          (r) => resolve((r as { ok?: boolean }) || {})
+        );
+      });
+      expect(fallbackResp.ok).toBe(true);
+      expect(createSpy).toHaveBeenCalledWith({
+        url: 'https://www.google.com/search?q=fallback%20search%20query',
+        active: true,
+        windowId: 10,
+        index: 3,
+        openerTabId: 88
+      });
+    });
   });
 });
