@@ -46,7 +46,7 @@ import {
 import { upsertPersistedBindings } from './utils/reconcileBindings';
 import { useFlipAnimation } from './hooks/useFlipAnimation';
 import { endDragSession, parseDragPayload, useActiveDrag } from './utils/dnd';
-import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose, Keyboard, FileWarning } from 'lucide-react';
+import { Loader2, FolderPlus, Folder, Check, X, Bell, PanelLeft, PanelLeftClose, Keyboard, FileWarning, ChevronDown } from 'lucide-react';
 
 const EDGE_TRIGGER_ORIGINS = ['http://*/*', 'https://*/*'];
 
@@ -94,6 +94,7 @@ export const App: React.FC = () => {
     renameBookmarkOrFolder,
     updateBookmarkUrl,
     removeBookmarkOrFolder,
+    removeMultipleBookmarksOrFolders,
     moveBookmarks,
     insertOptimisticBookmarks,
     loading
@@ -117,7 +118,8 @@ export const App: React.FC = () => {
     handleFaviconClick,
     handleFaviconDoubleClick,
     handleQuickAccessClick,
-    handleCloseTab,
+    handleCloseTab: rawHandleCloseTab,
+    closeMultipleTabs,
     closeAllWindowTabs,
     pinTab,
     pinMultipleTabs,
@@ -288,8 +290,15 @@ export const App: React.FC = () => {
         if (res.sidebarDockSide === 'left' || res.sidebarDockSide === 'right') {
           setSidebarDockSide(res.sidebarDockSide);
         }
-        if (res.collapsedSections) {
-          setCollapsedSections(res.collapsedSections as { quickAccess: boolean; workspace: boolean; todayTabs: boolean });
+        if (res.collapsedSections && typeof res.collapsedSections === 'object') {
+          setCollapsedSections((prev) => ({
+            ...prev,
+            ...(res.collapsedSections as Partial<{
+              quickAccess: boolean;
+              workspace: boolean;
+              todayTabs: boolean;
+            }>)
+          }));
         }
         if (res.openArcticSettings) {
           setIsSettingsOpen(true);
@@ -363,14 +372,15 @@ export const App: React.FC = () => {
         ) {
           setSidebarDockSide(changes.sidebarDockSide.newValue);
         }
-        if (changes.collapsedSections && changes.collapsedSections.newValue) {
-          setCollapsedSections(
-            changes.collapsedSections.newValue as {
+        if (changes.collapsedSections && changes.collapsedSections.newValue && typeof changes.collapsedSections.newValue === 'object') {
+          setCollapsedSections((prev) => ({
+            ...prev,
+            ...(changes.collapsedSections.newValue as Partial<{
               quickAccess: boolean;
               workspace: boolean;
               todayTabs: boolean;
-            }
-          );
+            }>)
+          }));
         }
         if (changes.openArcticSettings && changes.openArcticSettings.newValue) {
           setIsSettingsOpen(true);
@@ -957,6 +967,53 @@ export const App: React.FC = () => {
   const [selectedTabIds, setSelectedTabIds] = useState<Set<number>>(new Set());
   const [lastSelectedTabId, setLastSelectedTabId] = useState<number | null>(null);
   const lastSelectedTabIdRef = React.useRef<number | null>(null);
+  const bindingsByBookmarkIdRef = React.useRef<Record<string, TabBinding>>(bindingsByBookmarkId);
+  bindingsByBookmarkIdRef.current = bindingsByBookmarkId;
+  const bookmarkTreesSnapshotRef = React.useRef<chrome.bookmarks.BookmarkTreeNode[]>([]);
+  bookmarkTreesSnapshotRef.current = [
+    ...(quickAccessNode ? [quickAccessNode] : []),
+    ...(workspaceNode ? [workspaceNode] : []),
+    ...allSpaceBookmarkNodes
+  ];
+
+  const handleCloseTab = useCallback(
+    async (tabId: number, e?: React.MouseEvent) => {
+      setSelectedTabIds((prev) => {
+        if (!prev.has(tabId)) return prev;
+        const next = new Set(prev);
+        next.delete(tabId);
+        return next;
+      });
+      await rawHandleCloseTab(tabId, e);
+    },
+    [rawHandleCloseTab]
+  );
+
+  const ensureTodayTabsExpanded = useCallback(() => {
+    setCollapsedSections((prev) => {
+      if (!prev.todayTabs) return prev;
+      const updated = { ...prev, todayTabs: false };
+      chrome.storage.local.set({ collapsedSections: updated } as LocalSettings);
+      return updated;
+    });
+  }, []);
+
+  const handleOpenBookmarkInNewTab = useCallback(
+    (url: string) => {
+      if (!url) return;
+      ensureTodayTabsExpanded();
+      void createNewTab(url, activeSpaceId);
+    },
+    [activeSpaceId, createNewTab, ensureTodayTabsExpanded]
+  );
+
+  const handleDuplicateTab = useCallback(
+    (tabId: number) => {
+      ensureTodayTabsExpanded();
+      void duplicateTab(tabId);
+    },
+    [duplicateTab, ensureTodayTabsExpanded]
+  );
 
   // Context Menu State
   const [contextMenu, setContextMenu] = useState<{
@@ -1035,6 +1092,18 @@ export const App: React.FC = () => {
         searchRoots,
         revealRequest.bookmarkId
       );
+      const isQuickAccessTarget = Boolean(
+        activeFolderIds.quickAccessId &&
+          ancestors?.includes(activeFolderIds.quickAccessId)
+      );
+      if (!isQuickAccessTarget) {
+        setCollapsedSections((prev) => {
+          if (!prev.workspace) return prev;
+          const updated = { ...prev, workspace: false };
+          chrome.storage.local.set({ collapsedSections: updated });
+          return updated;
+        });
+      }
       if (ancestors && ancestors.length > 0) {
         const collapsibleAncestors = ancestors.filter((id) => !spaceRootIds.has(id));
         if (collapsibleAncestors.length > 0) {
@@ -1058,6 +1127,7 @@ export const App: React.FC = () => {
     workspaceNode,
     spaces,
     activeFolderIds.workspaceId,
+    activeFolderIds.quickAccessId,
     expandFoldersById,
     bookmarkIdByTabId
   ]);
@@ -1096,6 +1166,7 @@ export const App: React.FC = () => {
     bookmarkIdByTabId,
     workspaceBookmarks,
     collapsedFolderIds,
+    collapsedSections.workspace,
     isInitialTabsLoaded,
     loading,
     revealRequest
@@ -1233,7 +1304,11 @@ export const App: React.FC = () => {
     walk(workspaceBookmarks);
     return parts.join(',');
   }, [workspaceBookmarks, collapsedFolderIds]);
-  useFlipAnimation(workspaceListRef, workspaceOrderSignature, `${activeSpaceId}:${tabsDensity}`);
+  useFlipAnimation(
+    workspaceListRef,
+    workspaceOrderSignature,
+    `${activeSpaceId}:${tabsDensity}:${collapsedSections.workspace ? '1' : '0'}`
+  );
 
   // Global keyboard shortcuts & active-tab media/scroll keystroke bridge:
   // - Ctrl+T / Cmd+T: New Tab
@@ -1613,15 +1688,124 @@ export const App: React.FC = () => {
     [visibleUnpinnedTabs, lastSelectedTabId, selectedTabIds]
   );
 
+  /**
+   * Delete one or more bookmarks/folders and close any open running tabs bound to them or their children
+   * in a single synchronous optimistic batch so rows never flicker unbound before disappearing.
+   */
   const handleDeleteMultipleBookmarks = useCallback(
     async (ids: string[]) => {
-      for (const id of ids) {
-        await handleDeleteBookmark(id);
+      const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+      if (uniqueIds.length === 0) return;
+
+      const targetIdSet = new Set(uniqueIds);
+      setSelectedBookmarkIds((prev) => {
+        if (prev.size === 0) return prev;
+        let changed = false;
+        const next = new Set<string>();
+        for (const id of prev) {
+          if (targetIdSet.has(id)) {
+            changed = true;
+          } else {
+            next.add(id);
+          }
+        }
+        return changed ? next : prev;
+      });
+
+      const bookmarkIdsSet = new Set<string>(uniqueIds);
+      const missingSubtreeIds: string[] = [];
+      const snapshotTrees = bookmarkTreesSnapshotRef.current;
+
+      const findNode = (
+        nodes: chrome.bookmarks.BookmarkTreeNode[],
+        targetId: string
+      ): chrome.bookmarks.BookmarkTreeNode | null => {
+        for (const node of nodes) {
+          if (node.id === targetId) return node;
+          if (node.children) {
+            const found = findNode(node.children, targetId);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      const collectDescendants = (node: chrome.bookmarks.BookmarkTreeNode) => {
+        if (node.id) {
+          bookmarkIdsSet.add(node.id);
+        }
+        if (node.children) {
+          for (const child of node.children) {
+            collectDescendants(child);
+          }
+        }
+      };
+
+      for (const id of uniqueIds) {
+        const found = findNode(snapshotTrees, id);
+        if (found) {
+          collectDescendants(found);
+        } else {
+          missingSubtreeIds.push(id);
+        }
       }
-      setSelectedBookmarkIds(new Set());
+
+      // If any target ID was not in our in-memory snapshot, resolve its subtree before closing tabs
+      for (const missingId of missingSubtreeIds) {
+        try {
+          const [subtree] = await chrome.bookmarks.getSubTree(missingId);
+          if (subtree) {
+            collectDescendants(subtree);
+          }
+        } catch {
+          // ignore if subtree cannot be queried
+        }
+      }
+
+      const bookmarkIdsToClose = Array.from(bookmarkIdsSet);
+      const tabIdsToCloseSet = new Set<number>();
+      const latestBindings = bindingsByBookmarkIdRef.current;
+      for (const bId of bookmarkIdsToClose) {
+        const binding = latestBindings[bId];
+        if (binding && typeof binding.tabId === 'number') {
+          tabIdsToCloseSet.add(binding.tabId);
+        }
+      }
+      const tabIdsToClose = Array.from(tabIdsToCloseSet);
+
+      if (tabIdsToClose.length > 0) {
+        setSelectedTabIds((prev) => {
+          if (prev.size === 0) return prev;
+          let changed = false;
+          const next = new Set<number>();
+          for (const tid of prev) {
+            if (tabIdsToCloseSet.has(tid)) {
+              changed = true;
+            } else {
+              next.add(tid);
+            }
+          }
+          return changed ? next : prev;
+        });
+      }
+
+      try {
+        // Kick off both bookmark tree pruning and tab pruning synchronously in the same tick
+        // so React batches them into one smooth render without an intermediate "unbound" flash.
+        const removePromise = removeMultipleBookmarksOrFolders(uniqueIds);
+        const closePromise =
+          tabIdsToClose.length > 0 ? closeMultipleTabs(tabIdsToClose) : Promise.resolve();
+        await Promise.all([
+          removePromise,
+          closePromise,
+          removeStoredHighlights(bookmarkIdsToClose)
+        ]);
+      } catch (err) {
+        console.warn('[Arctic] Error deleting bookmark(s) and closing tabs:', err);
+        await removeMultipleBookmarksOrFolders(uniqueIds);
+      }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
+    [closeMultipleTabs, removeMultipleBookmarksOrFolders]
   );
 
   const handleMoveMultipleBookmarksToSpace = useCallback(
@@ -1636,12 +1820,12 @@ export const App: React.FC = () => {
 
   const handleCloseMultipleTabs = useCallback(
     async (tabIds: number[]) => {
-      for (const tid of tabIds) {
-        await handleCloseTab(tid);
-      }
       setSelectedTabIds(new Set());
+      setLastSelectedTabId(null);
+      lastSelectedTabIdRef.current = null;
+      await closeMultipleTabs(tabIds);
     },
-    [handleCloseTab]
+    [closeMultipleTabs]
   );
 
   const handlePinMultipleTabsToWorkspace = useCallback(
@@ -1842,45 +2026,9 @@ export const App: React.FC = () => {
    */
   const handleDeleteBookmark = useCallback(
     async (id: string) => {
-      try {
-        const bookmarkIdsSet = new Set<string>([id]);
-        try {
-          const [subtree] = await chrome.bookmarks.getSubTree(id);
-          const collectDescendants = (node: chrome.bookmarks.BookmarkTreeNode) => {
-            if (node.id) {
-              bookmarkIdsSet.add(node.id);
-            }
-            if (node.children) {
-              for (const child of node.children) {
-                collectDescendants(child);
-              }
-            }
-          };
-          if (subtree) {
-            collectDescendants(subtree);
-          }
-        } catch {
-          // ignore if subtree cannot be queried
-        }
-
-        const bookmarkIdsToClose = Array.from(bookmarkIdsSet);
-        const closedTabIds = new Set<number>();
-        for (const bId of bookmarkIdsToClose) {
-          const binding = bindingsByBookmarkId[bId];
-          if (binding && typeof binding.tabId === 'number' && !closedTabIds.has(binding.tabId)) {
-            closedTabIds.add(binding.tabId);
-            await handleCloseTab(binding.tabId);
-          }
-        }
-
-        await removeStoredHighlights(bookmarkIdsToClose);
-        await removeBookmarkOrFolder(id);
-      } catch (err) {
-        console.warn('[Arctic] Error deleting bookmark and closing tabs:', err);
-        await removeBookmarkOrFolder(id);
-      }
+      await handleDeleteMultipleBookmarks([id]);
     },
-    [bindingsByBookmarkId, handleCloseTab, removeBookmarkOrFolder]
+    [handleDeleteMultipleBookmarks]
   );
 
   const discardedTabsCount = useMemo(() => {
@@ -2133,6 +2281,8 @@ export const App: React.FC = () => {
             bindingsByBookmarkId={bindingsByBookmarkId}
             tabsByTabId={tabsByTabId}
             activeTabId={activeTabId}
+            spaces={spaces}
+            activeSpaceId={activeSpaceId}
             densityMode={quickAccessDensity}
             onTileClick={handleQuickAccessClick}
             onTileDoubleClick={handleFaviconDoubleClick}
@@ -2140,13 +2290,15 @@ export const App: React.FC = () => {
             onCloseTab={handleCloseTab}
             onToggleMuteTab={toggleMuteTab}
             onMoveToWorkspace={handleMoveBookmarkToWorkspace}
+            onMoveToSpace={moveNodeToSpace}
             onReplaceUrl={handleReplaceBookmarkUrl}
             onRenameBookmark={renameBookmarkOrFolder}
             onRemoveBookmark={handleDeleteBookmark}
             onReorderQuickAccess={handleReorderQuickAccess}
             onDropItemToQuickAccess={handleDropItemToQuickAccess}
             onReloadTab={reloadTab}
-            onDuplicateTab={duplicateTab}
+            onDuplicateTab={handleDuplicateTab}
+            onOpenInNewTab={handleOpenBookmarkInNewTab}
           />
         </div>
       )}
@@ -2206,62 +2358,92 @@ export const App: React.FC = () => {
               isWorkspaceHeaderDragOver ? 'theme-drag-over-inside' : ''
             }`}
           >
-            {isRenamingWorkspace ? (
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (workspaceNode && workspaceRenameTitle.trim()) {
-                    renameBookmarkOrFolder(workspaceNode.id, workspaceRenameTitle.trim());
-                  }
-                  setIsRenamingWorkspace(false);
-                }}
-                className="flex items-center space-x-1"
+            <div className="flex items-center space-x-1 min-w-0">
+              <button
+                type="button"
+                onClick={() => toggleSectionCollapse('workspace')}
+                title={
+                  collapsedSections.workspace
+                    ? `Expand ${spaceDisplayTitle}`
+                    : `Collapse ${spaceDisplayTitle}`
+                }
+                aria-label={
+                  collapsedSections.workspace
+                    ? `Expand ${spaceDisplayTitle}`
+                    : `Collapse ${spaceDisplayTitle}`
+                }
+                aria-expanded={!collapsedSections.workspace}
+                className="flex items-center p-1 -ml-1 rounded-md text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors flex-shrink-0"
               >
-                <input
-                  type="text"
-                  value={workspaceRenameTitle}
-                  onChange={(e) => setWorkspaceRenameTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') setIsRenamingWorkspace(false);
-                  }}
-                  onBlur={() => {
+                <ChevronDown
+                  className={`w-3 h-3 transition-transform duration-150 ${
+                    collapsedSections.workspace ? '-rotate-90' : 'rotate-0'
+                  }`}
+                />
+              </button>
+
+              {isRenamingWorkspace ? (
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
                     if (workspaceNode && workspaceRenameTitle.trim()) {
                       renameBookmarkOrFolder(workspaceNode.id, workspaceRenameTitle.trim());
                     }
                     setIsRenamingWorkspace(false);
                   }}
-                  autoFocus
-                  onFocus={(e) => e.target.select()}
-                  className="bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-2 py-0.5 text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none"
-                />
-              </form>
-            ) : (
-              <span
-                title="Double-click to rename space"
-                onDoubleClick={(e) => {
-                  e.stopPropagation();
-                  if (editingTarget) {
-                    commitCurrentEdit(editingTarget);
-                    setEditingTarget(null);
-                  }
-                  if (workspaceNode) {
-                    setWorkspaceRenameTitle(spaceDisplayTitle);
-                    setIsRenamingWorkspace(true);
-                  }
-                }}
-                className="text-[15.5px] font-bold tracking-tight text-zinc-900 dark:text-zinc-100 select-none cursor-default"
-              >
-                {spaceDisplayTitle}
-              </span>
-            )}
+                  className="flex items-center space-x-1 min-w-0"
+                >
+                  <input
+                    type="text"
+                    value={workspaceRenameTitle}
+                    onChange={(e) => setWorkspaceRenameTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setIsRenamingWorkspace(false);
+                    }}
+                    onBlur={() => {
+                      if (workspaceNode && workspaceRenameTitle.trim()) {
+                        renameBookmarkOrFolder(workspaceNode.id, workspaceRenameTitle.trim());
+                      }
+                      setIsRenamingWorkspace(false);
+                    }}
+                    autoFocus
+                    onFocus={(e) => e.target.select()}
+                    className="bg-zinc-200 dark:bg-zinc-800 border border-cyan-500 rounded px-2 py-0.5 text-sm font-semibold text-zinc-900 dark:text-white focus:outline-none"
+                  />
+                </form>
+              ) : (
+                <span
+                  title="Double-click to rename space"
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (editingTarget) {
+                      commitCurrentEdit(editingTarget);
+                      setEditingTarget(null);
+                    }
+                    if (workspaceNode) {
+                      setWorkspaceRenameTitle(spaceDisplayTitle);
+                      setIsRenamingWorkspace(true);
+                    }
+                  }}
+                  className="text-[15.5px] font-bold tracking-tight text-zinc-900 dark:text-zinc-100 select-none cursor-default truncate"
+                >
+                  {spaceDisplayTitle}
+                </span>
+              )}
+            </div>
 
             {/* Folder creation action */}
-            <div className="flex items-center">
+            <div className="flex items-center flex-shrink-0">
               <button
                 type="button"
                 title={`Create New Folder in ${spaceDisplayTitle}`}
                 aria-label="New folder"
-                onClick={() => setIsCreatingRootFolder(true)}
+                onClick={() => {
+                  if (collapsedSections.workspace) {
+                    toggleSectionCollapse('workspace');
+                  }
+                  setIsCreatingRootFolder(true);
+                }}
                 className="p-1 rounded-md text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-black/5 dark:hover:bg-white/10 transition-colors"
               >
                 <FolderPlus className="w-3.5 h-3.5" />
@@ -2270,13 +2452,15 @@ export const App: React.FC = () => {
           </div>
 
           {/* Render Vertical Tree in Grouped Card (5a) */}
-          <div
-            ref={workspaceListRef}
-            data-testid="workspace-list-card"
-            className={`flex flex-col rounded-2xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 backdrop-blur-sm overflow-hidden p-1 gap-0.5 shadow-xs animate-in fade-in duration-100 transition-shadow ${
-              isEmptyWorkspaceDragOver ? 'theme-drag-over-inside' : ''
-            }`}
-          >
+          {!collapsedSections.workspace && (
+            <>
+              <div
+                ref={workspaceListRef}
+                data-testid="workspace-list-card"
+                className={`flex flex-col rounded-2xl border border-black/10 dark:border-white/10 bg-white/70 dark:bg-zinc-900/60 backdrop-blur-sm overflow-hidden p-1 gap-0.5 shadow-xs animate-in fade-in duration-100 transition-shadow ${
+                  isEmptyWorkspaceDragOver ? 'theme-drag-over-inside' : ''
+                }`}
+              >
             {/* Inline New Folder Input Row */}
             {isCreatingRootFolder && (
               <form
@@ -2386,7 +2570,8 @@ export const App: React.FC = () => {
                       onFaviconDoubleClick={handleFaviconDoubleClick}
                       onCloseTab={handleCloseTab}
                       onReloadTab={reloadTab}
-                      onDuplicateTab={duplicateTab}
+                      onDuplicateTab={handleDuplicateTab}
+                      onOpenInNewTab={handleOpenBookmarkInNewTab}
                       onDiscardTab={discardTab}
                       onToggleMuteTab={toggleMuteTab}
                       onMoveToSpace={moveNodeToSpace}
@@ -2444,7 +2629,8 @@ export const App: React.FC = () => {
                     onFaviconDoubleClick={handleFaviconDoubleClick}
                     onCloseTab={handleCloseTab}
                     onReloadTab={reloadTab}
-                    onDuplicateTab={duplicateTab}
+                    onDuplicateTab={handleDuplicateTab}
+                    onOpenInNewTab={handleOpenBookmarkInNewTab}
                     onDiscardTab={discardTab}
                     onToggleMuteTab={toggleMuteTab}
                     onMoveToSpace={moveNodeToSpace}
@@ -2525,6 +2711,8 @@ export const App: React.FC = () => {
               }`}
             />
           )}
+            </>
+          )}
         </div>
 
         {/* Section 3: Today's Tabs / Open Tabs (Ephemeral Unpinned Tabs) */}
@@ -2553,7 +2741,7 @@ export const App: React.FC = () => {
           onPinToSpace={handlePinTabToSpace}
           onMoveTabToSpace={setTabSpace}
           onMoveMultipleTabsToSpace={moveTabsToSpace}
-          onDuplicateTab={duplicateTab}
+          onDuplicateTab={handleDuplicateTab}
           onReloadTab={reloadTab}
           onDiscardTab={discardTab}
           onToggleMuteTab={toggleMuteTab}

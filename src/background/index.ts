@@ -151,16 +151,26 @@ if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function')
  */
 async function getSessionState(): Promise<SessionState> {
   try {
-    const data = await chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']);
+    const data = await chrome.storage.session.get([
+      'bindingsByBookmarkId',
+      'bookmarkIdByTabId',
+      'unpinnedTabIds'
+    ]);
     return {
       bindingsByBookmarkId: (data.bindingsByBookmarkId as Record<string, TabBinding>) || {},
-      bookmarkIdByTabId: (data.bookmarkIdByTabId as Record<number, string>) || {}
+      bookmarkIdByTabId: (data.bookmarkIdByTabId as Record<number, string>) || {},
+      unpinnedTabIds: Array.isArray(data.unpinnedTabIds)
+        ? (data.unpinnedTabIds as unknown[]).filter(
+            (id): id is number => typeof id === 'number'
+          )
+        : []
     };
   } catch (err) {
     console.error('[Arctic Background] Error reading session state:', err);
     return {
       bindingsByBookmarkId: {},
-      bookmarkIdByTabId: {}
+      bookmarkIdByTabId: {},
+      unpinnedTabIds: []
     };
   }
 }
@@ -213,7 +223,11 @@ export async function reconcileTabBindingsInBackground(): Promise<void> {
         preferredWindowId,
         currentBindings: session.bindingsByBookmarkId,
         currentByTab: session.bookmarkIdByTabId,
-        persistedBindings
+        persistedBindings,
+        excludedTabIds:
+          session.unpinnedTabIds && session.unpinnedTabIds.length > 0
+            ? new Set<number>(session.unpinnedTabIds)
+            : undefined
       });
 
       if (result.changed) {
@@ -259,6 +273,16 @@ export async function handleTabRemoved(
       await saveSessionState(session);
       if (!removeInfo?.isWindowClosing) {
         await removePersistedBindings([bookmarkId]);
+      }
+    }
+
+    if (session.unpinnedTabIds && session.unpinnedTabIds.includes(tabId)) {
+      try {
+        await chrome.storage.session.set({
+          unpinnedTabIds: session.unpinnedTabIds.filter((id) => id !== tabId)
+        });
+      } catch {
+        // ignore
       }
     }
 
@@ -422,6 +446,19 @@ export async function handleTabReplaced(
       delete session.bookmarkIdByTabId[removedTabId];
       session.bookmarkIdByTabId[addedTabId] = bookmarkId;
       await saveSessionState(session);
+    }
+
+    if (session.unpinnedTabIds && session.unpinnedTabIds.includes(removedTabId)) {
+      try {
+        const nextUnpinned = Array.from(
+          new Set(
+            session.unpinnedTabIds.map((id) => (id === removedTabId ? addedTabId : id))
+          )
+        );
+        await chrome.storage.session.set({ unpinnedTabIds: nextUnpinned });
+      } catch {
+        // ignore
+      }
     }
 
     if (chrome.storage?.session?.get && chrome.storage?.session?.set) {
@@ -2198,6 +2235,61 @@ export async function saveHighlightBookmark(options: {
   }
 }
 
+export async function openSelectedLinkFromPage(
+  rawUrl: string,
+  senderTab?: chrome.tabs.Tab
+): Promise<{ ok: boolean; tabId?: number }> {
+  if (!chrome.tabs?.create || !rawUrl) return { ok: false };
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false };
+    }
+    const created = await chrome.tabs.create({
+      url: parsed.href,
+      active: true,
+      ...(typeof senderTab?.windowId === 'number' ? { windowId: senderTab.windowId } : {}),
+      ...(typeof senderTab?.index === 'number' ? { index: senderTab.index + 1 } : {}),
+      ...(typeof senderTab?.id === 'number' ? { openerTabId: senderTab.id } : {})
+    });
+    return { ok: true, tabId: created?.id };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function searchSelectedTextFromPage(
+  rawQuery: string,
+  senderTab?: chrome.tabs.Tab
+): Promise<{ ok: boolean }> {
+  const query = (rawQuery || '').replace(/\s+/g, ' ').trim().slice(0, 1000);
+  if (!query) return { ok: false };
+
+  if (typeof chrome !== 'undefined' && typeof chrome.search?.query === 'function') {
+    try {
+      await chrome.search.query({ text: query, disposition: 'NEW_TAB' });
+      return { ok: true };
+    } catch {
+      // Fall back to opening Google search tab
+    }
+  }
+
+  if (!chrome.tabs?.create) return { ok: false };
+  try {
+    const fallbackUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    await chrome.tabs.create({
+      url: fallbackUrl,
+      active: true,
+      ...(typeof senderTab?.windowId === 'number' ? { windowId: senderTab.windowId } : {}),
+      ...(typeof senderTab?.index === 'number' ? { index: senderTab.index + 1 } : {}),
+      ...(typeof senderTab?.id === 'number' ? { openerTabId: senderTab.id } : {})
+    });
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
 export function handleRuntimeMessage(
   message: {
     type?: string;
@@ -2209,6 +2301,7 @@ export function handleRuntimeMessage(
     forceReload?: boolean;
     urls?: string[];
     url?: string;
+    query?: string;
     pageUrl?: string;
     pageTitle?: string;
     quote?: string;
@@ -2218,6 +2311,20 @@ export function handleRuntimeMessage(
   sendResponse: (response?: unknown) => void
 ): boolean {
   if (!message || typeof message !== 'object') return false;
+
+  if (message.type === 'OPEN_SELECTED_LINK' && typeof message.url === 'string') {
+    void openSelectedLinkFromPage(message.url, sender?.tab).then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
+
+  if (message.type === 'SEARCH_SELECTED_TEXT' && typeof message.query === 'string') {
+    void searchSelectedTextFromPage(message.query, sender?.tab).then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  }
 
   if (message.type === 'SAVE_HIGHLIGHT_BOOKMARK' && typeof message.quote === 'string') {
     void saveHighlightBookmark({

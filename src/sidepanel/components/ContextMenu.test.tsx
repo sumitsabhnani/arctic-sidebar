@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 
 describe('ContextMenu component', () => {
@@ -112,15 +112,16 @@ describe('ContextMenu component', () => {
     expect(handleClose).toHaveBeenCalledTimes(1);
   });
 
-  it('closes menu when cursor leaves the sidepanel document (even when window does not have focus)', () => {
+  it('closes menu when cursor leaves the sidepanel document after grace window (without hair-triggering at 100ms)', () => {
     vi.useFakeTimers();
     const handleClose = vi.fn();
     render(<ContextMenu x={50} y={50} items={[{ label: 'Item 1', action: vi.fn() }]} onClose={handleClose} />);
 
     fireEvent.mouseLeave(document.documentElement);
+    vi.advanceTimersByTime(100);
     expect(handleClose).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(200);
     expect(handleClose).toHaveBeenCalledTimes(1);
     vi.useRealTimers();
   });
@@ -131,11 +132,83 @@ describe('ContextMenu component', () => {
     render(<ContextMenu x={50} y={50} items={[{ label: 'Item 1', action: vi.fn() }]} onClose={handleClose} />);
 
     fireEvent.mouseLeave(document.documentElement);
-    vi.advanceTimersByTime(40);
+    vi.advanceTimersByTime(150);
     fireEvent.mouseEnter(document.documentElement);
-    vi.advanceTimersByTime(100);
+    vi.advanceTimersByTime(300);
 
     expect(handleClose).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+
+  it('expands submenu smoothly on hover intent and does not close when background tabs finish loading', async () => {
+    vi.useFakeTimers();
+    const handleClose = vi.fn();
+    const items: ContextMenuItem[] = [
+      {
+        label: 'Move to Space',
+        submenu: [{ label: 'Work', action: vi.fn() }]
+      }
+    ];
+
+    render(<ContextMenu x={60} y={60} items={items} onClose={handleClose} />);
+
+    // Hovering Move to Space opens submenu after short intent delay
+    fireEvent.mouseOver(screen.getByText('Move to Space').closest('button')!);
+    act(() => {
+      vi.advanceTimersByTime(130);
+    });
+    expect(screen.getByText('Work')).toBeInTheDocument();
+
+    // Background tab status/url updates must NOT abruptly dismiss the open menu
+    const { mockChrome } = await import('../../test/setup');
+    await mockChrome.__triggerTabUpdated(1, { status: 'complete', url: 'https://example.com/loaded' });
+    expect(handleClose).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it('plays a non-interactive fade-out exit clone when unmounting in real browser layout', () => {
+    const exitCtrl: { finish?: () => void } = {};
+    const origAnimate = HTMLElement.prototype.animate;
+    HTMLElement.prototype.animate = vi.fn().mockImplementation(() => {
+      const anim = {
+        playState: 'running',
+        cancel: vi.fn(),
+        onfinish: null as (() => void) | null,
+        oncancel: null as (() => void) | null
+      };
+      exitCtrl.finish = () => anim.onfinish?.();
+      return anim as unknown as Animation;
+    });
+
+    const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 50,
+      top: 50,
+      right: 250,
+      bottom: 150,
+      width: 200,
+      height: 100,
+      x: 50,
+      y: 50,
+      toJSON: () => ({})
+    } as DOMRect);
+
+    try {
+      const { unmount } = render(
+        <ContextMenu x={50} y={50} items={[{ label: 'Copy Link', action: vi.fn() }]} onClose={vi.fn()} />
+      );
+
+      unmount();
+
+      const exitGhost = document.querySelector('[data-context-menu-exit="true"]') as HTMLElement | null;
+      expect(exitGhost).not.toBeNull();
+      expect(exitGhost?.style.pointerEvents).toBe('none');
+
+      exitCtrl.finish?.();
+      expect(document.querySelector('[data-context-menu-exit="true"]')).toBeNull();
+    } finally {
+      HTMLElement.prototype.animate = origAnimate;
+      rectSpy.mockRestore();
+    }
   });
 });

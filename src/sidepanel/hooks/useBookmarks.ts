@@ -1477,19 +1477,54 @@ export function useBookmarks() {
     [beginInternalMutation, endInternalMutation, loadBookmarks]
   );
 
-  // Remove bookmark or folder
-  const removeBookmarkOrFolder = useCallback(
-    async (id: string) => {
+  // Remove one or more bookmarks or folders optimistically in a single batch
+  const removeMultipleBookmarksOrFolders = useCallback(
+    async (ids: string[]) => {
+      const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+      if (uniqueIds.length === 0) return;
+      const removeSet = new Set(uniqueIds);
+
+      // Inspect in-memory snapshot before pruning to collect leaf bookmark IDs synchronously
+      // and avoid a full-tree folder dropdown refresh when only URL bookmarks were deleted.
+      const snapshotTrees = treesSnapshotRef.current;
+      const syncCollectedBookmarkIds = new Set<string>();
+      const missingIds: string[] = [];
+      let allTargetsAreUrlBookmarks = true;
+
+      const collectFromNode = (node: chrome.bookmarks.BookmarkTreeNode) => {
+        if (node.url) {
+          syncCollectedBookmarkIds.add(node.id);
+        }
+        if (node.children) {
+          for (const ch of node.children) {
+            collectFromNode(ch);
+          }
+        }
+      };
+
+      for (const id of uniqueIds) {
+        const found = findNodeInTrees(snapshotTrees, id);
+        if (found) {
+          if (!found.url) {
+            allTargetsAreUrlBookmarks = false;
+          }
+          collectFromNode(found);
+        } else {
+          allTargetsAreUrlBookmarks = false;
+          missingIds.push(id);
+        }
+      }
+
       const pruneNode = (
         node: chrome.bookmarks.BookmarkTreeNode | null
       ): chrome.bookmarks.BookmarkTreeNode | null => {
         if (!node) return null;
-        if (node.id === id) return null;
+        if (removeSet.has(node.id)) return null;
         if (!node.children) return node;
         return {
           ...node,
           children: node.children
-            .filter((child) => child.id !== id)
+            .filter((child) => !removeSet.has(child.id))
             .map((child) => pruneNode(child)!)
             .filter(Boolean)
         };
@@ -1503,27 +1538,43 @@ export function useBookmarks() {
 
       beginInternalMutation();
       try {
-        // Remove any persisted bindings for deleted bookmark(s)
-        const removedIds = await collectSubtreeBookmarkIds(id);
+        for (const missingId of missingIds) {
+          const fallbackIds = await collectSubtreeBookmarkIds(missingId);
+          for (const fid of fallbackIds) {
+            syncCollectedBookmarkIds.add(fid);
+          }
+        }
+
+        const removedIds = Array.from(syncCollectedBookmarkIds);
         if (removedIds.length > 0) {
           await removePersistedBindings(removedIds);
         }
 
-        try {
-          await chrome.bookmarks.removeTree(id);
-        } catch {
+        for (const id of uniqueIds) {
           try {
-            await chrome.bookmarks.remove(id);
+            await chrome.bookmarks.removeTree(id);
           } catch {
-            // ignore if already removed
+            try {
+              await chrome.bookmarks.remove(id);
+            } catch {
+              // ignore if already removed
+            }
           }
         }
       } finally {
         endInternalMutation();
       }
-      await loadBookmarks();
+      await loadBookmarks({ skipFolderListRefresh: allTargetsAreUrlBookmarks });
     },
     [beginInternalMutation, endInternalMutation, loadBookmarks]
+  );
+
+  // Remove bookmark or folder
+  const removeBookmarkOrFolder = useCallback(
+    async (id: string) => {
+      await removeMultipleBookmarksOrFolders([id]);
+    },
+    [removeMultipleBookmarksOrFolders]
   );
 
   // Move a bookmark or folder to another Space's root folder
@@ -1740,6 +1791,7 @@ export function useBookmarks() {
     renameBookmarkOrFolder,
     updateBookmarkUrl,
     removeBookmarkOrFolder,
+    removeMultipleBookmarksOrFolders,
     refreshBookmarks: loadBookmarks,
     loading
   };

@@ -67,6 +67,7 @@ interface BookmarkRowProps {
   onCloseTab: (tabId: number, e: React.MouseEvent) => void;
   onReloadTab?: (tabId: number) => void;
   onDuplicateTab?: (tabId: number) => void;
+  onOpenInNewTab?: (url: string) => void;
   onDiscardTab?: (tabId: number) => void;
   onToggleMuteTab?: (tabOrId: chrome.tabs.Tab | number) => void;
   onMoveToSpace?: (nodeId: string, targetSpaceFolderId: string) => void;
@@ -114,6 +115,7 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
   onCloseTab,
   onReloadTab,
   onDuplicateTab,
+  onOpenInNewTab,
   onDiscardTab,
   onToggleMuteTab,
   onMoveToSpace,
@@ -248,9 +250,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
         icon: <ExternalLink className="w-3.5 h-3.5" />,
         action: () => {
           if (bookmark.url) {
-            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
-              () => {}
-            );
+            if (onOpenInNewTab) {
+              onOpenInNewTab(bookmark.url);
+            } else {
+              Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+                () => {}
+              );
+            }
           }
         }
       },
@@ -265,9 +271,13 @@ export const BookmarkRow: React.FC<BookmarkRowProps> = React.memo(({
               Promise.resolve(chrome.tabs.duplicate(binding.tabId)).catch(() => {});
             }
           } else if (bookmark.url) {
-            Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
-              () => {}
-            );
+            if (onOpenInNewTab) {
+              onOpenInNewTab(bookmark.url);
+            } else {
+              Promise.resolve(chrome.tabs.create({ url: bookmark.url, active: true })).catch(
+                () => {}
+              );
+            }
           }
         }
       },

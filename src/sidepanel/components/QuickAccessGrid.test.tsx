@@ -445,4 +445,91 @@ describe('QuickAccessGrid component', () => {
     expect(onTileDoubleClick).not.toHaveBeenCalled();
     endDragSession();
   });
+
+  it('includes Move to Space submenu in context menu when other spaces exist and hides it when only active space exists', () => {
+    const onOpenContextMenu = vi.fn();
+    const onMoveToSpace = vi.fn();
+    const spaces = [
+      { id: 'home', name: 'Home', folderId: 'folder-home', icon: 'home' },
+      { id: 'work', name: 'Work', folderId: 'folder-work', icon: 'briefcase' },
+      { id: 'study', name: 'Study', folderId: 'folder-study', icon: 'book' }
+    ];
+
+    const { rerender } = render(
+      <QuickAccessGrid
+        {...defaultProps}
+        spaces={spaces}
+        activeSpaceId="home"
+        onOpenContextMenu={onOpenContextMenu}
+        onMoveToSpace={onMoveToSpace}
+      />
+    );
+
+    const githubTile = screen.getByTitle(/GitHub/i);
+    fireEvent.contextMenu(githubTile);
+
+    const menuItems = onOpenContextMenu.mock.calls[0][1];
+    const moveToSpaceItem = menuItems.find(
+      (item: { label: string }) => item.label === 'Move to Space'
+    );
+    expect(moveToSpaceItem).toBeDefined();
+    expect(moveToSpaceItem.submenu.map((s: { label: string }) => s.label)).toEqual([
+      'Work',
+      'Study'
+    ]);
+
+    moveToSpaceItem.submenu[0].action();
+    expect(onMoveToSpace).toHaveBeenCalledWith('qa-1', 'folder-work');
+
+    // Only active space exists -> Move to Space option should not be shown
+    onOpenContextMenu.mockClear();
+    rerender(
+      <QuickAccessGrid
+        {...defaultProps}
+        spaces={[spaces[0]]}
+        activeSpaceId="home"
+        onOpenContextMenu={onOpenContextMenu}
+        onMoveToSpace={onMoveToSpace}
+      />
+    );
+
+    fireEvent.contextMenu(screen.getByTitle(/GitHub/i));
+    const singleSpaceMenu = onOpenContextMenu.mock.calls[0][1];
+    expect(
+      singleSpaceMenu.some((item: { label: string }) => item.label === 'Move to Space')
+    ).toBe(false);
+  });
+
+  it('calls onOpenInNewTab when clicking Duplicate Tab or Open in New Tab on an unopened Quick Access tile', () => {
+    const onOpenContextMenu = vi.fn();
+    const onDuplicateTab = vi.fn();
+    const onOpenInNewTab = vi.fn();
+
+    render(
+      <QuickAccessGrid
+        {...defaultProps}
+        bindingsByBookmarkId={{}}
+        tabsByTabId={{}}
+        activeTabId={null}
+        onOpenContextMenu={onOpenContextMenu}
+        onDuplicateTab={onDuplicateTab}
+        onOpenInNewTab={onOpenInNewTab}
+      />
+    );
+
+    const githubTile = screen.getByTitle(/GitHub/i);
+    fireEvent.contextMenu(githubTile);
+
+    const menuItems = onOpenContextMenu.mock.calls[0][1];
+    const duplicateItem = menuItems.find((item: { label: string }) => item.label === 'Duplicate Tab');
+    const openNewTabItem = menuItems.find((item: { label: string }) => item.label === 'Open in New Tab');
+
+    duplicateItem.action();
+    expect(onDuplicateTab).not.toHaveBeenCalled();
+    expect(onOpenInNewTab).toHaveBeenCalledWith('https://github.com');
+
+    onOpenInNewTab.mockClear();
+    openNewTabItem.action();
+    expect(onOpenInNewTab).toHaveBeenCalledWith('https://github.com');
+  });
 });

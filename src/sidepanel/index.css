@@ -704,6 +704,84 @@ html.dark .reload-dropdown-menu {
 }
 
 /* -------------------------------------------------------------
+   UI ENTRANCE & CONTEXT MENU ANIMATIONS
+   ------------------------------------------------------------- */
+@keyframes arctic-enter {
+  from {
+    opacity: var(--arctic-enter-opacity, 1);
+    transform: translate3d(
+        var(--arctic-enter-translate-x, 0),
+        var(--arctic-enter-translate-y, 0),
+        0
+      )
+      scale3d(var(--arctic-enter-scale, 1), var(--arctic-enter-scale, 1), 1);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale3d(1, 1, 1);
+  }
+}
+
+.animate-in {
+  animation: arctic-enter 165ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-in.duration-100 {
+  animation-duration: 145ms;
+}
+
+.animate-in.duration-150 {
+  animation-duration: 180ms;
+}
+
+.animate-in.duration-200 {
+  animation-duration: 215ms;
+}
+
+.fade-in {
+  --arctic-enter-opacity: 0;
+}
+
+.zoom-in-95 {
+  --arctic-enter-scale: 0.95;
+}
+
+.slide-in-from-top-1 {
+  --arctic-enter-translate-y: -4px;
+}
+
+.slide-in-from-bottom-1 {
+  --arctic-enter-translate-y: 4px;
+}
+
+.slide-in-from-bottom-2 {
+  --arctic-enter-translate-y: 8px;
+}
+
+@keyframes arctic-context-menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.arctic-context-menu {
+  animation: arctic-context-menu-in 175ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .arctic-context-menu {
+    animation: none !important;
+  }
+}
+
+/* -------------------------------------------------------------
    ARCTIC COMMAND NAVIGATION PROGRESS ANIMATION
    ------------------------------------------------------------- */
 @keyframes arctic-nav-progress {

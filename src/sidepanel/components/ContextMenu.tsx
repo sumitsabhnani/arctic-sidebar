@@ -19,48 +19,158 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+const SIDEBAR_MOUSE_LEAVE_GRACE_MS = 260;
+
 export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const [expandedSubmenuIdx, setExpandedSubmenuIdx] = useState<number | null>(null);
+  const submenuHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevTargetPointRef = useRef<{ x: number; y: number }>({ x, y });
+
+  const clearSubmenuHoverTimer = () => {
+    if (submenuHoverTimerRef.current) {
+      clearTimeout(submenuHoverTimerRef.current);
+      submenuHoverTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      clearSubmenuHoverTimer();
+    };
+  }, []);
 
   // Reset expanded submenu when menu coordinates or items change
   useEffect(() => {
+    clearSubmenuHoverTimer();
     setExpandedSubmenuIdx(null);
   }, [x, y, items]);
 
-  // Initial smart positioning using conservative estimates
-  const [coords, setCoords] = useState<{ x: number; y: number }>(() => {
-    const estimatedWidth = 220;
-    const estimatedHeight = items.length * 32 + 20;
-    const winW = typeof window !== 'undefined' ? window.innerWidth : 320;
-    const winH = typeof window !== 'undefined' ? window.innerHeight : 600;
-    return {
-      x: Math.max(8, Math.min(x, winW - estimatedWidth - 8)),
-      y: Math.max(8, Math.min(y, winH - estimatedHeight - 8))
-    };
-  });
+  const [coords, setCoords] = useState<{ x: number; y: number; origin: string }>(() => ({
+    x: Math.max(8, x),
+    y: Math.max(8, y),
+    origin: 'top left'
+  }));
 
-  // Accurately measure the actual rendered DOM box and clamp within viewport bounds
+  // Accurately measure the actual rendered DOM box before browser paint, clamp within viewport bounds,
+  // and anchor transform-origin to the corner nearest the cursor so the menu blooms naturally.
   useLayoutEffect(() => {
-    if (!menuRef.current) return;
-    const rect = menuRef.current.getBoundingClientRect();
+    document
+      .querySelectorAll('[data-context-menu-exit="true"]')
+      .forEach((el) => el.remove());
+
+    const el = menuRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
     const winW = window.innerWidth;
     const winH = window.innerHeight;
 
-    let adjustedX = x;
-    let adjustedY = y;
+    let adjustedX = Math.max(8, x);
+    let adjustedY = Math.max(8, y);
+    let originX: 'left' | 'right' = 'left';
+    let originY: 'top' | 'bottom' = 'top';
 
     // Shift left if menu would overflow right sidepanel edge
     if (adjustedX + rect.width > winW - 8) {
       adjustedX = Math.max(8, winW - rect.width - 8);
+      if (x > adjustedX + rect.width * 0.5) {
+        originX = 'right';
+      }
     }
     // Shift up if menu would overflow bottom sidepanel edge
     if (adjustedY + rect.height > winH - 8) {
       adjustedY = Math.max(8, winH - rect.height - 8);
+      if (y > adjustedY + rect.height * 0.5) {
+        originY = 'bottom';
+      }
     }
 
-    setCoords({ x: adjustedX, y: adjustedY });
+    const nextOrigin = `${originY} ${originX}`;
+    setCoords((prev) =>
+      prev.x === adjustedX && prev.y === adjustedY && prev.origin === nextOrigin
+        ? prev
+        : { x: adjustedX, y: adjustedY, origin: nextOrigin }
+    );
+
+    // Replay smooth entrance bloom if user right-clicked a new target while menu was already open
+    const pointChanged =
+      prevTargetPointRef.current.x !== x || prevTargetPointRef.current.y !== y;
+    prevTargetPointRef.current = { x, y };
+    if (
+      pointChanged &&
+      typeof el.animate === 'function' &&
+      !(
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      )
+    ) {
+      try {
+        el.animate(
+          [
+            { opacity: 0, transform: 'scale(0.95) translateY(-3px)' },
+            { opacity: 1, transform: 'scale(1) translateY(0)' }
+          ],
+          {
+            duration: 165,
+            easing: 'cubic-bezier(0.16, 1, 0.3, 1)'
+          }
+        );
+      } catch {
+        // ignore if WAAPI unsupported
+      }
+    }
   }, [x, y, items, expandedSubmenuIdx]);
+
+  // Animate a non-interactive fade/scale-out ghost when unmounting so closing feels fluid
+  // while keeping onClose() synchronous and letting outside clicks pass straight through.
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    return () => {
+      if (!el || typeof document === 'undefined' || !document.body) return;
+      if (
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      ) {
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+
+      try {
+        const exitClone = el.cloneNode(true) as HTMLDivElement;
+        if (typeof exitClone.animate !== 'function') return;
+
+        exitClone.dataset.contextMenuExit = 'true';
+        exitClone.setAttribute('aria-hidden', 'true');
+        exitClone.removeAttribute('tabindex');
+        exitClone.style.pointerEvents = 'none';
+        exitClone.style.animation = 'none';
+        document.body.appendChild(exitClone);
+
+        const exitAnim = exitClone.animate(
+          [
+            { opacity: 1, transform: 'scale(1) translateY(0)' },
+            { opacity: 0, transform: 'scale(0.96) translateY(-2px)' }
+          ],
+          {
+            duration: 140,
+            easing: 'cubic-bezier(0.32, 0, 0.67, 0)',
+            fill: 'forwards'
+          }
+        );
+        const cleanup = () => exitClone.remove();
+        if (exitAnim) {
+          exitAnim.onfinish = cleanup;
+          exitAnim.oncancel = cleanup;
+        } else {
+          cleanup();
+        }
+      } catch {
+        // ignore
+      }
+    };
+  }, []);
 
   useEffect(() => {
     let leaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -96,12 +206,13 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     // native C++ views::FocusManager focus from the webpage to the sidepanel. After the first
     // outside click on the webpage, document.hasFocus() remains false on subsequent right-clicks,
     // so window.blur will not fire again. Detecting cursor exit from the sidepanel document
-    // guarantees the menu closes whenever the user moves back to the webpage to click.
+    // with a comfortable grace window closes the menu when moving back to the webpage without
+    // hair-triggering when sweeping near the sidebar edge.
     const handleMouseLeaveDocument = () => {
       if (leaveTimer) clearTimeout(leaveTimer);
       leaveTimer = setTimeout(() => {
         handleClose();
-      }, 80);
+      }, SIDEBAR_MOUSE_LEAVE_GRACE_MS);
     };
 
     const handleMouseEnterDocument = () => {
@@ -127,15 +238,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       handleClose();
     };
 
-    const handleTabUpdated = (
-      _tabId: number,
-      changeInfo: chrome.tabs.TabChangeInfo
-    ) => {
-      if (changeInfo.status || changeInfo.url) {
-        handleClose();
-      }
-    };
-
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('blur', handleClose);
     window.addEventListener('resize', handleClose);
@@ -152,9 +254,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     }
     if (chrome?.tabs?.onHighlighted) {
       chrome.tabs.onHighlighted.addListener(handleTabHighlighted);
-    }
-    if (chrome?.tabs?.onUpdated) {
-      chrome.tabs.onUpdated.addListener(handleTabUpdated);
     }
 
     // Use capture phase so clicks outside close the menu even if a child stops propagation,
@@ -183,9 +282,6 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
       if (chrome?.tabs?.onHighlighted) {
         chrome.tabs.onHighlighted.removeListener(handleTabHighlighted);
       }
-      if (chrome?.tabs?.onUpdated) {
-        chrome.tabs.onUpdated.removeListener(handleTabUpdated);
-      }
       clearTimeout(timer);
       if (leaveTimer) {
         clearTimeout(leaveTimer);
@@ -197,8 +293,12 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
     <div
       ref={menuRef}
       tabIndex={-1}
-      style={{ top: `${coords.y}px`, left: `${coords.x}px` }}
-      className="fixed z-[99999] min-w-[196px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-y-auto p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none animate-in fade-in zoom-in-95 duration-100 outline-none"
+      style={{
+        top: `${coords.y}px`,
+        left: `${coords.x}px`,
+        transformOrigin: coords.origin
+      }}
+      className="arctic-context-menu fixed z-[99999] min-w-[196px] max-w-[calc(100vw-16px)] max-h-[calc(100vh-16px)] overflow-y-auto p-1 rounded-xl bg-white/95 dark:bg-[#1e1e22]/95 backdrop-blur-xl border border-zinc-200 dark:border-white/10 shadow-xl dark:shadow-[0_8px_30px_rgba(0,0,0,0.6)] text-xs text-zinc-800 dark:text-zinc-200 select-none outline-none"
     >
       {items.map((item, idx) => {
         const hasSubmenu = Boolean(item.submenu && item.submenu.length > 0);
@@ -212,7 +312,24 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
             <button
               type="button"
               disabled={item.disabled}
+              onMouseEnter={() => {
+                clearSubmenuHoverTimer();
+                if (item.disabled) return;
+                if (hasSubmenu) {
+                  submenuHoverTimerRef.current = setTimeout(() => {
+                    submenuHoverTimerRef.current = null;
+                    setExpandedSubmenuIdx(idx);
+                  }, 110);
+                } else if (expandedSubmenuIdx !== null) {
+                  submenuHoverTimerRef.current = setTimeout(() => {
+                    submenuHoverTimerRef.current = null;
+                    setExpandedSubmenuIdx(null);
+                  }, 150);
+                }
+              }}
+              onMouseLeave={clearSubmenuHoverTimer}
               onClick={() => {
+                clearSubmenuHoverTimer();
                 if (hasSubmenu) {
                   setExpandedSubmenuIdx((prev) => (prev === idx ? null : idx));
                   return;
@@ -220,7 +337,7 @@ export const ContextMenu: React.FC<ContextMenuProps> = ({ x, y, items, onClose }
                 item.action?.();
                 onClose();
               }}
-              className={`w-full flex items-center justify-between space-x-2 px-2.5 py-1.5 rounded-lg text-left transition-colors group ${
+              className={`w-full flex items-center justify-between space-x-2 px-2.5 py-1.5 rounded-lg text-left transition-colors duration-100 group ${
                 item.disabled
                   ? 'opacity-40 cursor-not-allowed'
                   : item.danger

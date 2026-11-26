@@ -398,4 +398,35 @@ describe('BookmarkRow component', () => {
     );
     endDragSession();
   });
+
+  it('calls onOpenInNewTab instead of binding in-place when clicking Duplicate Tab or Open in New Tab on an unopened bookmark', () => {
+    const onOpenContextMenu = vi.fn();
+    const onDuplicateTab = vi.fn();
+    const onOpenInNewTab = vi.fn();
+
+    render(
+      <BookmarkRow
+        {...defaultProps}
+        binding={undefined}
+        onOpenContextMenu={onOpenContextMenu}
+        onDuplicateTab={onDuplicateTab}
+        onOpenInNewTab={onOpenInNewTab}
+      />
+    );
+
+    const row = screen.getByText('Google Docs').closest('[role="button"]')!;
+    fireEvent.contextMenu(row);
+
+    const menuItems = onOpenContextMenu.mock.calls[0][1];
+    const duplicateItem = menuItems.find((item: { label: string }) => item.label === 'Duplicate Tab');
+    const openNewTabItem = menuItems.find((item: { label: string }) => item.label === 'Open in New Tab');
+
+    duplicateItem.action();
+    expect(onDuplicateTab).not.toHaveBeenCalled();
+    expect(onOpenInNewTab).toHaveBeenCalledWith('https://docs.google.com');
+
+    onOpenInNewTab.mockClear();
+    openNewTabItem.action();
+    expect(onOpenInNewTab).toHaveBeenCalledWith('https://docs.google.com');
+  });
 });

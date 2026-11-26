@@ -2052,4 +2052,63 @@ describe('useTabBindings hook', () => {
     expect(result.current.unpinnedTabs.map((t) => t.id)).toEqual([201, 203]);
     expect(result.current.tabsByTabId[202]).toBeUndefined();
   });
+
+  it('keeps an unopened saved bookmark untouched when opening a copy in Temporary Tabs via createNewTab(url) or duplicateTab', async () => {
+    mockChrome.__setTabs([
+      {
+        id: 1,
+        windowId: 10,
+        index: 0,
+        url: 'https://news.ycombinator.com',
+        title: 'Hacker News',
+        active: true
+      } as chrome.tabs.Tab
+    ]);
+    mockChrome.__setSessionStorage({});
+
+    const docsBookmark: chrome.bookmarks.BookmarkTreeNode = {
+      id: 'bm-docs',
+      title: 'Project Docs',
+      url: 'https://docs.example.com/spec'
+    };
+    const bookmarkTree: chrome.bookmarks.BookmarkTreeNode[] = [
+      {
+        id: 'folder-home',
+        title: 'Home',
+        children: [docsBookmark]
+      }
+    ];
+
+    const { result } = renderHook(() => useTabBindings('home'));
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks(bookmarkTree);
+    });
+    expect(result.current.bindingsByBookmarkId['bm-docs']).toBeUndefined();
+
+    // 1. User right-clicks unopened bm-docs and clicks Duplicate Tab -> createNewTab(url, 'home')
+    let dupTab: chrome.tabs.Tab | undefined;
+    await act(async () => {
+      dupTab = await result.current.createNewTab(docsBookmark.url, 'home');
+    });
+
+    expect(dupTab?.id).toBeDefined();
+    // Saved bookmark remains untouched (unbound), while the duplicate lives in unpinnedTabs!
+    expect(result.current.bindingsByBookmarkId['bm-docs']).toBeUndefined();
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toContain(dupTab!.id);
+
+    // 2. Subsequent reconcileTabsWithBookmarks must NOT hijack the duplicate tab into bm-docs
+    await act(async () => {
+      await result.current.reconcileTabsWithBookmarks(bookmarkTree);
+    });
+    expect(result.current.bindingsByBookmarkId['bm-docs']).toBeUndefined();
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toContain(dupTab!.id);
+
+    // 3. Clicking bm-docs later opens its own bound tab instead of stealing the duplicate from Temporary Tabs
+    await act(async () => {
+      await result.current.handleRowClick(docsBookmark);
+    });
+    expect(result.current.bindingsByBookmarkId['bm-docs']).toBeDefined();
+    expect(result.current.bindingsByBookmarkId['bm-docs'].tabId).not.toBe(dupTab!.id);
+    expect(result.current.unpinnedTabs.map((t) => t.id)).toContain(dupTab!.id);
+  });
 });

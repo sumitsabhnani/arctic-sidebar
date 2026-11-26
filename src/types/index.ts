@@ -20,6 +20,7 @@ export interface PersistedTabBinding {
 export interface SessionState {
   bindingsByBookmarkId: Record<string, TabBinding>;
   bookmarkIdByTabId: Record<number, string>;
+  unpinnedTabIds?: number[];
 }
 
 export type ColorThemeId =

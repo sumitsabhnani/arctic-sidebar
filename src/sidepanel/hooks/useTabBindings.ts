@@ -152,6 +152,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   const isMountedRef = useRef<boolean>(true);
   const creatingManualTabCountRef = useRef<number>(0);
   const tabsAwaitingRestoreUrlRef = useRef<Set<number>>(new Set());
+  const closingTabIdsRef = useRef<Set<number>>(new Set());
   const faviconRevByTabIdRef = useRef<Record<number, number>>({});
   const tabOpenedAtRef = useRef<Record<number, number>>({});
   const recentTabResetRef = useRef<Map<number, { url: string; at: number }>>(new Map());
@@ -250,8 +251,12 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       if (reqSeq !== refreshTabsSeqRef.current || !isMountedRef.current) return;
       if (currentWin.id) {
         currentWindowIdRef.current = currentWin.id;
-        const tabs = await chrome.tabs.query({ windowId: currentWin.id });
+        const rawTabs = await chrome.tabs.query({ windowId: currentWin.id });
         if (reqSeq !== refreshTabsSeqRef.current || !isMountedRef.current) return;
+        const tabs =
+          closingTabIdsRef.current.size > 0
+            ? rawTabs.filter((t) => typeof t.id !== 'number' || !closingTabIdsRef.current.has(t.id))
+            : rawTabs;
         const tabsWithCustom: TabWithFaviconMeta[] = tabs.map((t) => {
           if (typeof t.id !== 'number') return t;
           const customTitle = customTabTitlesRef.current[t.id];
@@ -278,13 +283,29 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     }
   }, []);
 
+  const syncUnpinnedTabIdsSession = useCallback(async () => {
+    if (!chrome?.storage?.session?.set) return;
+    try {
+      await chrome.storage.session.set({
+        unpinnedTabIds: Array.from(unpinnedTabIdsRef.current)
+      });
+    } catch {
+      // ignore
+    }
+  }, []);
+
   /**
    * Read current session state and local settings
    */
   const loadSessionState = useCallback(async () => {
     try {
       const [sessionData, localData] = await Promise.all([
-        chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId', 'customTabTitles']),
+        chrome.storage.session.get([
+          'bindingsByBookmarkId',
+          'bookmarkIdByTabId',
+          'customTabTitles',
+          'unpinnedTabIds'
+        ]),
         chrome.storage.local.get(['autoArchiveInterval', 'tabOpenedAt', 'tabSpaceByTabId'])
       ]);
 
@@ -310,6 +331,24 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       const openTabIdSet = new Set(
         allTabs.map((t) => t.id).filter((id): id is number => typeof id === 'number')
       );
+
+      if (Array.isArray(sessionData.unpinnedTabIds)) {
+        for (const rawId of sessionData.unpinnedTabIds) {
+          if (typeof rawId === 'number' && openTabIdSet.has(rawId)) {
+            unpinnedTabIdsRef.current.add(rawId);
+          }
+        }
+      }
+      let unpinnedPruned = false;
+      for (const uid of Array.from(unpinnedTabIdsRef.current)) {
+        if (!openTabIdSet.has(uid)) {
+          unpinnedTabIdsRef.current.delete(uid);
+          unpinnedPruned = true;
+        }
+      }
+      if (unpinnedPruned) {
+        void syncUnpinnedTabIdsSession();
+      }
 
       // Re-merge with latest in-memory refs so a concurrent reconcileTabsWithBookmarks / handleRowClick is never overwritten
       const mergedBindings: Record<string, TabBinding> = {
@@ -493,6 +532,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       if (unpinnedTabIdsRef.current.has(removedTabId)) {
         unpinnedTabIdsRef.current.delete(removedTabId);
         unpinnedTabIdsRef.current.add(addedTabId);
+        void syncUnpinnedTabIdsSession();
       }
 
       if (tabsAwaitingRestoreUrlRef.current.has(removedTabId)) {
@@ -578,11 +618,34 @@ export function useTabBindings(activeSpaceId: string = 'home') {
             }
           }
 
-          const [allOpenTabs, session, persistedBindings] = await Promise.all([
+          const [rawAllOpenTabs, session, persistedBindings] = await Promise.all([
             chrome.tabs.query({}),
-            chrome.storage.session.get(['bindingsByBookmarkId', 'bookmarkIdByTabId']),
+            chrome.storage.session.get([
+              'bindingsByBookmarkId',
+              'bookmarkIdByTabId',
+              'unpinnedTabIds'
+            ]),
             getPersistedBindings()
           ]);
+          const allOpenTabs =
+            closingTabIdsRef.current.size > 0
+              ? rawAllOpenTabs.filter(
+                  (t) => typeof t.id !== 'number' || !closingTabIdsRef.current.has(t.id)
+                )
+              : rawAllOpenTabs;
+
+          if (Array.isArray(session.unpinnedTabIds)) {
+            const liveTabIds = new Set(
+              allOpenTabs
+                .map((t) => t.id)
+                .filter((id): id is number => typeof id === 'number')
+            );
+            for (const rawId of session.unpinnedTabIds) {
+              if (typeof rawId === 'number' && liveTabIds.has(rawId)) {
+                unpinnedTabIdsRef.current.add(rawId);
+              }
+            }
+          }
 
           // Track any session-restoring tabs that do not have their URL populated yet
           for (const tab of allOpenTabs) {
@@ -736,8 +799,12 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
     // Listen to tab removal
     const handleRemoved = (tabId: number, removeInfo?: chrome.tabs.TabRemoveInfo) => {
+      closingTabIdsRef.current.delete(tabId);
       tabsAwaitingRestoreUrlRef.current.delete(tabId);
       recentTabResetRef.current.delete(tabId);
+      if (unpinnedTabIdsRef.current.delete(tabId)) {
+        void syncUnpinnedTabIdsSession();
+      }
       delete faviconRevByTabIdRef.current[tabId];
       pruneClosedTabsFromWindow([tabId]);
       void refreshWindowTabs();
@@ -802,6 +869,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       changeInfo,
       tab
     ) => {
+      if (closingTabIdsRef.current.has(tabId)) return;
       const shouldBumpFaviconRev =
         changeInfo.favIconUrl !== undefined ||
         changeInfo.status === 'loading' ||
@@ -992,6 +1060,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
           bookmarkIdByTabIdRef.current = nextByTab;
           setBookmarkIdByTabId(nextByTab);
         }
+        if (changes.unpinnedTabIds && Array.isArray(changes.unpinnedTabIds.newValue)) {
+          unpinnedTabIdsRef.current = new Set(
+            (changes.unpinnedTabIds.newValue as unknown[]).filter(
+              (id): id is number => typeof id === 'number'
+            )
+          );
+        }
       }
     };
 
@@ -1108,31 +1183,49 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   );
 
   /**
-   * Create a new tab (e.g. Ctrl+T or '+ New Tab' button)
+   * Create a new tab (e.g. Ctrl+T, '+ New Tab' button, 'Open in New Tab', or 'Duplicate Tab' on an unopened bookmark)
    */
-  const createNewTab = useCallback(async (url?: string, spaceId?: string) => {
-    creatingManualTabCountRef.current += 1;
-    let newTab: chrome.tabs.Tab;
-    try {
-      newTab = await chrome.tabs.create({ url, active: true });
-    } finally {
-      creatingManualTabCountRef.current -= 1;
-    }
-    const targetSpace = spaceId || currentActiveSpaceIdRef.current || 'home';
-    if (typeof newTab.id === 'number') {
-      setActiveTabId(newTab.id);
-      setTabSpaceByTabId((prev) => {
-        const next = { ...prev, [newTab.id!]: targetSpace };
-        chrome.storage.local.set({ tabSpaceByTabId: next });
-        return next;
-      });
-    }
-    await refreshWindowTabs();
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-    return newTab;
-  }, [refreshWindowTabs]);
+  const createNewTab = useCallback(
+    async (url?: string, spaceId?: string) => {
+      creatingManualTabCountRef.current += 1;
+      let newTab: chrome.tabs.Tab;
+      try {
+        newTab = await chrome.tabs.create({ url, active: true });
+      } catch (err) {
+        if (url && isFileUrl(url)) {
+          await checkAndNotifyFileAccessNeeded(err);
+        } else if (!isExpectedTabNavigationError(err)) {
+          console.warn('[Arctic] Could not create new tab:', err);
+        }
+        return undefined;
+      } finally {
+        creatingManualTabCountRef.current -= 1;
+      }
+      const targetSpace = spaceId || currentActiveSpaceIdRef.current || 'home';
+      if (typeof newTab?.id === 'number') {
+        if (url) {
+          unpinnedTabIdsRef.current.add(newTab.id);
+          tabsAwaitingRestoreUrlRef.current.delete(newTab.id);
+          void syncUnpinnedTabIdsSession();
+          if (hasTextFragment(url)) {
+            void scrollToHighlightInTab(newTab.id, url);
+          }
+        }
+        setActiveTabId(newTab.id);
+        setTabSpaceByTabId((prev) => {
+          const next = { ...prev, [newTab.id!]: targetSpace };
+          chrome.storage.local.set({ tabSpaceByTabId: next });
+          return next;
+        });
+      }
+      await refreshWindowTabs();
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+      return newTab;
+    },
+    [checkAndNotifyFileAccessNeeded, refreshWindowTabs, syncUnpinnedTabIdsSession]
+  );
 
   /**
    * Focus a tab
@@ -1150,6 +1243,110 @@ export function useTabBindings(activeSpaceId: string = 'home') {
   }, []);
 
   /**
+   * Close one or more tabs optimistically in a single synchronous UI batch.
+   * If closing all tabs in the window, creates a fresh tab first to keep the browser window & sidebar alive.
+   */
+  const closeMultipleTabs = useCallback(
+    async (tabIds: number[]) => {
+      const uniqueIds = Array.from(
+        new Set(tabIds.filter((id): id is number => typeof id === 'number'))
+      );
+      if (uniqueIds.length === 0) return;
+
+      const closedSet = new Set(uniqueIds);
+      const currentKnownTabs = windowTabsRef.current;
+      const mightCloseEntireWindow =
+        currentKnownTabs.length === 0 ||
+        currentKnownTabs.every((t) => typeof t.id === 'number' && closedSet.has(t.id));
+
+      // 1. Synchronously mark tabs as closing, prune windowTabs, and clear bindings at t=0ms
+      //    so React commits a single instant frame without waiting on Chrome IPC roundtrips.
+      for (const id of uniqueIds) {
+        closingTabIdsRef.current.add(id);
+      }
+      pruneClosedTabsFromWindow(uniqueIds);
+
+      const nextByTab = { ...bookmarkIdByTabIdRef.current };
+      const nextBindings = { ...bindingsByBookmarkIdRef.current };
+      const unboundBookmarkIds: string[] = [];
+      let bindingsChanged = false;
+
+      for (const id of uniqueIds) {
+        const bId = nextByTab[id];
+        if (bId) {
+          unboundBookmarkIds.push(bId);
+          delete nextByTab[id];
+          delete nextBindings[bId];
+          bindingsChanged = true;
+        }
+      }
+      for (const [bId, binding] of Object.entries(nextBindings)) {
+        if (closedSet.has(binding.tabId)) {
+          unboundBookmarkIds.push(bId);
+          delete nextBindings[bId];
+          bindingsChanged = true;
+        }
+      }
+
+      if (bindingsChanged) {
+        bindingsByBookmarkIdRef.current = nextBindings;
+        bookmarkIdByTabIdRef.current = nextByTab;
+        setBindingsByBookmarkId(nextBindings);
+        setBookmarkIdByTabId(nextByTab);
+      }
+
+      // 2. Execute Chrome tab removal & storage persistence asynchronously in the background
+      try {
+        if (mightCloseEntireWindow) {
+          const currentWindowTabs = await chrome.tabs.query({ currentWindow: true });
+          const isClosingAllInWindow =
+            currentWindowTabs.length > 0 &&
+            currentWindowTabs.every((t) => typeof t.id === 'number' && closedSet.has(t.id));
+          if (isClosingAllInWindow) {
+            creatingManualTabCountRef.current += 1;
+            try {
+              await chrome.tabs.create({ active: true });
+            } finally {
+              creatingManualTabCountRef.current -= 1;
+            }
+          }
+        }
+        if (uniqueIds.length === 1) {
+          await chrome.tabs.remove(uniqueIds[0]);
+        } else {
+          await chrome.tabs.remove(uniqueIds);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err || '');
+        if (!/no tab with id|tab .* not found/i.test(msg)) {
+          console.warn('[Arctic] Could not remove tab:', err);
+        }
+      } finally {
+        for (const id of uniqueIds) {
+          closingTabIdsRef.current.delete(id);
+        }
+      }
+
+      if (unboundBookmarkIds.length > 0) {
+        await removePersistedBindings(unboundBookmarkIds);
+      }
+      if (bindingsChanged) {
+        try {
+          await chrome.storage.session.set({
+            bindingsByBookmarkId: bindingsByBookmarkIdRef.current,
+            bookmarkIdByTabId: bookmarkIdByTabIdRef.current
+          });
+          await upsertPersistedBindings(bindingsByBookmarkIdRef.current);
+        } catch (err) {
+          console.error('[Arctic] Error persisting session state:', err);
+        }
+      }
+      await refreshWindowTabs();
+    },
+    [pruneClosedTabsFromWindow, refreshWindowTabs]
+  );
+
+  /**
    * Close a tab (If closing the last tab in the window, create a fresh tab first to keep the browser window & sidebar alive)
    */
   const handleCloseTab = useCallback(
@@ -1157,42 +1354,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       if (e) {
         e.stopPropagation();
       }
-      const bookmarkId = bookmarkIdByTabIdRef.current[tabId];
-      try {
-        const currentWindowTabs = await chrome.tabs.query({ currentWindow: true });
-        const isOnlyTabInWindow =
-          currentWindowTabs.length === 1 && currentWindowTabs[0]?.id === tabId;
-        if (isOnlyTabInWindow) {
-          creatingManualTabCountRef.current += 1;
-          try {
-            await chrome.tabs.create({ active: true });
-          } finally {
-            creatingManualTabCountRef.current -= 1;
-          }
-        }
-        await chrome.tabs.remove(tabId);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err || '');
-        if (!/no tab with id|tab .* not found/i.test(msg)) {
-          console.warn('[Arctic] Could not remove tab:', err);
-        }
-      }
-
-      pruneClosedTabsFromWindow([tabId]);
-
-      const nextByTab = { ...bookmarkIdByTabIdRef.current };
-      delete nextByTab[tabId];
-
-      const nextBindings = { ...bindingsByBookmarkIdRef.current };
-      if (bookmarkId) {
-        delete nextBindings[bookmarkId];
-        await removePersistedBindings([bookmarkId]);
-      }
-
-      await persistSession(nextBindings, nextByTab);
-      await refreshWindowTabs();
+      await closeMultipleTabs([tabId]);
     },
-    [persistSession, pruneClosedTabsFromWindow, refreshWindowTabs]
+    [closeMultipleTabs]
   );
 
   /**
@@ -1380,10 +1544,13 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       const createdOrMovedNodes: chrome.bookmarks.BookmarkTreeNode[] = [];
       let curIndex = targetIndex;
+      let unpinnedChanged = false;
       for (const tab of tabs) {
         const tabUrl = getEffectiveTabUrl(tab);
         if (typeof tab.id !== 'number' || !tabUrl) continue;
-        unpinnedTabIdsRef.current.delete(tab.id);
+        if (unpinnedTabIdsRef.current.delete(tab.id)) {
+          unpinnedChanged = true;
+        }
         void captureVerifiedTabFavicon(tab, tabUrl);
 
         const existingBookmarkId = nextByTab[tab.id];
@@ -1440,6 +1607,9 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         nextByTab[tab.id] = newBookmark.id;
       }
 
+      if (unpinnedChanged) {
+        void syncUnpinnedTabIdsSession();
+      }
       if (onBeforeCommit && createdOrMovedNodes.length > 0) {
         onBeforeCommit(createdOrMovedNodes);
       }
@@ -1447,7 +1617,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
       await refreshWindowTabs();
       return createdOrMovedNodes;
     },
-    [persistSession, refreshWindowTabs]
+    [persistSession, refreshWindowTabs, syncUnpinnedTabIdsSession]
   );
 
   /**
@@ -1494,6 +1664,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       if (typeof targetTabId === 'number') {
         unpinnedTabIdsRef.current.add(targetTabId);
+        void syncUnpinnedTabIdsSession();
         setTabSpaceByTabId((prev) => {
           const next = { ...prev, [targetTabId]: targetSpace };
           chrome.storage.local.set({ tabSpaceByTabId: next });
@@ -1509,6 +1680,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         }
         if (typeof newTab.id === 'number') {
           unpinnedTabIdsRef.current.add(newTab.id);
+          tabsAwaitingRestoreUrlRef.current.delete(newTab.id);
+          void syncUnpinnedTabIdsSession();
           setActiveTabId(newTab.id);
           setTabSpaceByTabId((prev) => {
             const next = { ...prev, [newTab.id!]: targetSpace };
@@ -1520,18 +1693,57 @@ export function useTabBindings(activeSpaceId: string = 'home') {
 
       await refreshWindowTabs();
     },
-    [persistSession, refreshWindowTabs]
+    [persistSession, refreshWindowTabs, syncUnpinnedTabIdsSession]
   );
 
   /**
-   * Duplicate a tab
+   * Duplicate a tab into Temporary Tabs without auto-reconciling it to any unopened bookmark
    */
   const duplicateTab = useCallback(
     async (tabId: number) => {
-      await chrome.tabs.duplicate(tabId);
+      const targetSpace = currentActiveSpaceIdRef.current || 'home';
+      creatingManualTabCountRef.current += 1;
+      let duplicatedTab: chrome.tabs.Tab | undefined;
+      try {
+        duplicatedTab = await chrome.tabs.duplicate(tabId);
+      } catch (err) {
+        const boundBmId = bookmarkIdByTabIdRef.current[tabId];
+        const fallbackBinding = boundBmId ? bindingsByBookmarkIdRef.current[boundBmId] : undefined;
+        const fallbackUrl =
+          fallbackBinding?.currentUrl ||
+          fallbackBinding?.originalUrl ||
+          windowTabsRef.current.find((t) => t.id === tabId)?.url;
+        if (fallbackUrl) {
+          try {
+            duplicatedTab = await chrome.tabs.create({ url: fallbackUrl, active: true });
+          } catch {
+            // ignore
+          }
+        } else if (!isExpectedTabNavigationError(err)) {
+          console.warn('[Arctic] Could not duplicate tab:', err);
+        }
+      } finally {
+        creatingManualTabCountRef.current -= 1;
+      }
+
+      if (duplicatedTab && typeof duplicatedTab.id === 'number') {
+        const dupId = duplicatedTab.id;
+        unpinnedTabIdsRef.current.add(dupId);
+        tabsAwaitingRestoreUrlRef.current.delete(dupId);
+        void syncUnpinnedTabIdsSession();
+        if (duplicatedTab.active) {
+          setActiveTabId(dupId);
+        }
+        setTabSpaceByTabId((prev) => {
+          const next = { ...prev, [dupId]: targetSpace };
+          chrome.storage.local.set({ tabSpaceByTabId: next });
+          return next;
+        });
+      }
+
       await refreshWindowTabs();
     },
-    [refreshWindowTabs]
+    [refreshWindowTabs, syncUnpinnedTabIdsSession]
   );
 
   /**
@@ -1995,7 +2207,8 @@ export function useTabBindings(activeSpaceId: string = 'home') {
         bookmark: { id: bookmark.id, url: bookmark.url },
         tabs: orderedTabs,
         boundTabIds: latestByTab,
-        persistedBindings
+        persistedBindings,
+        excludedTabIds: unpinnedTabIdsRef.current
       });
 
       if (unboundMatch && typeof unboundMatch.id === 'number') {
@@ -2490,6 +2703,7 @@ export function useTabBindings(activeSpaceId: string = 'home') {
     handleFaviconDoubleClick,
     handleQuickAccessClick,
     handleCloseTab,
+    closeMultipleTabs,
     closeAllUnpinnedTabs,
     closeAllWindowTabs,
     pinTab,
