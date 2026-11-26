@@ -291,4 +291,169 @@ describe('highlightPill content script (on-page floating selection pill)', () =>
       expect.any(Function)
     );
   });
+
+  it('Copy Link highlights the selected range in-place without mutating DOM or scrolling to an earlier duplicate', async () => {
+    mockChrome.__setLocalStorage({ highlightPillEnabled: true, theme: 'dark' });
+    const setHighlightSpy = vi.fn();
+    const origCSS = (window as unknown as { CSS?: unknown }).CSS;
+    const origHighlight = (window as unknown as { Highlight?: unknown }).Highlight;
+    (window as unknown as { CSS: unknown }).CSS = {
+      highlights: { set: setHighlightSpy }
+    };
+    (window as unknown as { Highlight: unknown }).Highlight = class MockHighlight {
+      ranges: Range[];
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    };
+
+    try {
+      await import('./highlightPill');
+      await new Promise((r) => setTimeout(r, 10));
+
+      const firstPara = document.createElement('p');
+      const firstScrollSpy = vi.fn();
+      firstPara.scrollIntoView = firstScrollSpy;
+      firstPara.textContent = 'Repeated phrase in document.';
+
+      const secondPara = document.createElement('p');
+      const secondScrollSpy = vi.fn();
+      secondPara.scrollIntoView = secondScrollSpy;
+      secondPara.textContent = 'Repeated phrase in document.';
+      document.body.appendChild(firstPara);
+      document.body.appendChild(secondPara);
+
+      // Select the SECOND occurrence
+      const range = document.createRange();
+      range.selectNodeContents(secondPara);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      document.dispatchEvent(
+        new MouseEvent('mouseup', { bubbles: true, clientX: 200, clientY: 160 })
+      );
+      await new Promise((r) => setTimeout(r, 25));
+
+      const root = capturedShadowRoots[capturedShadowRoots.length - 1];
+      const copyBtn = root.querySelector('button.arctic-hl-copy-btn') as HTMLButtonElement;
+      copyBtn.click();
+
+      // Zero <mark> elements inserted, zero scroll jumps to firstPara, and CSS.highlights receives secondPara's range
+      expect(document.querySelectorAll('mark[data-arctic-highlight="true"]').length).toBe(0);
+      expect(firstScrollSpy).not.toHaveBeenCalled();
+      expect(secondScrollSpy).not.toHaveBeenCalled();
+      expect(setHighlightSpy).toHaveBeenCalledTimes(1);
+      const passedHighlight = setHighlightSpy.mock.calls[0][1] as { ranges: Range[] };
+      expect(passedHighlight.ranges[0].startContainer.parentElement === secondPara || passedHighlight.ranges[0].startContainer === secondPara).toBe(true);
+    } finally {
+      (window as unknown as { CSS?: unknown }).CSS = origCSS;
+      (window as unknown as { Highlight?: unknown }).Highlight = origHighlight;
+    }
+  });
+
+  it('escapes HTML in spaceName, preserves selection on clipboard fallback, detaches listeners on remove, and ignores initial nav entry on hashchange', async () => {
+    mockChrome.__setLocalStorage({ highlightPillEnabled: true, theme: 'dark' });
+
+    // Simulate page originally loaded with a #:~:text= navigation entry that Chromium stripped from location.href
+    const getEntriesSpy = vi
+      .spyOn(performance, 'getEntriesByType')
+      .mockImplementation((type: string) => {
+        if (type === 'navigation') {
+          return [
+            { name: 'https://example.com/#/home:~:text=Initial%20boot%20quote' } as unknown as PerformanceEntry
+          ];
+        }
+        return [];
+      });
+
+    const bootPara = document.createElement('p');
+    bootPara.textContent = 'Initial boot quote in SPA.';
+    document.body.appendChild(bootPara);
+    const origScrollIntoView = Element.prototype.scrollIntoView;
+    const bootScrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = bootScrollSpy;
+
+    mockChrome.runtime.onMessage.addListener(
+      (
+        msg: unknown,
+        _sender: chrome.runtime.MessageSender,
+        sendResponse: (resp?: unknown) => void
+      ) => {
+        const m = msg as { type?: string };
+        if (m?.type === 'SAVE_HIGHLIGHT_BOOKMARK') {
+          sendResponse({
+            ok: true,
+            bookmarkId: 'bm-xss',
+            spaceName: '<img src=x onerror=alert(1)>'
+          });
+        }
+      }
+    );
+
+    try {
+      await import('./highlightPill');
+      await new Promise((r) => setTimeout(r, 15));
+
+      // Initial load used the navigation fallback once
+      expect(bootScrollSpy).toHaveBeenCalledTimes(1);
+      bootScrollSpy.mockClear();
+
+      // Hash-route navigation must NOT fall back to initial navigation entry or re-scroll
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+      expect(bootScrollSpy).not.toHaveBeenCalled();
+
+      // Select text and test Save button XSS safety + clipboard fallback selection preservation
+      const quotePara = document.createElement('p');
+      quotePara.textContent = 'Safe selection text for fallback and XSS check.';
+      document.body.appendChild(quotePara);
+
+      const range = document.createRange();
+      range.selectNodeContents(quotePara);
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 25));
+
+      const root = capturedShadowRoots[capturedShadowRoots.length - 1];
+      const saveBtn = root.querySelector('button.arctic-hl-save-btn') as HTMLButtonElement;
+      saveBtn.click();
+
+      expect(saveBtn.querySelector('img')).toBeNull();
+      expect(saveBtn.textContent).toBe('Saved to <img src=x onerror=alert(1)>!');
+
+      // Force clipboard.writeText to reject and execCommand('copy') to fail -> reverts Copied Text! and keeps selection
+      Object.assign(navigator, {
+        clipboard: {
+          writeText: vi.fn().mockRejectedValueOnce(new Error('Clipboard denied'))
+        }
+      });
+      const origExecCommand = document.execCommand;
+      document.execCommand = vi.fn().mockReturnValue(false);
+
+      const copyTextBtn = root.querySelector('button.arctic-hl-copy-text-btn') as HTMLButtonElement;
+      copyTextBtn.click();
+      await new Promise((r) => setTimeout(r, 10));
+
+      expect(copyTextBtn.getAttribute('data-success')).toBeNull();
+      expect(copyTextBtn.textContent).toBe('Copy Text');
+      expect(window.getSelection()?.toString()).toBe(
+        'Safe selection text for fallback and XSS check.'
+      );
+      document.execCommand = origExecCommand;
+
+      // ARCTIC_REMOVE_HIGHLIGHT_PILL detaches host-page selection listeners until re-enabled
+      chrome.runtime.sendMessage({ type: 'ARCTIC_REMOVE_HIGHLIGHT_PILL' });
+      expect(document.getElementById('arctic-highlight-pill-host')).toBeNull();
+
+      document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      await new Promise((r) => setTimeout(r, 25));
+      expect(document.getElementById('arctic-highlight-pill-host')).toBeNull();
+    } finally {
+      Element.prototype.scrollIntoView = origScrollIntoView;
+      getEntriesSpy.mockRestore();
+    }
+  });
 });

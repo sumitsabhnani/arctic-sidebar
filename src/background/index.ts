@@ -40,6 +40,7 @@ import {
 } from '../sidepanel/utils/tabPageFocus';
 import {
   buildHighlightUrl,
+  collectBookmarkSubtreeIds,
   formatHighlightBookmarkTitle,
   hasTextFragment,
   removeStoredHighlights,
@@ -129,7 +130,7 @@ export async function handleStartup(): Promise<void> {
   // Sync side panel dock side & dynamic edge trigger / highlight pill content scripts
   await syncSidePanelLayoutSide();
   await syncEdgeTriggerContentScript(true);
-  await syncHighlightPillContentScript(true);
+  await syncHighlightPillContentScript(true, true);
 
   // Reconcile and schedule alarms on startup
   await reconcileReminders();
@@ -1638,14 +1639,40 @@ function scheduleEdgeItemsBroadcast(windowId?: number): void {
   }, 30);
 }
 
+export function isScratchpadBookmarkMutation(info?: {
+  url?: string;
+  title?: string;
+  node?: chrome.bookmarks.BookmarkTreeNode;
+}): boolean {
+  const url = info?.url || info?.node?.url;
+  const title = info?.title || info?.node?.title;
+  return isScratchpadUrl(url) || title === 'Scratchpad Backup';
+}
+
+export function handleBookmarkRemoved(
+  id: string,
+  removeInfo?: {
+    parentId?: string;
+    index?: number;
+    node?: chrome.bookmarks.BookmarkTreeNode;
+  }
+): void {
+  void removeStoredHighlights(collectBookmarkSubtreeIds(removeInfo?.node, id));
+  if (isScratchpadBookmarkMutation(removeInfo)) return;
+  scheduleEdgeItemsBroadcast();
+}
+
 if (chrome.bookmarks) {
   const onBookmarkMutated = () => scheduleEdgeItemsBroadcast();
-  chrome.bookmarks.onCreated?.addListener(onBookmarkMutated);
-  chrome.bookmarks.onRemoved?.addListener((id) => {
-    void removeStoredHighlights([id]);
+  chrome.bookmarks.onCreated?.addListener((_id, bookmark) => {
+    if (isScratchpadBookmarkMutation(bookmark)) return;
     onBookmarkMutated();
   });
-  chrome.bookmarks.onChanged?.addListener(onBookmarkMutated);
+  chrome.bookmarks.onRemoved?.addListener(handleBookmarkRemoved);
+  chrome.bookmarks.onChanged?.addListener((_id, changeInfo) => {
+    if (isScratchpadBookmarkMutation(changeInfo)) return;
+    onBookmarkMutated();
+  });
   chrome.bookmarks.onMoved?.addListener(onBookmarkMutated);
 }
 
@@ -2161,12 +2188,23 @@ export async function saveHighlightBookmark(options: {
     (options.tab ? getEffectiveTabUrl(options.tab) || options.tab.url : '') ||
     options.url ||
     '';
-  const finalHighlightUrl =
-    options.url && hasTextFragment(options.url)
-      ? options.url
+  const candidateUrl =
+    options.url && hasTextFragment(options.url) && /^https?:\/\//i.test(options.url.trim())
+      ? options.url.trim()
       : buildHighlightUrl(rawPageUrl, cleanQuote);
 
-  if (!finalHighlightUrl) return { ok: false };
+  if (!candidateUrl) return { ok: false };
+
+  let finalHighlightUrl = '';
+  try {
+    const parsed = new URL(candidateUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { ok: false };
+    }
+    finalHighlightUrl = candidateUrl;
+  } catch {
+    return { ok: false };
+  }
 
   try {
     const resolved = options.targetFolderId
@@ -2201,24 +2239,25 @@ export async function saveHighlightBookmark(options: {
 
       await withSessionLock(async () => {
         const session = await getSessionState();
-        // Unbind any previous bookmark bound to this tab so bijection stays 1-to-1
+        // Only bind the tab to the new highlight bookmark when the tab is not already bound
+        // to an existing saved bookmark or Quick Access pin (prevents stealing the active tab's
+        // original binding and leaving a conflicting entry in persistedTabBindings).
         const prevBookmarkId = session.bookmarkIdByTabId[tabId];
-        if (prevBookmarkId && prevBookmarkId !== created.id) {
-          delete session.bindingsByBookmarkId[prevBookmarkId];
+        if (!prevBookmarkId || !session.bindingsByBookmarkId[prevBookmarkId]) {
+          const newBinding: TabBinding = {
+            bookmarkId: created.id,
+            tabId,
+            windowId: tab.windowId,
+            originalUrl: finalHighlightUrl,
+            currentUrl: getEffectiveTabUrl(tab) || finalHighlightUrl,
+            currentTitle: tab.title || bookmarkTitle,
+            isNavigatedAway: false
+          };
+          session.bindingsByBookmarkId[created.id] = newBinding;
+          session.bookmarkIdByTabId[tabId] = created.id;
+          await saveSessionState(session);
+          await upsertPersistedBindings({ [created.id]: newBinding });
         }
-        const newBinding: TabBinding = {
-          bookmarkId: created.id,
-          tabId,
-          windowId: tab.windowId,
-          originalUrl: finalHighlightUrl,
-          currentUrl: getEffectiveTabUrl(tab) || finalHighlightUrl,
-          currentTitle: tab.title || bookmarkTitle,
-          isNavigatedAway: false
-        };
-        session.bindingsByBookmarkId[created.id] = newBinding;
-        session.bookmarkIdByTabId[tabId] = created.id;
-        await saveSessionState(session);
-        await upsertPersistedBindings({ [created.id]: newBinding });
       });
     }
 

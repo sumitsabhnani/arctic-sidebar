@@ -34,6 +34,13 @@ export const SYNC_DEBOUNCE_MS = 2000;
 const RETRY_BASE_DELAY_MS = 5000;
 const RETRY_MAX_DELAY_MS = 5 * 60 * 1000;
 
+/**
+ * Minimum interval between non-urgent Scratchpad Backup bookmark updates during continuous typing.
+ * The first debounced save mirrors immediately; subsequent edits within this window coalesce into a
+ * trailing mirror (and flush immediately on clear, sync failure, panel hide, or unmount).
+ */
+export const BOOKMARK_MIRROR_MIN_INTERVAL_MS = 30_000;
+
 export const SCRATCHPAD_META_KEY = 'scratchpad_meta';
 export const SCRATCHPAD_LOCAL_DRAFT_KEY = 'scratchpad_local_draft';
 export const SCRATCHPAD_CHUNK_PREFIX = 'scratchpad_chunk_';
@@ -82,12 +89,16 @@ export class ScratchpadTooLargeError extends Error {
 }
 
 /**
- * UTF-8 byte cost of the UTF-16 code unit(s) at `index` once JSON-stringified.
+ * UTF-8 byte cost of the UTF-16 code unit(s) at `index` once serialized by Chromium's
+ * `base::JSONWriter` (which `chrome.storage.sync` uses for `QUOTA_BYTES_PER_ITEM`).
+ * In addition to standard `JSON.stringify` escapes, Chromium's JSONWriter escapes `<` (0x3C)
+ * as `\u003C` (6 bytes) and U+2028 / U+2029 as `\u2028` / `\u2029` (6 bytes).
  * Returns how many code units were consumed so surrogate pairs are never split.
  */
 function jsonCharCost(text: string, index: number): { units: number; bytes: number } {
   const code = text.charCodeAt(index);
   if (code === 0x22 || code === 0x5c) return { units: 1, bytes: 2 }; // \" and \\
+  if (code === 0x3c) return { units: 1, bytes: 6 }; // Chromium base::JSONWriter escapes '<' as \u003C
   if (code < 0x20) {
     // \b \t \n \f \r have short escapes, other control chars become \u00XX
     const shortEscape = code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d;
@@ -95,6 +106,7 @@ function jsonCharCost(text: string, index: number): { units: number; bytes: numb
   }
   if (code < 0x80) return { units: 1, bytes: 1 };
   if (code < 0x800) return { units: 1, bytes: 2 };
+  if (code === 0x2028 || code === 0x2029) return { units: 1, bytes: 6 }; // \u2028 and \u2029
   if (code >= 0xd800 && code <= 0xdbff) {
     const next = text.charCodeAt(index + 1);
     if (next >= 0xdc00 && next <= 0xdfff) return { units: 2, bytes: 4 };
@@ -104,7 +116,52 @@ function jsonCharCost(text: string, index: number): { units: number; bytes: numb
   return { units: 1, bytes: 3 };
 }
 
-/** UTF-8 byte size of JSON.stringify(text), as counted by chrome.storage.sync quotas. */
+function toWellFormedString(value: string): string {
+  const strWithWellFormed = value as string & { toWellFormed?: () => string };
+  if (typeof strWithWellFormed.toWellFormed === 'function') {
+    return strWithWellFormed.toWellFormed();
+  }
+  let out = '';
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += value.slice(i, i + 2);
+        i += 1;
+        continue;
+      }
+      out += '\uFFFD';
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      out += '\uFFFD';
+    } else {
+      out += value[i];
+    }
+  }
+  return out;
+}
+
+/**
+ * Bounds scratchpad text to `maxChars` without splitting a UTF-16 surrogate pair at the boundary,
+ * and normalizes any unpaired surrogates to U+FFFD so `hashText` always matches the UTF-8
+ * round-tripped string stored by `chrome.storage.sync`.
+ */
+export function sanitizeScratchpadText(text: string, maxChars = MAX_CHARS): string {
+  if (!text) return '';
+  let bounded = text;
+  if (bounded.length > maxChars) {
+    let end = maxChars;
+    const lastCode = bounded.charCodeAt(end - 1);
+    const nextCode = bounded.charCodeAt(end);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff && nextCode >= 0xdc00 && nextCode <= 0xdfff) {
+      end -= 1;
+    }
+    bounded = bounded.slice(0, end);
+  }
+  return toWellFormedString(bounded);
+}
+
+/** UTF-8 byte size of the JSON value as counted by Chromium's `chrome.storage.sync` quotas. */
 export function jsonByteLength(text: string): number {
   let bytes = 2; // surrounding quotes
   for (let i = 0; i < text.length; ) {
@@ -121,7 +178,7 @@ export function jsonByteLength(text: string): number {
  * writing to sync must check for that.
  */
 export function splitIntoChunks(text: string): { chunks: string[]; chunkCount: number } {
-  const bounded = text.slice(0, MAX_CHARS);
+  const bounded = sanitizeScratchpadText(text, MAX_CHARS);
   if (!bounded) {
     return { chunks: [], chunkCount: 0 };
   }
@@ -410,23 +467,64 @@ export async function findScratchpadBackupBookmarks(): Promise<{
 }
 
 let bookmarkMirrorLock: Promise<void> = Promise.resolve();
+let cachedBackupBookmarkId: string | null = null;
+
+async function getCachedBackupBookmarkNode(): Promise<chrome.bookmarks.BookmarkTreeNode | null> {
+  if (!cachedBackupBookmarkId || typeof chrome === 'undefined' || !chrome.bookmarks) {
+    return null;
+  }
+  try {
+    const nodes =
+      typeof chrome.bookmarks.get === 'function'
+        ? await chrome.bookmarks.get(cachedBackupBookmarkId)
+        : typeof chrome.bookmarks.getSubTree === 'function'
+          ? await chrome.bookmarks.getSubTree(cachedBackupBookmarkId)
+          : null;
+    const node = Array.isArray(nodes) ? nodes[0] : undefined;
+    if (node && node.id && isScratchpadBackupNode(node)) {
+      return node;
+    }
+  } catch {
+    // Cached bookmark was deleted or storage reset
+  }
+  cachedBackupBookmarkId = null;
+  return null;
+}
 
 /**
  * Mirror scratchpad content to the backup bookmark in Other Bookmarks / Arctic.
- * Serialized via bookmarkMirrorLock and deduplicates any redundant backup bookmarks.
+ * Serialized via bookmarkMirrorLock, caches the primary backup bookmark ID to avoid full-tree
+ * scans on subsequent saves, and deduplicates any redundant backup bookmarks.
  */
 export function mirrorScratchpadToBookmark(contentToSave: string): Promise<void> {
-  const bounded = contentToSave.slice(0, MAX_CHARS);
+  const bounded = sanitizeScratchpadText(contentToSave, MAX_CHARS);
   bookmarkMirrorLock = bookmarkMirrorLock
     .catch(() => {})
     .then(async () => {
       if (typeof chrome === 'undefined' || !chrome.bookmarks) return;
 
       try {
-        const { bookmarks, arcticFolderId, otherFolderId } = await findScratchpadBackupBookmarks();
         const newUrl = bounded
           ? `${ARCTIC_GLOBAL_SCRATCHPAD_URL}#${encodeNoteHash(bounded)}`
           : ARCTIC_GLOBAL_SCRATCHPAD_URL;
+
+        // Fast path: reuse cached primary backup bookmark ID without 7-call tree/search scan
+        const cachedNode = await getCachedBackupBookmarkNode();
+        if (cachedNode) {
+          if (cachedNode.url === newUrl) {
+            return;
+          }
+          if (chrome.bookmarks.update) {
+            try {
+              await chrome.bookmarks.update(cachedNode.id, { url: newUrl });
+              return;
+            } catch {
+              cachedBackupBookmarkId = null;
+            }
+          }
+        }
+
+        const { bookmarks, arcticFolderId, otherFolderId } = await findScratchpadBackupBookmarks();
 
         const createBackupBookmark = async () => {
           if (!bounded || !chrome.bookmarks.create) return;
@@ -443,11 +541,14 @@ export function mirrorScratchpadToBookmark(contentToSave: string): Promise<void>
             }
           }
 
-          await chrome.bookmarks.create({
+          const created = await chrome.bookmarks.create({
             parentId,
             title: SCRATCHPAD_BACKUP_TITLE,
             url: newUrl
           });
+          if (created?.id) {
+            cachedBackupBookmarkId = created.id;
+          }
         };
 
         if (bookmarks.length > 0) {
@@ -458,10 +559,13 @@ export function mirrorScratchpadToBookmark(contentToSave: string): Promise<void>
             bookmarks.find((b) => b.parentId === arcticFolderId) ||
             bookmarks[0];
 
+          cachedBackupBookmarkId = primary.id;
+
           if (primary.url !== newUrl && chrome.bookmarks.update) {
             try {
               await chrome.bookmarks.update(primary.id, { url: newUrl });
             } catch {
+              cachedBackupBookmarkId = null;
               await createBackupBookmark();
             }
           }
@@ -500,7 +604,8 @@ export async function restoreScratchpadFromBookmark(): Promise<string> {
       if (bm.url) {
         const restored = extractNoteContentFromUrl(bm.url);
         if (restored) {
-          return restored.slice(0, MAX_CHARS);
+          cachedBackupBookmarkId = bm.id;
+          return sanitizeScratchpadText(restored, MAX_CHARS);
         }
       }
     }
@@ -617,6 +722,8 @@ export function useScratchpad() {
 
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bookmarkMirrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastBookmarkMirrorAtRef = useRef<number>(0);
   const retryAttemptRef = useRef<number>(0);
   /**
    * Highest revision timestamp this view knows about (its own edits and applied remote revisions).
@@ -625,7 +732,9 @@ export function useScratchpad() {
    */
   const lastSavedAtRef = useRef<number>(0);
   const currentTextRef = useRef<string>('');
-  const flushRef = useRef<((content: string, timestamp: number) => Promise<void>) | null>(null);
+  const flushRef = useRef<
+    ((content: string, timestamp: number, options?: { forceBookmarkMirror?: boolean }) => Promise<void>) | null
+  >(null);
 
   currentTextRef.current = text;
 
@@ -638,21 +747,59 @@ export function useScratchpad() {
     }
   }, []);
 
+  const clearBookmarkMirrorTimer = useCallback(() => {
+    if (bookmarkMirrorTimerRef.current) {
+      clearTimeout(bookmarkMirrorTimerRef.current);
+      bookmarkMirrorTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleBookmarkMirror = useCallback(
+    async (contentToSave: string, forceImmediate = false) => {
+      const now = Date.now();
+      const elapsed =
+        lastBookmarkMirrorAtRef.current === 0
+          ? BOOKMARK_MIRROR_MIN_INTERVAL_MS
+          : now - lastBookmarkMirrorAtRef.current;
+
+      if (forceImmediate || elapsed >= BOOKMARK_MIRROR_MIN_INTERVAL_MS) {
+        clearBookmarkMirrorTimer();
+        lastBookmarkMirrorAtRef.current = now || 1;
+        await mirrorScratchpadToBookmark(contentToSave);
+        return;
+      }
+
+      clearBookmarkMirrorTimer();
+      const remaining = Math.max(50, BOOKMARK_MIRROR_MIN_INTERVAL_MS - elapsed);
+      bookmarkMirrorTimerRef.current = setTimeout(() => {
+        bookmarkMirrorTimerRef.current = null;
+        lastBookmarkMirrorAtRef.current = Date.now() || 1;
+        void mirrorScratchpadToBookmark(currentTextRef.current);
+      }, remaining);
+    },
+    [clearBookmarkMirrorTimer]
+  );
+
   /**
    * Save text to chrome.storage.sync across chunks, then mirror it into the bookmark backup.
    * Retries with backoff on transient failures (e.g. write-rate quotas).
    */
   const flushToSync = useCallback(
-    async (contentToSave: string, timestamp: number) => {
+    async (
+      contentToSave: string,
+      timestamp: number,
+      options?: { forceBookmarkMirror?: boolean }
+    ) => {
       // Skip writes superseded by a newer local edit or an applied remote revision
       if (timestamp < lastSavedAtRef.current) return;
 
       if (typeof chrome === 'undefined' || !chrome.storage?.sync) {
         setSyncStatus('Offline - Saved locally');
-        await mirrorScratchpadToBookmark(contentToSave);
+        await scheduleBookmarkMirror(contentToSave, true);
         return;
       }
 
+      let syncFailed = false;
       try {
         await writeSyncScratchpad(contentToSave, timestamp);
         retryAttemptRef.current = 0;
@@ -660,6 +807,7 @@ export function useScratchpad() {
           setSyncStatus('Synced');
         }
       } catch (err) {
+        syncFailed = true;
         console.warn('[Arctic Scratchpad] Failed to save to storage.sync, keeping local backup:', err);
         const { tooLarge, retryDelayMs } = classifySyncError(err, retryAttemptRef.current);
         if (tooLarge) {
@@ -670,15 +818,16 @@ export function useScratchpad() {
           clearRetryTimer();
           retryTimerRef.current = setTimeout(() => {
             retryTimerRef.current = null;
-            flushRef.current?.(contentToSave, timestamp);
+            void flushRef.current?.(contentToSave, timestamp);
           }, retryDelayMs);
         }
       }
 
-      // Always mirror content into bookmark hash even if storage.sync failed or quota was exceeded
-      await mirrorScratchpadToBookmark(contentToSave);
+      // Mirror content into bookmark hash (immediately on first save, clear, hide, or sync failure;
+      // throttled to once per 30s during sustained typing bursts to avoid Bookmark Sync churn)
+      await scheduleBookmarkMirror(contentToSave, Boolean(options?.forceBookmarkMirror || syncFailed));
     },
-    [clearRetryTimer]
+    [clearRetryTimer, scheduleBookmarkMirror]
   );
 
   flushRef.current = flushToSync;
@@ -688,10 +837,10 @@ export function useScratchpad() {
    */
   const setText = useCallback(
     (newText: string) => {
-      const bounded = newText.slice(0, MAX_CHARS);
+      const bounded = sanitizeScratchpadText(newText, MAX_CHARS);
       setTextState(bounded);
       currentTextRef.current = bounded;
-      setSyncStatus('Saving...');
+      setSyncStatus((prev) => (prev === 'Saving...' ? prev : 'Saving...'));
 
       const timestamp = nextTimestamp();
       lastSavedAtRef.current = timestamp;
@@ -709,7 +858,7 @@ export function useScratchpad() {
 
       debounceTimerRef.current = setTimeout(() => {
         debounceTimerRef.current = null;
-        flushToSync(bounded, timestamp);
+        void flushToSync(bounded, timestamp);
       }, SYNC_DEBOUNCE_MS);
     },
     [flushToSync, nextTimestamp, clearRetryTimer]
@@ -724,6 +873,7 @@ export function useScratchpad() {
       debounceTimerRef.current = null;
     }
     clearRetryTimer();
+    clearBookmarkMirrorTimer();
     setTextState('');
     currentTextRef.current = '';
     setSyncStatus('Saving...');
@@ -732,8 +882,8 @@ export function useScratchpad() {
 
     writeLocalDraft('', timestamp).catch(() => {});
 
-    flushToSync('', timestamp);
-  }, [flushToSync, nextTimestamp, clearRetryTimer]);
+    void flushToSync('', timestamp, { forceBookmarkMirror: true });
+  }, [flushToSync, nextTimestamp, clearRetryTimer, clearBookmarkMirrorTimer]);
 
   /**
    * Copy scratchpad content to system clipboard
@@ -759,16 +909,23 @@ export function useScratchpad() {
     let isMounted = true;
 
     async function loadInitial() {
+      const preLoadTimestamp = lastSavedAtRef.current;
+
       // 1. Load fast local draft first
       let localDraft: ScratchpadLocalDraft | null = null;
       try {
         localDraft = await readLocalDraft();
-        if (localDraft && isMounted && typeof localDraft.text === 'string') {
-          setTextState(localDraft.text);
+        // Do not overwrite if the user started typing while readLocalDraft() was in-flight
+        if (!isMounted || lastSavedAtRef.current !== preLoadTimestamp) return;
+        if (localDraft && typeof localDraft.text === 'string') {
+          const cleanLocal = sanitizeScratchpadText(localDraft.text, MAX_CHARS);
+          setTextState(cleanLocal);
+          currentTextRef.current = cleanLocal;
           lastSavedAtRef.current = localDraft.updatedAt || 0;
         }
       } catch (err) {
         console.warn('[Arctic Scratchpad] Error reading initial local draft:', err);
+        if (!isMounted || lastSavedAtRef.current !== preLoadTimestamp) return;
       }
       const baselineTimestamp = lastSavedAtRef.current;
 
@@ -834,21 +991,60 @@ export function useScratchpad() {
       }
     }
 
+    const flushPendingBeforeHide = () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+        void flushRef.current?.(currentTextRef.current, lastSavedAtRef.current, {
+          forceBookmarkMirror: true
+        });
+      } else if (bookmarkMirrorTimerRef.current) {
+        clearBookmarkMirrorTimer();
+        lastBookmarkMirrorAtRef.current = Date.now() || 1;
+        void mirrorScratchpadToBookmark(currentTextRef.current);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        flushPendingBeforeHide();
+      }
+    };
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', flushPendingBeforeHide);
+    }
+
     loadInitial();
 
     return () => {
       isMounted = false;
-      const hadPendingWrite = Boolean(debounceTimerRef.current || retryTimerRef.current);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pagehide', flushPendingBeforeHide);
+      }
+      const hadPendingSyncWrite = Boolean(debounceTimerRef.current || retryTimerRef.current);
+      const hadPendingBookmarkMirror = Boolean(bookmarkMirrorTimerRef.current);
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = null;
       }
       clearRetryTimer();
-      if (hadPendingWrite) {
-        flushToSync(currentTextRef.current, lastSavedAtRef.current);
+      clearBookmarkMirrorTimer();
+      if (hadPendingSyncWrite) {
+        void flushToSync(currentTextRef.current, lastSavedAtRef.current, {
+          forceBookmarkMirror: true
+        });
+      } else if (hadPendingBookmarkMirror) {
+        void mirrorScratchpadToBookmark(currentTextRef.current);
       }
     };
-  }, [flushToSync, clearRetryTimer]);
+  }, [flushToSync, clearRetryTimer, clearBookmarkMirrorTimer]);
 
   /**
    * Real-time cross-device sync: Listen for changes from chrome.storage.sync
@@ -886,6 +1082,10 @@ export function useScratchpad() {
         if (retryTimerRef.current) {
           clearTimeout(retryTimerRef.current);
           retryTimerRef.current = null;
+        }
+        if (bookmarkMirrorTimerRef.current) {
+          clearTimeout(bookmarkMirrorTimerRef.current);
+          bookmarkMirrorTimerRef.current = null;
         }
 
         setTextState(snapshot.text);

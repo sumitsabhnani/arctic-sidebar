@@ -7,6 +7,7 @@ import {
   handleNotificationOpenTab,
   handleNotificationDismiss,
   handleStartup,
+  handleBookmarkRemoved,
   handleTabActivated,
   handleTabCreated,
   handleTabRemoved,
@@ -1796,6 +1797,154 @@ describe('Background service worker reminder lifecycle', () => {
         index: 3,
         openerTabId: 88
       });
+    });
+
+    it('preserves existing tab binding on SAVE_HIGHLIGHT_BOOKMARK, rejects unsafe URL schemes, cleans up folder highlights on removal, and skips startup injection when already registered', async () => {
+      mockChrome.__setBookmarksTree([
+        {
+          id: '0',
+          title: 'Root',
+          children: [
+            {
+              id: '2',
+              title: 'Other Bookmarks',
+              children: [
+                {
+                  id: '10',
+                  title: 'Arctic',
+                  children: [
+                    {
+                      id: '20',
+                      title: 'Research',
+                      children: [
+                        {
+                          id: 'bm-existing',
+                          title: 'Great Work Essay',
+                          url: 'https://paulgraham.com/greatwork.html'
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]);
+      mockChrome.__setLocalStorage({
+        spaces: [{ id: 'research', name: 'Research', folderId: '20' }],
+        activeSpaceId: 'research',
+        persistedTabBindings: {
+          'bm-existing': {
+            bookmarkId: 'bm-existing',
+            tabId: 88,
+            windowId: 10,
+            originalUrl: 'https://paulgraham.com/greatwork.html',
+            currentUrl: 'https://paulgraham.com/greatwork.html',
+            currentTitle: 'Great Work Essay',
+            isNavigatedAway: false
+          }
+        }
+      });
+      mockChrome.__setSessionStorage({
+        bindingsByBookmarkId: {
+          'bm-existing': {
+            bookmarkId: 'bm-existing',
+            tabId: 88,
+            windowId: 10,
+            originalUrl: 'https://paulgraham.com/greatwork.html',
+            currentUrl: 'https://paulgraham.com/greatwork.html',
+            currentTitle: 'Great Work Essay',
+            isNavigatedAway: false
+          }
+        },
+        bookmarkIdByTabId: {
+          88: 'bm-existing'
+        }
+      });
+
+      const sender = {
+        tab: {
+          id: 88,
+          windowId: 10,
+          url: 'https://paulgraham.com/greatwork.html',
+          title: 'Great Work Essay',
+          active: true
+        } as chrome.tabs.Tab
+      } as chrome.runtime.MessageSender;
+
+      // 1. Unsafe javascript: scheme with #:~:text= is rejected
+      const unsafeResp = await new Promise<{ ok?: boolean }>((resolve) => {
+        handleRuntimeMessage(
+          {
+            type: 'SAVE_HIGHLIGHT_BOOKMARK',
+            url: 'javascript:alert(1)#:~:text=Curiosity',
+            quote: 'Curiosity'
+          },
+          { tab: { id: 88, windowId: 10, url: '' } as chrome.tabs.Tab } as chrome.runtime.MessageSender,
+          (r) => resolve((r as { ok?: boolean }) || {})
+        );
+      });
+      expect(unsafeResp.ok).toBe(false);
+
+      // 2. Saving a highlight on an already-bound tab keeps tab 88 bound to bm-existing
+      const saveResp = await new Promise<{ ok?: boolean; bookmarkId?: string }>((resolve) => {
+        handleRuntimeMessage(
+          {
+            type: 'SAVE_HIGHLIGHT_BOOKMARK',
+            pageUrl: 'https://paulgraham.com/greatwork.html',
+            pageTitle: 'Great Work Essay',
+            quote: 'Curiosity is the best guide.'
+          },
+          sender,
+          (r) => resolve((r as { ok?: boolean; bookmarkId?: string }) || {})
+        );
+      });
+      expect(saveResp.ok).toBe(true);
+      expect(saveResp.bookmarkId).toBeTruthy();
+      expect(
+        (mockChrome.__getSessionStorage().bookmarkIdByTabId as Record<number, string>)[88]
+      ).toBe('bm-existing');
+
+      // 3. Deleting parent folder '20' cleans up nested highlight metadata in highlightsByBookmarkId
+      expect(
+        (mockChrome.__getLocalStorage().highlightsByBookmarkId as Record<string, unknown>)[
+          saveResp.bookmarkId!
+        ]
+      ).toBeDefined();
+      chrome.bookmarks.onRemoved.addListener(handleBookmarkRemoved);
+      await chrome.bookmarks.removeTree('20');
+      await new Promise((r) => setTimeout(r, 20));
+      expect(
+        (mockChrome.__getLocalStorage().highlightsByBookmarkId as Record<string, unknown>)[
+          saveResp.bookmarkId!
+        ]
+      ).toBeUndefined();
+
+      // 4. handleStartup skips executeScript injection for highlightPill when already registered
+      mockChrome.__setHostPermissionsGranted(true);
+      mockChrome.__setTabs([
+        {
+          id: 88,
+          windowId: 10,
+          url: 'https://paulgraham.com/greatwork.html',
+          active: true
+        } as chrome.tabs.Tab
+      ]);
+      (
+        chrome.scripting.getRegisteredContentScripts as unknown as ReturnType<typeof vi.fn>
+      ).mockResolvedValue([
+        { id: 'arctic-highlight-pill', js: ['highlightPill.js'], matches: ['<all_urls>'] }
+      ]);
+      vi.mocked(chrome.scripting.executeScript).mockClear();
+
+      await handleStartup();
+      const highlightPillInjections = vi
+        .mocked(chrome.scripting.executeScript)
+        .mock.calls.filter((call) =>
+          (call[0] as { files?: string[] })?.files?.includes('highlightPill.js')
+        );
+      expect(highlightPillInjections).toHaveLength(0);
     });
   });
 });

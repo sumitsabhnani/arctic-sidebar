@@ -8,9 +8,8 @@ import { FolderNode } from './components/FolderNode';
 import { BookmarkRow } from './components/BookmarkRow';
 import { OpenTabsSection } from './components/OpenTabsSection';
 import { SpacesSwitcher } from './components/SpacesSwitcher';
-import { ScratchpadDrawer } from './components/ScratchpadDrawer';
+import { ScratchpadPanel } from './components/ScratchpadDrawer';
 import { ReminderPopover } from './components/ReminderPopover';
-import { useScratchpad } from './hooks/useScratchpad';
 import { useReminders } from './hooks/useReminders';
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu';
 import type {
@@ -145,17 +144,12 @@ export const App: React.FC = () => {
     dismissFileAccessNotice
   } = useTabBindings(activeSpaceId);
 
-  // Cross-Device Scratchpad
-  const {
-    text: scratchpadText,
-    setText: setScratchpadText,
-    syncStatus: scratchpadStatus,
-    clearScratchpad,
-    isOpen: isScratchpadOpen,
-    setIsOpen: setIsScratchpadOpen,
-    toggleOpen: toggleScratchpadOpen,
-    maxChars: maxScratchpadChars
-  } = useScratchpad();
+  // Cross-Device Scratchpad (text state is isolated inside ScratchpadPanel so keystrokes never re-render App)
+  const [isScratchpadOpen, setIsScratchpadOpen] = useState<boolean>(false);
+  const [hasScratchpadText, setHasScratchpadText] = useState<boolean>(false);
+  const toggleScratchpadOpen = useCallback(() => {
+    setIsScratchpadOpen((prev) => !prev);
+  }, []);
 
   // Tab Reminders
   const {
@@ -2780,14 +2774,10 @@ export const App: React.FC = () => {
       )}
 
       {/* Slide-Up Scratchpad Drawer */}
-      <ScratchpadDrawer
+      <ScratchpadPanel
         isOpen={isScratchpadOpen}
         onClose={handleCloseScratchpadDrawer}
-        text={scratchpadText}
-        onChange={setScratchpadText}
-        syncStatus={scratchpadStatus}
-        onClear={clearScratchpad}
-        maxChars={maxScratchpadChars}
+        onHasTextChange={setHasScratchpadText}
       />
 
       {/* Bottom Multiple Spaces Switcher Dock / Footer Bar */}
@@ -2815,7 +2805,7 @@ export const App: React.FC = () => {
         onOpenContextMenu={handleOpenContextMenu}
         isScratchpadOpen={isScratchpadOpen}
         onToggleScratchpad={handleToggleBottomScratchpad}
-        hasScratchpadText={Boolean(scratchpadText.trim())}
+        hasScratchpadText={hasScratchpadText}
         onOpenSettings={() => setIsSettingsOpen(true)}
         showMemorySaverBar={showMemorySaverBar}
         discardedTabsCount={discardedTabsCount}

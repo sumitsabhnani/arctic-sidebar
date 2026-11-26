@@ -221,6 +221,40 @@ export function parseHighlightBookmarkDisplay(
   };
 }
 
+let highlightsStorageLock: Promise<void> = Promise.resolve();
+
+function withHighlightsStorageLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = highlightsStorageLock.then(fn, fn);
+  highlightsStorageLock = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+/**
+ * Collects a bookmark or folder's ID together with all nested descendant bookmark IDs
+ * so deleting a folder cleans up every highlight stored inside it.
+ */
+export function collectBookmarkSubtreeIds(
+  node?: chrome.bookmarks.BookmarkTreeNode,
+  fallbackId?: string
+): string[] {
+  const ids = new Set<string>();
+  if (fallbackId) ids.add(fallbackId);
+  const walk = (current?: chrome.bookmarks.BookmarkTreeNode) => {
+    if (!current) return;
+    if (current.id) ids.add(current.id);
+    if (Array.isArray(current.children)) {
+      for (const child of current.children) {
+        walk(child);
+      }
+    }
+  };
+  walk(node);
+  return Array.from(ids);
+}
+
 /**
  * Reads stored highlight metadata map from `chrome.storage.local`.
  */
@@ -236,26 +270,30 @@ export async function getStoredHighlights(): Promise<Record<string, StoredHighli
 
 /**
  * Saves or updates a highlight metadata entry in `chrome.storage.local`.
+ * Serialized via `withHighlightsStorageLock` so concurrent saves never clobber one another.
  */
 export async function upsertStoredHighlight(meta: StoredHighlightMeta): Promise<void> {
   if (!meta.bookmarkId || typeof chrome === 'undefined' || !chrome.storage?.local?.set) {
     return;
   }
-  try {
-    const existing = await getStoredHighlights();
-    await chrome.storage.local.set({
-      [HIGHLIGHTS_STORAGE_KEY]: {
-        ...existing,
-        [meta.bookmarkId]: meta
-      }
-    });
-  } catch {
-    // ignore storage errors
-  }
+  await withHighlightsStorageLock(async () => {
+    try {
+      const existing = await getStoredHighlights();
+      await chrome.storage.local.set({
+        [HIGHLIGHTS_STORAGE_KEY]: {
+          ...existing,
+          [meta.bookmarkId]: meta
+        }
+      });
+    } catch {
+      // ignore storage errors
+    }
+  });
 }
 
 /**
  * Removes stored highlight metadata for one or more deleted bookmarks.
+ * Serialized via `withHighlightsStorageLock` so concurrent updates never clobber one another.
  */
 export async function removeStoredHighlights(bookmarkIds: string[]): Promise<void> {
   if (
@@ -265,22 +303,24 @@ export async function removeStoredHighlights(bookmarkIds: string[]): Promise<voi
   ) {
     return;
   }
-  try {
-    const existing = await getStoredHighlights();
-    let changed = false;
-    const next = { ...existing };
-    for (const id of bookmarkIds) {
-      if (id && next[id]) {
-        delete next[id];
-        changed = true;
+  await withHighlightsStorageLock(async () => {
+    try {
+      const existing = await getStoredHighlights();
+      let changed = false;
+      const next = { ...existing };
+      for (const id of bookmarkIds) {
+        if (id && next[id]) {
+          delete next[id];
+          changed = true;
+        }
       }
+      if (changed) {
+        await chrome.storage.local.set({ [HIGHLIGHTS_STORAGE_KEY]: next });
+      }
+    } catch {
+      // ignore
     }
-    if (changed) {
-      await chrome.storage.local.set({ [HIGHLIGHTS_STORAGE_KEY]: next });
-    }
-  } catch {
-    // ignore
-  }
+  });
 }
 
 /**
@@ -425,95 +465,194 @@ export function scrollToHighlightInDocument(payload: {
     }
   }
 
+  const isSpaceCode = (code: number): boolean => {
+    if (code <= 0x20) {
+      return (
+        code === 0x20 ||
+        code === 0x09 ||
+        code === 0x0a ||
+        code === 0x0d ||
+        code === 0x0c ||
+        code === 0x0b
+      );
+    }
+    if (code === 0x00a0) return true;
+    return code >= 0x1680 && /\s/.test(String.fromCharCode(code));
+  };
+
   const runFindAndHighlight = (): boolean => {
-    // Unwrap any previous <mark data-arctic-highlight="true"> before searching so text nodes are contiguous
+    // Unwrap any previous <mark data-arctic-highlight="true"> (only present in non-CSS.highlights fallback)
     try {
-      const oldMarks = document.querySelectorAll('mark[data-arctic-highlight="true"]');
-      oldMarks.forEach((mark) => {
-        const parent = mark.parentNode;
-        if (parent) {
-          while (mark.firstChild) {
-            parent.insertBefore(mark.firstChild, mark);
+      if (document.querySelector('mark[data-arctic-highlight="true"]')) {
+        const oldMarks = document.querySelectorAll('mark[data-arctic-highlight="true"]');
+        oldMarks.forEach((mark) => {
+          const parent = mark.parentNode;
+          if (parent) {
+            while (mark.firstChild) {
+              parent.insertBefore(mark.firstChild, mark);
+            }
+            parent.removeChild(mark);
+            parent.normalize();
           }
-          parent.removeChild(mark);
-          parent.normalize();
-        }
-      });
+        });
+      }
     } catch {
       // ignore
     }
 
-    interface CharPos {
-      node: Text;
-      offset: number;
-    }
-
-    const charMap: CharPos[] = [];
-    const normChars: string[] = [];
     const MAX_CHARS = 400000;
+    const textNodes: Text[] = [];
+    let capacity = 4096;
+    let nodeIndices = new Int32Array(capacity);
+    let charOffsets = new Int32Array(capacity);
+    let normLen = 0;
+    let lastWasSpace = true;
+    const normParts: string[] = [];
 
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const pushChar = (ch: string, nodeIdx: number, offset: number) => {
+      if (normLen >= MAX_CHARS) return;
+      if (normLen >= capacity) {
+        const nextCap = Math.min(MAX_CHARS, capacity * 2);
+        const nextNodes = new Int32Array(nextCap);
+        const nextOffsets = new Int32Array(nextCap);
+        nextNodes.set(nodeIndices);
+        nextOffsets.set(charOffsets);
+        nodeIndices = nextNodes;
+        charOffsets = nextOffsets;
+        capacity = nextCap;
+      }
+      nodeIndices[normLen] = nodeIdx;
+      charOffsets[normLen] = offset;
+      normLen += 1;
+      lastWasSpace = ch === ' ';
+      normParts.push(ch);
+    };
+
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node: Node): number {
+          if (node.nodeType === 1) {
+            const el = node as Element;
+            const id = el.id;
+            if (
+              id === 'arctic-edge-trigger-host' ||
+              id === 'arctic-highlight-pill-host' ||
+              el.hasAttribute('hidden')
+            ) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            const tag = el.tagName;
+            if (
+              tag === 'SCRIPT' ||
+              tag === 'STYLE' ||
+              tag === 'NOSCRIPT' ||
+              tag === 'TEMPLATE'
+            ) {
+              return NodeFilter.FILTER_REJECT;
+            }
+            return NodeFilter.FILTER_SKIP;
+          }
+          const val = node.nodeValue;
+          return val && val.length > 0 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+        }
+      }
+    );
+
     let currentNode: Node | null = walker.nextNode();
+    let lastParent: Element | null = null;
     let lastBlockParent: Element | null = null;
+    let cachedBlockForLastParent: Element | null = null;
 
-    while (currentNode && normChars.length < MAX_CHARS) {
+    while (currentNode && normLen < MAX_CHARS) {
       const textNode = currentNode as Text;
       const parent = textNode.parentElement;
-      if (
-        parent &&
-        parent.id !== 'arctic-edge-trigger-host' &&
-        parent.id !== 'arctic-highlight-pill-host'
-      ) {
-        const tag = parent.tagName;
-        if (
-          tag !== 'SCRIPT' &&
-          tag !== 'STYLE' &&
-          tag !== 'NOSCRIPT' &&
-          tag !== 'TEMPLATE' &&
-          !parent.closest('#arctic-edge-trigger-host, #arctic-highlight-pill-host, [hidden]')
-        ) {
-          const raw = textNode.nodeValue || '';
-          if (raw.length > 0) {
-            const blockParent =
+      if (parent) {
+        const raw = textNode.nodeValue || '';
+        if (raw.length > 0) {
+          const nodeIdx = textNodes.length;
+          textNodes.push(textNode);
+
+          let blockParent: Element;
+          if (parent === lastParent && cachedBlockForLastParent) {
+            blockParent = cachedBlockForLastParent;
+          } else {
+            blockParent =
               parent.closest(
                 'p, li, blockquote, h1, h2, h3, h4, h5, h6, div, section, article, td, th, pre'
               ) || parent;
-            if (
-              lastBlockParent &&
-              blockParent !== lastBlockParent &&
-              normChars.length > 0 &&
-              normChars[normChars.length - 1] !== ' '
-            ) {
-              normChars.push(' ');
-              charMap.push({ node: textNode, offset: 0 });
-            }
-            lastBlockParent = blockParent;
+            lastParent = parent;
+            cachedBlockForLastParent = blockParent;
+          }
 
-            for (let i = 0; i < raw.length && normChars.length < MAX_CHARS; i++) {
-              const ch = raw[i];
-              if (/\s/.test(ch)) {
-                if (normChars.length === 0 || normChars[normChars.length - 1] !== ' ') {
-                  normChars.push(' ');
-                  charMap.push({ node: textNode, offset: i });
+          if (lastBlockParent && blockParent !== lastBlockParent && normLen > 0 && !lastWasSpace) {
+            pushChar(' ', nodeIdx, 0);
+          }
+          lastBlockParent = blockParent;
+
+          let nodeChunk = '';
+          for (let i = 0; i < raw.length && normLen < MAX_CHARS; i++) {
+            const code = raw.charCodeAt(i);
+            if (isSpaceCode(code)) {
+              if (!lastWasSpace) {
+                if (normLen >= capacity) {
+                  const nextCap = Math.min(MAX_CHARS, capacity * 2);
+                  const nextNodes = new Int32Array(nextCap);
+                  const nextOffsets = new Int32Array(nextCap);
+                  nextNodes.set(nodeIndices);
+                  nextOffsets.set(charOffsets);
+                  nodeIndices = nextNodes;
+                  charOffsets = nextOffsets;
+                  capacity = nextCap;
                 }
-              } else {
-                normChars.push(ch.toLowerCase());
-                charMap.push({ node: textNode, offset: i });
+                nodeIndices[normLen] = nodeIdx;
+                charOffsets[normLen] = i;
+                normLen += 1;
+                lastWasSpace = true;
+                nodeChunk += ' ';
+              }
+            } else {
+              const lower =
+                code >= 0x41 && code <= 0x5a
+                  ? String.fromCharCode(code + 32)
+                  : code < 0x80
+                    ? raw[i]
+                    : raw[i].toLowerCase();
+              for (let j = 0; j < lower.length && normLen < MAX_CHARS; j++) {
+                if (normLen >= capacity) {
+                  const nextCap = Math.min(MAX_CHARS, capacity * 2);
+                  const nextNodes = new Int32Array(nextCap);
+                  const nextOffsets = new Int32Array(nextCap);
+                  nextNodes.set(nodeIndices);
+                  nextOffsets.set(charOffsets);
+                  nodeIndices = nextNodes;
+                  charOffsets = nextOffsets;
+                  capacity = nextCap;
+                }
+                nodeIndices[normLen] = nodeIdx;
+                charOffsets[normLen] = i;
+                normLen += 1;
+                lastWasSpace = false;
+                nodeChunk += lower[j];
               }
             }
+          }
+          if (nodeChunk) {
+            normParts.push(nodeChunk);
           }
         }
       }
       currentNode = walker.nextNode();
     }
 
-    const fullNormText = normChars.join('');
+    const fullNormText = normParts.join('');
     const startIdx = fullNormText.indexOf(needleStart);
 
     let matchedRange: Range | null = null;
     let matchedElement: HTMLElement | null = null;
 
-    if (startIdx !== -1) {
+    if (startIdx !== -1 && normLen > 0) {
       let endIdx = startIdx + needleStart.length - 1;
       if (needleEnd) {
         const searchFrom = startIdx + needleStart.length;
@@ -522,16 +661,16 @@ export function scrollToHighlightInDocument(payload: {
           endIdx = foundEnd + needleEnd.length - 1;
         }
       }
-      endIdx = Math.min(endIdx, charMap.length - 1);
+      endIdx = Math.min(endIdx, normLen - 1);
 
-      const startPos = charMap[startIdx];
-      const endPos = charMap[endIdx];
-      if (startPos && endPos) {
-        matchedElement = startPos.node.parentElement;
+      const startNode = textNodes[nodeIndices[startIdx]];
+      const endNode = textNodes[nodeIndices[endIdx]];
+      if (startNode && endNode) {
+        matchedElement = startNode.parentElement;
         try {
           const range = document.createRange();
-          range.setStart(startPos.node, startPos.offset);
-          range.setEnd(endPos.node, endPos.offset + 1);
+          range.setStart(startNode, charOffsets[startIdx]);
+          range.setEnd(endNode, charOffsets[endIdx] + 1);
           matchedRange = range;
         } catch {
           // fallback to matchedElement
@@ -543,8 +682,9 @@ export function scrollToHighlightInDocument(payload: {
 
     let scrollTarget: HTMLElement = matchedElement;
 
-    // Apply persistent highlight via CSS Custom Highlight API (Chrome 105+)
+    // Apply persistent highlight via CSS Custom Highlight API (Chrome 105+) without mutating host DOM
     if (matchedRange) {
+      let usedCustomHighlight = false;
       try {
         const winAny = window as unknown as {
           CSS?: { highlights?: { set: (name: string, hl: unknown) => void } };
@@ -555,14 +695,14 @@ export function scrollToHighlightInDocument(payload: {
             'arctic-text-highlight',
             new winAny.Highlight(matchedRange)
           );
+          usedCustomHighlight = true;
         }
       } catch {
         // ignore
       }
 
-      // If the range is within a single text node, wrap it in <mark data-arctic-highlight="true">
-      // for universal visual highlighting and exact scroll positioning
-      if (matchedRange.startContainer === matchedRange.endContainer) {
+      // Only fall back to <mark> DOM mutation when CSS Custom Highlight API is unavailable (e.g. JSDOM)
+      if (!usedCustomHighlight && matchedRange.startContainer === matchedRange.endContainer) {
         try {
           const mark = document.createElement('mark');
           mark.setAttribute('data-arctic-highlight', 'true');

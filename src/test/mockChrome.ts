@@ -87,7 +87,16 @@ export function createMockChrome() {
   const tabMovedListeners = new Set<() => void>();
   const windowFocusListeners = new Set<(winId: number) => void>();
   const bookmarkCreatedListeners = new Set<(id: string, bookmark: chrome.bookmarks.BookmarkTreeNode) => void>();
-  const bookmarkRemovedListeners = new Set<(id: string, removeInfo: { parentId: string; index: number }) => void>();
+  const bookmarkRemovedListeners = new Set<
+    (
+      id: string,
+      removeInfo: {
+        parentId: string;
+        index: number;
+        node: chrome.bookmarks.BookmarkTreeNode;
+      }
+    ) => void
+  >();
   const bookmarkChangedListeners = new Set<(id: string, changeInfo: { title: string; url?: string }) => void>();
   const bookmarkMovedListeners = new Set<(id: string, moveInfo: { parentId: string; index: number; oldParentId: string; oldIndex: number }) => void>();
   const runtimeMessageListeners = new Set<(message: unknown, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => void>();
@@ -470,16 +479,26 @@ export function createMockChrome() {
       remove: vi.fn(async (id: string) => {
         const removed = removeNodeRecursive(bookmarksTree, id);
         if (removed) {
+          const clonedRemoved = cloneTree(removed);
           for (const listener of bookmarkRemovedListeners) {
-            listener(id, { parentId: removed.parentId || '', index: 0 });
+            listener(id, {
+              parentId: removed.parentId || '',
+              index: removed.index ?? 0,
+              node: clonedRemoved
+            });
           }
         }
       }),
       removeTree: vi.fn(async (id: string) => {
         const removed = removeNodeRecursive(bookmarksTree, id);
         if (removed) {
+          const clonedRemoved = cloneTree(removed);
           for (const listener of bookmarkRemovedListeners) {
-            listener(id, { parentId: removed.parentId || '', index: 0 });
+            listener(id, {
+              parentId: removed.parentId || '',
+              index: removed.index ?? 0,
+              node: clonedRemoved
+            });
           }
         }
       }),
